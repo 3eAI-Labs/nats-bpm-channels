@@ -1,11 +1,13 @@
 package com.threeai.nats.cadenzaflow.outbound;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.threeai.nats.core.headers.BpmHeaders;
 import io.nats.client.Connection;
 import io.nats.client.impl.NatsMessage;
 import org.cadenzaflow.bpm.engine.ProcessEngineException;
@@ -25,15 +27,15 @@ class NatsPublishDelegateTest {
     void setUp() {
         connection = mock(Connection.class);
         execution = mock(DelegateExecution.class);
+        when(execution.getProcessInstanceId()).thenReturn("pi-1");
+        when(execution.getActivityInstanceId()).thenReturn("ai-1");
         delegate = new NatsPublishDelegate(connection, null);
     }
 
     @Test
     void execute_publishesMessage() {
-        Expression subjectExpr = mockExpression("order.created");
-        Expression payloadExpr = mockExpression("orderPayload");
-        delegate.setSubject(subjectExpr);
-        delegate.setPayloadVariable(payloadExpr);
+        delegate.setSubject(mockExpression("order.created"));
+        delegate.setPayloadVariable(mockExpression("orderPayload"));
 
         when(execution.getVariable("orderPayload")).thenReturn("{\"orderId\":1}");
 
@@ -42,23 +44,57 @@ class NatsPublishDelegateTest {
         ArgumentCaptor<NatsMessage> captor = ArgumentCaptor.forClass(NatsMessage.class);
         verify(connection).publish(captor.capture());
         NatsMessage published = captor.getValue();
-        assert new String(published.getData()).equals("{\"orderId\":1}");
-        assert published.getSubject().equals("order.created");
+        assertThat(published.getSubject()).isEqualTo("order.created");
+        assertThat(new String(published.getData())).isEqualTo("{\"orderId\":1}");
     }
 
     @Test
-    void execute_propagatesHeaders() {
-        Expression subjectExpr = mockExpression("order.created");
-        Expression payloadExpr = mockExpression("orderPayload");
-        delegate.setSubject(subjectExpr);
-        delegate.setPayloadVariable(payloadExpr);
+    void execute_addsMandatoryHeaders() {
+        delegate.setSubject(mockExpression("order.created"));
+        delegate.setPayloadVariable(mockExpression("orderPayload"));
 
         when(execution.getVariable("orderPayload")).thenReturn("data");
-        when(execution.getVariable("traceId")).thenReturn("trace-123");
+        when(execution.getVariable("traceId")).thenReturn("trace-pub");
+        when(execution.getProcessBusinessKey()).thenReturn("order-99");
 
         delegate.execute(execution);
 
-        verify(connection).publish(any(NatsMessage.class));
+        ArgumentCaptor<NatsMessage> captor = ArgumentCaptor.forClass(NatsMessage.class);
+        verify(connection).publish(captor.capture());
+        assertThat(captor.getValue().getHeaders().getLast(BpmHeaders.TRACE_ID)).isEqualTo("trace-pub");
+        assertThat(captor.getValue().getHeaders().getLast(BpmHeaders.BUSINESS_KEY)).isEqualTo("order-99");
+        assertThat(captor.getValue().getHeaders().getLast(BpmHeaders.IDEMPOTENCY_KEY)).isEqualTo("pi-1:ai-1");
+    }
+
+    @Test
+    void execute_explicitIdempotencyKey_overridesDefault() {
+        delegate.setSubject(mockExpression("order.created"));
+        delegate.setPayloadVariable(mockExpression("orderPayload"));
+        delegate.setIdempotencyKey(mockExpression("explicit-pub-key"));
+
+        when(execution.getVariable("orderPayload")).thenReturn("data");
+
+        delegate.execute(execution);
+
+        ArgumentCaptor<NatsMessage> captor = ArgumentCaptor.forClass(NatsMessage.class);
+        verify(connection).publish(captor.capture());
+        assertThat(captor.getValue().getHeaders().getLast(BpmHeaders.IDEMPOTENCY_KEY))
+                .isEqualTo("explicit-pub-key");
+    }
+
+    @Test
+    void execute_businessKeyNull_skipsHeader() {
+        delegate.setSubject(mockExpression("order.created"));
+        delegate.setPayloadVariable(mockExpression("orderPayload"));
+
+        when(execution.getVariable("orderPayload")).thenReturn("data");
+        when(execution.getProcessBusinessKey()).thenReturn(null);
+
+        delegate.execute(execution);
+
+        ArgumentCaptor<NatsMessage> captor = ArgumentCaptor.forClass(NatsMessage.class);
+        verify(connection).publish(captor.capture());
+        assertThat(captor.getValue().getHeaders().containsKey(BpmHeaders.BUSINESS_KEY)).isFalse();
     }
 
     @Test

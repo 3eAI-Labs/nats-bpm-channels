@@ -8,6 +8,7 @@ import java.time.Duration;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
 import io.nats.client.Message;
+import io.nats.client.impl.NatsMessage;
 import org.cadenzaflow.bpm.engine.ProcessEngineException;
 import org.cadenzaflow.bpm.engine.delegate.DelegateExecution;
 import org.cadenzaflow.bpm.engine.delegate.Expression;
@@ -27,6 +28,7 @@ public class NatsRequestReplyDelegate implements JavaDelegate {
     private Expression timeout;
     private Expression resultVariable;
     private Expression payloadVariable;
+    private Expression idempotencyKey;
 
     public NatsRequestReplyDelegate(Connection connection, NatsChannelMetrics metrics) {
         this.connection = connection;
@@ -39,6 +41,7 @@ public class NatsRequestReplyDelegate implements JavaDelegate {
         Duration timeoutVal = parseDuration(timeout, execution, Duration.ofSeconds(30));
         String resultVar = getString(resultVariable, execution, "natsReplyPayload");
         String payloadVar = getString(payloadVariable, execution, "natsRequestPayload");
+        String idempotencyVal = getString(idempotencyKey, execution, null);
 
         byte[] data = serializePayload(execution.getVariable(payloadVar));
 
@@ -53,7 +56,12 @@ public class NatsRequestReplyDelegate implements JavaDelegate {
                     kv("timeout", timeoutVal),
                     kv("process_instance", execution.getProcessInstanceId()));
 
-            Message reply = connection.request(subjectVal, data, timeoutVal);
+            NatsMessage request = NatsMessage.builder()
+                    .subject(subjectVal)
+                    .data(data)
+                    .headers(CadenzaflowHeaderBinder.from(execution, idempotencyVal))
+                    .build();
+            Message reply = connection.request(request, timeoutVal);
 
             if (reply == null) {
                 if (metrics != null) metrics.requestReplyErrorCount(subjectVal).increment();
@@ -126,4 +134,5 @@ public class NatsRequestReplyDelegate implements JavaDelegate {
     public void setTimeout(Expression timeout) { this.timeout = timeout; }
     public void setResultVariable(Expression resultVariable) { this.resultVariable = resultVariable; }
     public void setPayloadVariable(Expression payloadVariable) { this.payloadVariable = payloadVariable; }
+    public void setIdempotencyKey(Expression idempotencyKey) { this.idempotencyKey = idempotencyKey; }
 }

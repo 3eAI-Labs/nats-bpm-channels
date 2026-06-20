@@ -23,6 +23,7 @@ public class NatsPublishDelegate implements JavaDelegate {
 
     private Expression subject;
     private Expression payloadVariable;
+    private Expression idempotencyKey;
 
     public NatsPublishDelegate(Connection connection, NatsChannelMetrics metrics) {
         this.connection = connection;
@@ -33,12 +34,14 @@ public class NatsPublishDelegate implements JavaDelegate {
     public void execute(DelegateExecution execution) {
         String subjectVal = getRequiredString(subject, execution, "subject");
         String payloadVar = getString(payloadVariable, execution, "natsPayload");
+        String idempotencyVal = getString(idempotencyKey, execution, null);
         byte[] data = serializePayload(execution.getVariable(payloadVar));
 
         try {
             NatsMessage msg = NatsMessage.builder()
                     .subject(subjectVal)
                     .data(data)
+                    .headers(CadenzaflowHeaderBinder.from(execution, idempotencyVal))
                     .build();
             connection.publish(msg);
 
@@ -83,4 +86,5 @@ public class NatsPublishDelegate implements JavaDelegate {
 
     public void setSubject(Expression subject) { this.subject = subject; }
     public void setPayloadVariable(Expression payloadVariable) { this.payloadVariable = payloadVariable; }
+    public void setIdempotencyKey(Expression idempotencyKey) { this.idempotencyKey = idempotencyKey; }
 }
