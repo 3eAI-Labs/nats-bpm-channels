@@ -221,10 +221,11 @@ Her iki track **aynı tel sözleşmesini** yayar/tüketir; böylece worker ekosi
 ---
 
 ## 9. Kapsam dışı / sonraki turlar
-- Flowable için native/offload eşlemesi (Event Registry modeli farklı — ayrı brief).
+- Flowable için native/offload eşlemesi → ✅ **ele alındı: `06-external-task-over-jetstream.md`** (Event Registry yolu; A2 retrofit edilmez).
 - BPMN modeler template'leri (async-request-reply şablonu).
 - OTel/tracing context'inin reply/job path'ine taşınması.
-- Senkron `NatsRequestReplyDelegate` kaldırılması (fast-RPC için kalır; README'de kısıt).
+- ~~Senkron `NatsRequestReplyDelegate` kaldırılması (fast-RPC için kalır; README'de kısıt).~~ → **DEĞİŞTİ (2026-06-28):** tüm JavaDelegate'ler (senkron dahil) **tamamen phase-out** — in-transaction blocking tezi ihlal ediyor (`docs/06 §1, §3`). Fast-RPC istisnası **kaldırıldı.**
+- gRPC worker ön kapısı (Zeebe-uyum / broker'sız-kısıtlı worker) — opsiyonel, ayrı belge (`docs/06 §9 D-G`).
 
 ---
 

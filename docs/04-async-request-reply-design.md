@@ -5,13 +5,24 @@
 **Tarih:** 2026-06-19
 **Bağlam:** Projenin tezi — işi engine DB transaction'ının dışında yürütmek (bkz `01-vision-roadmap.md`). Mevcut senkron `NatsRequestReplyDelegate` bu tezi ihlal ediyor: `connection.request()` engine command/transaction'ı içinde bloke olur, dış bekleme boyunca DB connection tutar (kanıt: engine `AbstractTransactionInterceptor` doBegin→execute→doCommit). Bu tasarım, request-reply'ı bloke-etmeyen, transaction-tutmayan bir desene çevirir.
 
+**Durum:** ⚠️ **KISMEN SUPERSEDED (2026-06-29).** Bu belgenin **message-correlation idiom'u**, request-reply / iş-dağıtımı kullanımı için **`06-external-task-over-jetstream.md` (A2 — external-task-over-JetStream) tarafından supersede edildi.** Gerekçe: A2, iş yaşam döngüsü (retry / `handleFailure` / BPMN-error / incident) + Cockpit görünürlüğü + `taskId` kimliği verir; message-pattern vermez.
+
+Geçerli kalan / taşınan kısımlar:
+- **Inbound reply-subscriber yapısı** (`createMessageCorrelation(...).correlateWithResult()`) atılmaz → A2 completion-bridge'in temelidir; çağrı `externalTaskService.complete(...)` olur (docs/06 §5.2).
+- **Saf message-correlation yalnız gerçek "olay bekleme"** için kalır (bizim dispatch etmediğimiz dış event / callback / business-event) — request-reply için DEĞİL. İdiom ayrımı: **iş dağıtımı → A2**, **olay bekleme → correlation.**
+- Wire-contract kararları (correlation-id = idempotency-key, JetStream reply transport default, orphan→`nakWithDelay`/`maxDeliver`→DLQ) A2'ye taşınır (docs/06 §7).
+
+**İPTAL:** Aşağıdaki §1'deki *"senkron delegate kaldırılmaz / iki desen yan yana yaşar"* kararı **geçersiz (2026-06-29)** — tüm JavaDelegate'ler (senkron dahil) **tam phase-out** (docs/06 §1/§3; docs/05 §9).
+
 ---
 
 ## 1. Hedef
 
 Bir BPMN service task'ı external worker'a iş devredip cevabını alırken **hiçbir DB transaction veya connection'ı bekleme boyunca açık tutmamak**. Engine sadece iki kısa, ayrı transaction görür: (1) request gönderimi + wait-state'e geçiş, (2) reply geldiğinde token'ın ilerletilmesi. Worker ne kadar yavaş olursa olsun arada engine kaynağı tutulmaz.
 
-**Senkron delegate kaldırılmaz** — ms-cevaplı, düşük-eşzamanlı RPC için meşru ve daha basit kalır. Async desen **opt-in** yeni bir yol olarak eklenir. İki desen yan yana yaşar; BPMN modelleyici hangisinin uygun olduğunu seçer.
+~~**Senkron delegate kaldırılmaz** — ms-cevaplı, düşük-eşzamanlı RPC için meşru ve daha basit kalır. Async desen **opt-in** yeni bir yol olarak eklenir. İki desen yan yana yaşar; BPMN modelleyici hangisinin uygun olduğunu seçer.~~
+
+> ❌ **İPTAL (2026-06-29):** Yukarıdaki karar geçersiz. Senkron delegate dahil **tüm JavaDelegate'ler tam phase-out**; request-reply için tek idiom **A2 external-task** (docs/06). "İki desen yan yana" yalnız geçici strangler migration'ı için geçerlidir, kalıcı tasarım değil.
 
 ---
 
