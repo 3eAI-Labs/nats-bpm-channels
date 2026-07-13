@@ -25,7 +25,7 @@ Bu doküman **basamak 1**'i (dispatch/external-task acquisition → NATS push) i
    - **Flowable → Event Registry:** native push'lu Event Registry zaten doğru idiom; A2 retrofit edilmez. Mevcut channel adapter **basamak-1 olgunluğuna** çekilir (§6).
    - Her ikisi **ortak JetStream substratı + wire-contract** üzerinde buluşur (§8, docs/05 §7).
 3. **Dürüst tavan:** Bu basamak **dispatch/polling'i** kaldırır; **token-move/correlate transaction** (P2) kalır — o ancak docs/05 basamak 6'da buharlaşır. "Sıfır DB lock" diye satılmaz.
-4. **gRPC bu belgenin kapsamı dışında.** Worker doğrudan JetStream konuşur. gRPC, yalnızca worker-sınırı gerekçeleriyle (Zeebe ekosistem uyumu / broker'sız-kısıtlı worker) eklenecek **opsiyonel ön kapı**dır; ayrı belgeye ertelendi (§9 D-G).
+4. **gRPC bu belgenin kapsamı dışında.** Worker doğrudan JetStream konuşur. gRPC, yalnızca worker-sınırı gerekçeleriyle (Zeebe ekosistem uyumu / broker'sız-kısıtlı worker) eklenecek **opsiyonel ön kapı**dır; ayrı belgeye ertelendi (§8 D-G).
 5. **İdiom ayrımı (A2, `04-async-request-reply-design.md`'i supersede eder):** request-reply / **iş dağıtımı → A2** (external-task: lifecycle + Cockpit + `taskId`). `docs/04`'ün message-correlation idiom'u bu kullanım için **geçersiz.** Saf **message-correlation yalnız gerçek "olay bekleme"** için kalır (bizim dispatch etmediğimiz dış event / callback / business-event). Camunda/CadenzaFlow'da bu ayrım, Flowable'daki external-task ↔ Event-Registry ayrımının aynısıdır. Inbound subscriber'ın `correlateWithResult()` yapısı atılmaz → A2 completion-bridge'e (`externalTaskService.complete`) evrilir (§5.2).
 
 ---
@@ -90,36 +90,39 @@ Native external-task **semantiğini koru** (BPMN `camunda:type="external"`, `com
 ### 5.2 Mimari
 
 ```
-[Engine] token → ext-task row (ACT_RU_EXT_TASK, commit)
-            │  outbound bridge (post-commit projeksiyon)
-            ▼
-        JetStream  jobs.<topic>   (WorkQueue stream, Nats-Msg-Id = externalTaskId → dedup)
-            │  durable consumer (push/pull), queue-group LB
-            ▼
-        [Worker]  (motor-dışı, polyglot)  → iş → sonuç → jobs.<topic>.reply
-            │
-            ▼
+[Engine node] token → ext-task row (ACT_RU_EXT_TASK) → COMMIT
+     │  ① post-commit TransactionListener (aynı node, tx DIŞI, elindeki veriyle → DB sorgusu YOK, yarış YOK)
+     │  ② soğuk orphan-sweep (seyrek · read-only · FOR-UPDATE'siz · tek node) — yalnız ①'in kaçırdığı çökme-orphan'ları
+     ▼
+ JetStream  jobs.<topic>   (WorkQueue stream, Nats-Msg-Id = externalTaskId → dedup)
+     │  durable consumer (push/pull), queue-group LB
+     ▼
+ [Worker]  (motor-dışı, polyglot)  → iş → sonuç → jobs.<topic>.reply
+     │
+     ▼
 [Inbound bridge] → externalTaskService.complete(extTaskId, workerId, vars)   ← KISA token-move tx
-        hata → handleFailure / handleBpmnError ;  JetStream nack → maxDeliver → DLQ
+     hata → handleFailure / handleBpmnError ;  JetStream nack → maxDeliver → DLQ
 ```
 
 **İnbound yarısı neredeyse hazır:** mevcut `camunda-nats-channel/.../inbound/NatsMessageCorrelationSubscriber.java:96-104` deseni (`createMessageCorrelation(...).correlateWithResult()`). Tek fark, çağrının `externalTaskService.complete(...)` olması. Ağırlıklı yeni kod = **outbound push-bridge**.
 
-### 5.3 Outbox ilkesi (dual-write yok)
-`ACT_RU_EXT_TASK` tablosu **transactional outbox** olarak kullanılır: motor task'ı tek DB yazımıyla commit eder; bridge bu commit'li satırları okuyup JetStream'e **idempotent projeksiyon** olarak iter (`Nats-Msg-Id = externalTaskId`). Push, DB yazımının türevidir → **dual-write yok** (docs/05 D2 burada doğal çözülür); bridge çökerse commit'li satırları yeniden okur (crash-safe, at-least-once).
+### 5.3 Outbox ilkesi + tetikleme (D-A çözüldü: hot-poll REDDEDİLDİ)
+`ACT_RU_EXT_TASK` tablosu **transactional outbox**'tur — tek DB yazımı = doğruluk kaynağı; push onun idempotent türevidir → **dual-write yok** (docs/05 D2 doğal çözülür).
 
-Bridge'in "yeni task" okuması iki biçimde olabilir (§9 D-A): (a) tek merkezi okuyucu (N-worker poll fırtınası yerine O(1) okuyucu), (b) post-commit event-hook + startup catch-up (düşük gecikme + crash-safety). Her hâlde **N-worker × yüksek-frekans poll'u** O(pending) tek okuyucuya indirger — basamak 1'in DB kazancı budur.
+**Tetikleme = post-commit `TransactionListener` + soğuk orphan-sweep.** Task'ı oluşturan node, commit'ten *sonra* (tx dışı) o task'ı **elindeki veriyle** yayınlar — happy-path'te **DB sorgusu yok, cross-node yarış yok** (herkes yalnız kendi yarattığını yayınlar). Fast-path at-most-once; kaçan çökme-orphan'ları **seyrek · read-only · FOR-UPDATE'siz** bir sweep (tek node/leader) toplar, `Nats-Msg-Id` dedup çift-yayını yutar → net **at-least-once**.
+
+**REDDEDİLEN — (a) merkezi hot poller (2026-07-02):** N engine-node her biri poller çalıştırırsa aynı `ACT_RU_EXT_TASK`'ta `fetchAndLock` (SELECT FOR UPDATE) için **yarışır** → contention worker'dan engine-poller'a *taşınır*, kalkmaz (P1). Contention **sıcak poll döngüsündedir**; post-commit listener o döngüyü tümden kaldırır, geriye yalnız soğuk-seyrek okuma kalır — basamak-1'in DB kazancı budur.
 
 ### 5.4 Doğruluk tehlikeleri (peşinen işaretli)
 - **İki redelivery saati:** JetStream `ack-wait`/`maxDeliver` ile external-task `lockDuration` **hizalanmalı**; yoksa motor task'ı yeniden fetchable yaparken JetStream da redeliver eder → çift işleme. Hizalama + ack disiplini şart.
-- **Lock sahipliği:** `complete(taskId, workerId)` task'ın o `workerId`'ye kilitli olmasını ister. Worker `fetchAndLock` yapmadığı için bridge, task'ı bir **sentinel workerId**'ye kilitler ve payload'da taşır; complete o workerId ile yapılır.
+- **Lock sahipliği:** `complete(taskId, workerId)` task'ın o `workerId`'ye kilitli olmasını ister. Worker `fetchAndLock` yapmadığı için task **oluşturulurken/post-commit** bir **sentinel workerId**'ye kilitlenir (poller yok) ve bu id payload'da taşınır; complete o workerId ile yapılır.
 - **Idempotency:** inbound `complete` idempotent olmalı (zaten-complete task → yakala + ack). Doğal idempotency anahtarı `externalTaskId`.
 
 ### 5.5 Ne kalkar / ne kalır
 | | Native external task | A2 (JetStream push) |
 |---|---|---|
 | Token park (wait-state) | ✅ commit, lock yok | ✅ aynı |
-| **fetchAndLock poll/lock storm** | N worker × `SELECT FOR UPDATE` | **kalkar → JetStream push** |
+| **fetchAndLock poll/lock storm** | N worker × `SELECT FOR UPDATE` | **kalkar** — ne worker ne poller poll'ü; happy-path'te DB sorgusu yok (post-commit listener) |
 | `ACT_RU_EXT_TASK` satırı | 1 INSERT/task | **kalır** (outbox olarak kullanılıyor) |
 | `complete` = token-move tx | kısa tx + optimistic lock | **kalır** (P2 → basamak 6) |
 
@@ -162,9 +165,9 @@ Yani basamak 1'in büyük kısmı (poll→push) Flowable'da **zaten yapılmış.
 
 ## 8. Açık kararlar (Sentinel phase1/phase3)
 
-- **D-A — A2 outbound tetikleme:** merkezi okuyucu mu, post-commit event-hook + catch-up mu? (§5.3)
-- **D-B — lockDuration ↔ ack-wait hizalaması:** somut değerler + redelivery politikası. (§5.4)
-- **D-C — sentinel-lock modeli:** A2'de bridge'in task'ı kilitleme/devretme şeması; complete-path lock doğrulaması. (§5.4)
+- **D-A — A2 outbound tetikleme:** ✅ **ÇÖZÜLDÜ (2026-07-02)** = post-commit `TransactionListener` (oluşturan node, tx dışı, **sorgusuz**) + soğuk read-only orphan-sweep + `Nats-Msg-Id` dedup. Hot central poller **reddedildi** (N-node poller `fetchAndLock` contention'ı = P1 ihlali). (§5.3)
+- **D-B — lockDuration ↔ ack-wait hizalaması:** somut değerler + redelivery politikası. (§5.4) — **sıradaki açık karar.**
+- **D-C — sentinel-lock modeli:** task oluşturulurken/post-commit sentinel workerId ile kilitlenir (poller yok); `complete` o workerId ile; complete-path lock doğrulaması phase3'te. (§5.4)
 - **D-D — Flowable escalation:** boundary-timer pattern'i mi, başka bir SLA mekanizması mı? (§6.2)
 - **D-E — DLQ/ack semantiği:** iki idiom için ortak mı, idiom-özel mi? (§7)
 - **D-F — başarı metriği:** poll-storm azalması nasıl ölçülür (DB QPS / lock-wait)? Baseline + hedef.
