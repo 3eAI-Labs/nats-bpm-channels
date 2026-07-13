@@ -113,10 +113,42 @@ Native external-task **semantiğini koru** (BPMN `camunda:type="external"`, `com
 
 **REDDEDİLEN — (a) merkezi hot poller (2026-07-02):** N engine-node her biri poller çalıştırırsa aynı `ACT_RU_EXT_TASK`'ta `fetchAndLock` (SELECT FOR UPDATE) için **yarışır** → contention worker'dan engine-poller'a *taşınır*, kalkmaz (P1). Contention **sıcak poll döngüsündedir**; post-commit listener o döngüyü tümden kaldırır, geriye yalnız soğuk-seyrek okuma kalır — basamak-1'in DB kazancı budur.
 
-### 5.4 Doğruluk tehlikeleri (peşinen işaretli)
-- **İki redelivery saati:** JetStream `ack-wait`/`maxDeliver` ile external-task `lockDuration` **hizalanmalı**; yoksa motor task'ı yeniden fetchable yaparken JetStream da redeliver eder → çift işleme. Hizalama + ack disiplini şart.
-- **Lock sahipliği:** `complete(taskId, workerId)` task'ın o `workerId`'ye kilitli olmasını ister. Worker `fetchAndLock` yapmadığı için task **oluşturulurken/post-commit** bir **sentinel workerId**'ye kilitlenir (poller yok) ve bu id payload'da taşınır; complete o workerId ile yapılır.
-- **Idempotency:** inbound `complete` idempotent olmalı (zaten-complete task → yakala + ack). Doğal idempotency anahtarı `externalTaskId`.
+### 5.4 İki redelivery saati (D-B çözüldü: şemsiye kilit — JetStream tek otorite)
+
+**Kanıt önce** (fork: `~/Workspaces/cadenzaflow/cadenzaflow-bpm-platform/engine`, hepsi upstream-Camunda7 davranışı — **D-B fork değişikliği gerektirmez**, tümü public API):
+- `HandleExternalTaskCmd.java:89-91` — `complete`/`handleFailure` YALNIZ `workerId` eşitliğini kontrol eder, **lock expiry'yi kontrol ETMEZ.** Süresi dolmuş kilitle geç gelen complete, araya farklı workerId'li kilit girmediyse başarılıdır.
+- `ExternalTask.xml:220-222` — fetchable = `LOCK_EXP_TIME_ null|<=now` **AND** `RETRIES_ null|>0`. `retries=0` task hiçbir fetch'e görünmez (incident bölgesi).
+- `LockExternalTaskCmd.java:50-61` — kilit ihlali yalnız *farklı worker + süresi dolmamış kilit* kombinasyonunda; aynı sentinel workerId ile re-lock her zaman geçer.
+- `ExternalTaskEntity.java:419,443-446` — `failed()` her çağrıda `lockExpirationTime = now + retryDuration` yazar; `retries<=0` → incident yaratır.
+
+**Karar (2026-07-13) — saat hiyerarşisi:** A2'de poller olmadığı için engine kilidi redelivery saati DEĞİLDİR; tek redelivery otoritesi **JetStream**'dir (`ack-wait`=W, `maxDeliver`=M). Engine kilidi iki işe iner: (a) sahiplik işareti (sentinel workerId), (b) sweep'in orphan eşiği. Hizalama kuralı eşitlik değil **şemsiye**:
+
+```
+L (sentinel lockDuration) = W·M (JetStream teslimat bütçesi) + S (sweep periyodu) + ε (complete-yolu payı)
+```
+
+**Default değerler** (topic-başına override; W=30s mevcut adapter paritesi — `JetStreamMessageCorrelationSubscriber.java:57`):
+
+| Parametre | Default | Not |
+|---|---|---|
+| W — `ack-wait` | 30s | topic'in p99 iş süresi + marj; uzun işli topic büyük W seçer |
+| M — `maxDeliver` | 4 (=3 retry) | mevcut adapter deseni: `maxDeliver+1` → DLQ (`:58,117`) |
+| S — sweep periyodu | 120s | soğuk, read-only (§5.3) |
+| ε — pay | 60s | reply/complete işleme payı |
+| **L — sentinel lock** | **300s (5dk)** | = 30·4 + 120 + 60 |
+
+**Redelivery politikası:**
+1. **Happy path:** worker işi bitirir → `jobs.<topic>.reply`'a yayınlar → **sonra** job mesajını ACK'ler (reply-önce-ack = at-least-once). Inbound bridge reply'ı alır → `complete(extTaskId, sentinelWorkerId)` → complete **başarılıysa** reply mesajını ACK'ler.
+2. **Transient hata:** worker NAK(delay) ya da ack-wait dolmasına bırakır → redelivery (bütçe: toplam M teslimat).
+3. **Bütçe bitti:** deliveryCount > M → DLQ subject'i + bridge `handleFailure(..., retries=0)` → **incident (Cockpit görünürlüğü)**. `retries=0` task fetchable-predicate dışı → sweep onu ASLA yeniden yayınlamaz (`ExternalTask.xml:222`); operatör Cockpit'ten retry verirse task yeniden fetchable olur → sweep doğal olarak yeniden yayınlar (Cockpit-retry JetStream'e geri akar).
+4. **Geç complete:** L dolduktan sonra gelen reply yine başarılıdır (kanıt: expiry kontrolü yok) — tek sentinel workerId olduğundan sahiplik asla el değiştirmez. Çift işlenen işin ikinci complete'i "task yok" → yakala + ACK (**idempotency**: anahtar `externalTaskId`).
+5. **Heartbeat YOK (basamak-1):** W·M sert tavandır. `msg.inProgress()` (JetStream'in DB-yazısız extendLock muadili) basamak-1 worker kontratında yok → D-H'ye ertelendi. Engine `extendLock` da kullanılmaz (DB yazısı üretir + süresi dolmuş kilidi uzatamaz — `ExtendLockOnExternalTaskCmd.java:46-47`).
+
+**Sweep kriteri = fetchable-parite:** sweep, engine'in fetchable predicate'inin (`ExternalTask.xml:220-222`) birebir aynısını sorgular (lock süresi dolmuş/yok **ve** retries≠0, A2 topic'leri) → "native bir poller neyi alabilirse onu ve yalnız onu" yeniden yayınlar (yayın öncesi sentinel re-lock — aynı workerId, her zaman geçer). DLQ'lu task dirilmez; tamamlanan task satırı zaten silinmiştir.
+
+**Dürüst sınır:** `Nats-Msg-Id` dedup penceresi sonludur (stream `duplicate_window`, default 2dk). L (5dk) sonrası sweep re-publish'i pencere dışıdır → çifti stream değil, **inbound complete-idempotency** (madde 4) yutar. At-least-once'ın bedeli budur; vanilla external-task'ta da aynıdır (lock-expiry sonrası re-fetch).
+
+**Kalan işaretli tehlike — lock sahipliği (D-C):** task **oluşturulurken/post-commit** sentinel workerId'ye kilitlenir ve bu id payload'da taşınır; complete o workerId ile yapılır. Kilitleme anı (creating-tx içi mi, post-commit `lock()` çağrısı mı) sweep'in "hiç yayınlanmamış orphan" tespitini etkiler → phase3.
 
 ### 5.5 Ne kalkar / ne kalır
 | | Native external task | A2 (JetStream push) |
@@ -156,7 +188,7 @@ Yani basamak 1'in büyük kısmı (poll→push) Flowable'da **zaten yapılmış.
 
 - **Subject şeması:** `jobs.<type>` / event channel subject'leri; `*.reply` / inbound channel.
 - **Stream tipi:** iş dağıtımı için **WorkQueue** (her mesaj tek tüketiciye, nack→redeliver).
-- **Dedup:** `Nats-Msg-Id` (A2'de `externalTaskId`; Event Registry'de correlation key) + apply-zamanı idempotency (docs/05 P3/§10).
+- **Dedup:** `Nats-Msg-Id` (A2'de `externalTaskId`; Event Registry'de correlation key) + apply-zamanı idempotency (docs/05 P3/§10). Dikkat: stream dedup penceresi sonlu (`duplicate_window`, default 2dk) — pencere-dışı çiftleri complete/correlate-idempotency yutar (§5.4).
 - **DLQ:** `dlq.<subject>`, `maxDeliver`, `nakWithDelay`.
 - **Header'lar:** mevcut `BpmHeaders` (`X-Cadenzaflow-Trace-Id`, `-Business-Key`, `-Idempotency-Key`, async: `-Correlation-Id`, `-Reply-Subject`).
 - **Kısıt:** iki idiom da aynı teli yayar/tüketir → worker ekosistemi paylaşılır (docs/05 P5).
@@ -166,19 +198,21 @@ Yani basamak 1'in büyük kısmı (poll→push) Flowable'da **zaten yapılmış.
 ## 8. Açık kararlar (Sentinel phase1/phase3)
 
 - **D-A — A2 outbound tetikleme:** ✅ **ÇÖZÜLDÜ (2026-07-02)** = post-commit `TransactionListener` (oluşturan node, tx dışı, **sorgusuz**) + soğuk read-only orphan-sweep + `Nats-Msg-Id` dedup. Hot central poller **reddedildi** (N-node poller `fetchAndLock` contention'ı = P1 ihlali). (§5.3)
-- **D-B — lockDuration ↔ ack-wait hizalaması:** somut değerler + redelivery politikası. (§5.4) — **sıradaki açık karar.**
-- **D-C — sentinel-lock modeli:** task oluşturulurken/post-commit sentinel workerId ile kilitlenir (poller yok); `complete` o workerId ile; complete-path lock doğrulaması phase3'te. (§5.4)
+- **D-B — lockDuration ↔ ack-wait hizalaması:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **şemsiye kilit**: JetStream tek redelivery otoritesi; `L = W·M + S + ε` (default 30s·4 + 120s + 60s = **5dk**); DLQ → `handleFailure(retries=0)` → incident; sweep kriteri = fetchable-parite; heartbeat yok (→ D-H). Kilit kanıt: complete lock-expiry kontrol etmez (`HandleExternalTaskCmd.java:89-91`) → engine kilidi redelivery saati değil, şemsiye. Fork değişikliği gerektirmez. (§5.4)
+- **D-C — sentinel-lock modeli:** task oluşturulurken/post-commit sentinel workerId ile kilitlenir (poller yok); `complete` o workerId ile. Kilitleme anının seçimi (creating-tx içi / post-commit `lock()`) + sweep'in unpublished-orphan tespiti phase3'te. Kanıt hazır: aynı-workerId re-lock her zaman serbest (`LockExternalTaskCmd.java:50-61`). (§5.4)
 - **D-D — Flowable escalation:** boundary-timer pattern'i mi, başka bir SLA mekanizması mı? (§6.2)
 - **D-E — DLQ/ack semantiği:** iki idiom için ortak mı, idiom-özel mi? (§7)
 - **D-F — başarı metriği:** poll-storm azalması nasıl ölçülür (DB QPS / lock-wait)? Baseline + hedef.
 - **D-G — gRPC ön kapısı:** gerekli mi (Zeebe-uyum / broker'sız worker), ne zaman? Ayrı belge. (§1.4)
+- **D-H — InProgress heartbeat (basamak-1 SONRASI):** uzun işli topic'lerde küçük W + `msg.inProgress()` (DB-yazısız ack-wait uzatma; deliveryCount artırmaz). Kontrata "toplam heartbeat süresi ≤ L−ε" sınırı gerekir. Basamak-1 için **reddedildi** (2026-07-13, sabit W·M bütçesi tercih edildi — basit kontrat, statik L). (§5.4)
 
 ---
 
 ## 9. Doğrulama notları (kanıt-temelli — phase3 girdisi)
 
-- **External-task subsystem'in CadenzaFlow fork'unda varlığı** → Camunda7 paritesi (ACT_RU_EXT_TASK, `externalTaskService`) `~/Workspaces/cadenzaflow`'da doğrulanacak (assert değil, doğrula).
+- **External-task subsystem'in CadenzaFlow fork'unda varlığı** → ✅ **DOĞRULANDI (2026-07-13):** `org.cadenzaflow.bpm.engine.impl.cmd.{Handle,Complete,Lock,ExtendLockOn}ExternalTaskCmd` + `mapping/entity/ExternalTask.xml` fork'ta mevcut, upstream-Camunda7 davranışıyla (paket adı dışında değişiklik yok).
 - **Flowable external-worker job vs Event Registry** → bu belge Event Registry yolunu seçiyor; external-worker job modeli kapsam dışı, gerekirse ayrı brief.
-- **`complete()` lock zorunluluğu** → Camunda engine'de `complete` task'ın workerId-lock'unu ister; sentinel-lock şeması (D-C) buna göre doğrulanacak.
+- **`complete()` lock zorunluluğu** → ✅ **DOĞRULANDI (2026-07-13):** yalnız workerId eşitliği kontrol edilir (`HandleExternalTaskCmd.java:89-91`), lock-expiry kontrolü YOK. Fetchable predicate: `ExternalTask.xml:220-222`; re-lock kuralı: `LockExternalTaskCmd.java:50-61`; `failed()`'in saat-bağlaması: `ExternalTaskEntity.java:419,443-446`. → D-B/D-C bu davranışlar üzerine kuruldu, fork değişikliği gerektirmez.
+- **JetStream tarafı (NATS docs'tan phase3'te doğrulanacak):** stream `duplicate_window` default 2dk; `msg.inProgress()` ack-wait'i sıfırlar ve deliveryCount'u ARTIRMAZ; maxDeliver aşımında `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES` advisory'si yayınlanır (DLQ köprüsü için alternatif tetik).
 - **Mevcut kodda external task yok** → `camunda/cadenzaflow` kaynaklarında `ExternalTask`/`fetchAndLock`/`camunda:type="external"` sıfır eşleşme (2026-06-28); A2 tamamen yeni kod.
 - **token-move tx kalır** → zaten kanıtlı (P2; memory `sync-request-reply-holds-db-transaction`).
