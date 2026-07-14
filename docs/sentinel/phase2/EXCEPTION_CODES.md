@@ -4,6 +4,7 @@
 **Sentinel fazı:** Phase 2 — Business Analyst
 **İlgili:** `BUSINESS_LOGIC.md` (BR-XXX), `DECISION_MATRIX.md`, `ERROR_HANDLING_GUIDELINE.md` (kategori taksonomisi)
 **Tarih:** 2026-07-14
+**Durum:** Onaylı (2026-07-14) — BAQ-1…8 cevaplandı + phase-review KOŞULLU ONAY koşulları karşılandı
 
 > Bu katalog `ERROR_HANDLING_GUIDELINE.md §1.1` kategori formatını (`{CATEGORY}_{DESCRIPTION}`) kullanır: `VAL_`, `BUS_`, `RES_`, `SYS_`, `EXT_`. Bu sistem bir **HTTP API değil, asenkron mesajlaşma katmanıdır** — bu yüzden "HTTP Status" kolonu yerine **"Statü"** (ack/nak/DLQ/incident/failure-event/log-only/build-fail vb.) kullanılır; kategori semantiği (VAL_=girdi hatası, BUS_=iş kuralı, RES_=varlık-durumu, SYS_=sistem arızası, EXT_=harici bağımlılık) korunur. Guideline §6 ilkesi uygulanır: **BUS_ kodları WARN'dır** (beklenen davranış), **SYS_ kodları ERROR'dır** (mühendislik dikkati gerektirir). Her kod `[BA-VERIFIED]` veya `[phase1-verified]` kanıtlıdır; kaynak koddan doğrulanamayan davranış `[phase3'te doğrulanacak]` etiketlidir.
 
@@ -25,11 +26,11 @@
 
 | Kod | Statü | Tetikleyen koşul | Davranış | Idempotency etkisi | Log seviyesi | BR/FR/US | Kanıt |
 |---|---|---|---|---|---|---|---|
-| `VAL_EMPTY_MESSAGE_BODY` | ack (mevcut) | `msg.getData()==null \|\| length==0` | Mevcut kod: log DEBUG + ACK, hiçbir işlem yapılmaz | Vacuous — hiçbir yan-etki yok; redelivery'nin faydası yok (aynı boş body) | DEBUG (mevcut) — **BAQ-5: WARN+metrik'e yükseltilmeli mi?** | BR-FLW-002 (edge-case) / FR-B2 / US-B2 | `[BA-VERIFIED]` `JetStreamInboundEventChannelAdapter.java:124-131` |
+| `VAL_EMPTY_MESSAGE_BODY` | **WARN + DLQ-route** (BAQ-5 kararı: contract-fix #5) | `msg.getData()==null \|\| length==0` | **Yeni davranış (2026-07-14):** log WARN + `metrics.dlqCount++` + `publishToDlq` (header+Nats-Msg-Id korunarak) + ACK. Eski sessiz `log DEBUG + ACK` davranışı KALKAR. | Redelivery aynı boş body'yi üretirse aynı WARN+DLQ akışı tekrarlanır — sonsuz redelivery yok, DLQ'ya düşer | WARN | BR-SUB-007 / FR-C2, FR-B2 / US-C2, US-B2 | `[BA-VERIFIED]` `JetStreamInboundEventChannelAdapter.java:124-131` + `JetStreamMessageCorrelationSubscriber.java:107-114` (A2/CadenzaFlow, aynı desen) |
 | `BUS_REPLY_DELIVERY_BUDGET_EXCEEDED` | DLQ-route | `deliveryCount > maxDeliver` reply/event subject'inde (engine-inbound consumer'ın kendi in-band tespiti) | `publishToDlq(msg)` → orijinal mesaj ACK'lenir | Tek-seferlik geçiş | WARN | BR-A2-009, BR-FLW-003 / FR-A10, FR-B3 / US-A6, US-B3 | `[BA-VERIFIED]` `JetStreamInboundEventChannelAdapter.java:133-146` |
-| `SYS_DLQ_PUBLISH_FAILED` | nak+alert (DÜZELTME) | JetStream DLQ publish VE core-NATS fallback ikisi de başarısız; VEYA `dlqSubject==null` | **Mevcut kod:** discard/log-only + koşulsuz ack (custody-transfer ihlali — US-C2 fix hedefi). **Düzeltilmiş davranış:** nak + alert, asla ack-drop | Nak → redelivery → aynı hata tekrarlanırsa sonsuz döngü riski (BAQ-6: backoff/circuit-breaker politikası netleşmeli) | ERROR | BR-SUB-002 / FR-C2 / US-C2 | `[BA-VERIFIED]` `:210-214,222-235` (mevcut açık) |
+| `SYS_DLQ_PUBLISH_FAILED` | nak+alert (DÜZELTME) | JetStream DLQ publish VE core-NATS fallback ikisi de başarısız; VEYA `dlqSubject==null` | **Mevcut kod:** discard/log-only + koşulsuz ack (custody-transfer ihlali — US-C2 fix hedefi). **Düzeltilmiş davranış:** nak + alert, asla ack-drop | Nak → redelivery; JetStream/broker erişilemezliği JetStream'in kendi bağlantı-kurtarma mekanizmasıyla çözülür — bu kod dar kapsamlıdır (broker bağlantısı), DLQ-**bridge**'in downstream (engine/event-registry) dayanıklılığından farklıdır (bkz. `SYS_DLQ_BRIDGE_PROCESSING_FAILED`, BAQ-6) | ERROR | BR-SUB-002 / FR-C2 / US-C2 | `[BA-VERIFIED]` `:210-214,222-235` (mevcut açık) |
 | `RES_EXTERNAL_TASK_NOT_FOUND` | ack (idempotent yut) | `complete()`/`handleFailure()` çağrısı sırasında `findExternalTaskById()==null` → `NotFoundException` | Yakala + log WARN + ACK — **bu, US-A7'nin tasarlanmış idempotency mekanizmasıdır**, hata değil beklenen davranıştır | Duplicate/geç reply'ın (dedup penceresi dışı) sessizce yutulma yoludur | WARN | BR-A2-011 / FR-A12 / US-A7 | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:48-50` |
-| `SYS_SENTINEL_WORKER_CONFLICT` | **escalate — ack YOK** | `complete()`/`handleFailure()` çağrısı `validateWorkerViolation()==true` → `BadUserRequestException` | **ASLA olmamalı — invariant.** SENTINEL küme-geneli tek sabit olduğundan bu yalnız config drift / manuel müdahale / migration-guard bozulması ile oluşabilir. Otomatik ack/nak YERİNE insan incelemesi tetiklenmeli (BAQ-7: paging politikası) | N/A — retry edilmemeli, kök neden düzeltilmeden tekrar tetiklenir | **ERROR + alert** (guideline §6: BUS_ değil, gerçek invariant ihlali) | (yeni, BR-A2-003 invariant) / FR-A3 / US-A2 | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:52-53` |
+| `SYS_SENTINEL_WORKER_CONFLICT` | **CRITICAL — on-call page, ack YOK** (BAQ-7 kararı, 2026-07-14) | `complete()`/`handleFailure()` çağrısı `validateWorkerViolation()==true` → `BadUserRequestException` | **ASLA olmamalı — invariant.** SENTINEL küme-geneli tek sabit olduğundan bu yalnız config drift / manuel müdahale / migration-guard bozulması ile oluşabilir. Otomatik ack/nak YERİNE **anında insan müdahalesi** (on-call page) tetiklenir | N/A — retry edilmemeli, kök neden düzeltilmeden tekrar tetiklenir | **CRITICAL (ERROR + page)** — guideline §6 "BUS_=WARN" kuralı kapsamı DIŞINDA, gerçek invariant ihlali | (yeni, BR-A2-003 invariant) / FR-A3 / US-A2 | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:52-53` |
 | `BUS_EVENT_CORRELATION_NOT_FOUND` | ack+log+metric (drop) | Flowable: `eventReceived()` bekleyen subscription bulamaz — ya (a) interrupting escalation zaten fırlamış (geç sonuç, US-B5) ya da (b) aynı event'in daha önceki bir teslimi zaten correlate olmuş (redelivered duplicate). Adapter perspektifinden iki durum **teknik olarak ayırt edilemez** (aynı "no match" çıktısı) — her ikisi de aynı ack+log+metric aksiyonuna varır | Bu, Flowable'ın US-A7-paralel idempotency/late-result mekanizmasıdır | WARN | BR-FLW-005 / FR-B5 / US-B5 | US-B5 AC#1; `[phase3'te doğrulanacak]` `eventReceived` tam davranışı (D-D c) |
 
 ---
@@ -38,8 +39,8 @@
 
 | Kod | Statü | Tetikleyen koşul | Davranış | Idempotency etkisi | Log seviyesi | BR/FR/US | Kanıt |
 |---|---|---|---|---|---|---|---|
-| `RES_FAILURE_EVENT_CORRELATION_MISS` | log+metrik (ciddiyet BAQ-8) | Flowable failure-event bridge, DLQ mesajını failure-event'e çevirip `eventReceived()` çağırır ama bekleyen subscription YOK | Bu, escalation zincirinin **son savunma hattıdır** (NFR-R6 token-leak yasağı). Davranış: WARN+metrik (masum varsayım) VEYA ERROR+alert (leak-riski varsayımı) — **BAQ-8 onayı bekleniyor**, bu belgede temkinli taraf (ERROR+alert) önerilir | Mesajın kendisi ack'lenir (işlendi); asıl risk iş sonucunun kaybolmasıdır, mesaj kaybı değil | ERROR (önerilen, BAQ-8 onayına kadar) | BR-FLW-003 / FR-B3 / US-B3 | NFR-R6; `[phase3'te doğrulanacak]` (D-D c) |
-| `SYS_DLQ_BRIDGE_PROCESSING_FAILED` | nak+alert | DLQ-bridge incident/failure-event oluştururken kendisi exception fırlatır (DB down, event-registry down) | nak + alert — **asla ack-drop** (dlq-of-dlq yok, `06 §7`) | Redeliver edilen DLQ mesajının tekrar işlenmesi, `setRetriesAndManageIncidents` sayesinde doğal idempotenttir (bkz. aşağıdaki not) | ERROR | BR-A2-009, BR-FLW-003 / FR-A10, FR-B3 / US-A6, US-B3 | `06 §7` "dlq-of-dlq YOK" |
+| `RES_FAILURE_EVENT_CORRELATION_MISS` | **WARN + metrik + eşik-alarmı** (BAQ-8 kararı, 2026-07-14) | Flowable failure-event bridge, DLQ mesajını failure-event'e çevirip `eventReceived()` çağırır ama bekleyen subscription YOK | Bu, escalation zincirinin **son savunma hattıdır** (NFR-R6 token-leak yasağı). **Karar:** tek olay **WARN + metrik** (masum varsayım — instance başka yoldan zaten resolve olmuş olabilir); Micrometer `failure_event_correlation_miss` sayacı üzerinden **süreklilik/eşik-bazlı ayrı alarm** tanımlanır (kısa pencerede tekrarlayan miss'ler → gerçek korelasyon-key kaybı riski sinyali) | Mesajın kendisi ack'lenir (işlendi); asıl risk iş sonucunun kaybolmasıdır, mesaj kaybı değil | WARN (tek olay) + ayrı eşik-alarmı (süreklilik) | BR-FLW-003 / FR-B3 / US-B3 | NFR-R6; `[phase3'te doğrulanacak]` (D-D c) |
+| `SYS_DLQ_BRIDGE_PROCESSING_FAILED` | **nak-backoff + circuit-breaker** (BAQ-6 kararı, 2026-07-14) | DLQ-bridge incident/failure-event oluştururken kendisi exception fırlatır (DB down, event-registry down) | Standart `nakWithDelay` backoff (`2^(n-1)s`, cap 30s) → **5 ardışık başarısızlıkta CB OPEN** (30s) → HALF_OPEN → 3 ardışık başarı → CLOSED (ERROR_HANDLING_GUIDELINE §4.2 eşikleri). **CB OPEN iken DLQ mesajları KAYBOLMAZ** — `DLQ` stream'i kalıcıdır (limits-based, 14g), mesajlar nak'lı bekler; asla ack-drop (dlq-of-dlq yok, `06 §7`) | Redeliver edilen DLQ mesajının tekrar işlenmesi, `setRetriesAndManageIncidents` sayesinde doğal idempotenttir (bkz. aşağıdaki not) | ERROR (CB OPEN geçişinde ayrıca ALERT) | BR-A2-009, BR-FLW-003, BR-SUB-008 / FR-A10, FR-B3 / US-A6, US-B3 | `06 §7` "dlq-of-dlq YOK"; BAQ-6 kararı |
 | `BUS_INCIDENT_ALREADY_CREATED` *(bilgilendirici, hata değil)* | ack (no-op) | Aynı DLQ mesajı redeliver edilip `handleFailure(retries=0)` ikinci kez çağrılır | `setRetriesAndManageIncidents(0)`: `areRetriesLeft()` artık `false` (ilk çağrıda zaten 0'landı) → `createIncident()` **tekrar çağrılmaz** — duplicate incident oluşmaz | Doğal idempotency — kod-kanıtlı | DEBUG/INFO | BR-A2-009 / FR-A10 / US-A6 | `[BA-VERIFIED]` `ExternalTaskEntity.java:443-448` |
 
 ---
@@ -50,7 +51,7 @@
 |---|---|---|---|---|---|---|---|
 | `SYS_SWEEP_QUERY_FAILED` | log-only, döngü atlanır | Sweep'in fetchable-parite sorgusu DB hatasıyla başarısız olur | Log ERROR; bir sonraki S(120s) döngüsünde tekrar denenir | Etkilenen satırlar bir döngü gecikmeyle işlenir — orphan yaşı ≤ L+2S'e çıkabilir (NFR-R3 sınırının hafif esnemesi) | ERROR | BR-A2-005 / FR-A5 / US-A3 | `06 §5.4` sweep tanımı |
 | `SYS_SWEEP_RELOCK_FAILED` | log-only, satır atlanır | Sweep, fetchable satırı bulduktan sonra `lock(SENTINEL,L)` DB yazısı başarısız olur (DB down, deadlock) | Log ERROR; satır bu döngüde re-publish edilmez — bir sonraki döngüde tekrar fetchable-parite'e girer (guard hâlâ sağlanıyor çünkü lock hiç güncellenmedi) | Zararsız — satır durumu değişmedi, yalnız gecikme | ERROR | BR-A2-005 / FR-A5 / US-A3 | Aynı akışın türetilmiş dalı |
-| `SYS_SWEEP_REPUBLISH_FAILED` | **kritik edge-case (BAQ-1)** | Sweep, re-lock DB yazısını BAŞARIYLA yaptıktan SONRA JetStream re-publish başarısız olur (broker down) | Satır artık `LOCK_EXP_TIME_=now+L` ile "taze kilitli" görünür ama HİÇBİR YERE teslim edilmedi — sonraki sweep döngüleri (≤L≈320s) bu satırı "in-flight" sanıp atlar (Karar Matrisi 3, satır 5) | **Potansiyel görev kaybı** (fiili olarak L süresince) — mekanizma güvence altına alınmalı (BAQ-1, Phase 3/4 tasarım kararı) | ERROR + öneri: en-yaşlı-orphan-yaşı metriğine (US-D2) yansıtılmalı | BR-A2-013 (yeni) / FR-A5, FR-A6 / US-A3 | Bu fazda türetildi — bkz. BUSINESS_LOGIC.md BR-A2-013 |
+| `SYS_SWEEP_REPUBLISH_FAILED` | **kabul edilen nadir risk (BAQ-1 kararı, 2026-07-14)** | Sweep, re-lock DB yazısını BAŞARIYLA yaptıktan SONRA JetStream re-publish başarısız olur (broker down) — sıra SABİT (re-lock→publish) | Satır artık `LOCK_EXP_TIME_=now+L` ile "taze kilitli" görünür ama HİÇBİR YERE teslim edilmedi — sonraki sweep döngüleri (≤L≈320s) bu satırı "in-flight" sanıp atlar (Karar Matrisi 3, satır 5) | **Sınırlı gecikme, kalıcı kayıp DEĞİL** — bedel ≤ +L (320s), bir sonraki fetchable-parite döngüsünde yine orphan sayılır. Atomiklik mekanizması (BAQ-1 kararıyla) bilinçli olarak Phase 3/4 tasarımına bırakıldı | ERROR + öneri: en-yaşlı-orphan-yaşı metriğine (US-D2) yansıtılmalı | BR-A2-013 / FR-A5, FR-A6 / US-A3 | Bu fazda türetildi — bkz. BUSINESS_LOGIC.md BR-A2-013 |
 | `BUS_TASK_RETRIES_EXHAUSTED` *(beklenen durum, hata değil)* | atla (no-op) | Sweep, `RETRIES_=0` satırıyla karşılaşır | Asla dokunmaz — DLQ'lanmış/incident bölgesi, yalnız Cockpit-retry ile geri döner | Read-only, yan etkisi yok | DEBUG (rutin) | BR-A2-009 / FR-A11 / US-A6 | `[BA-VERIFIED]` `ExternalTask.xml` fetchable predicate |
 | `RES_TASK_SUSPENDED` *(beklenen durum, hata değil)* | atla (no-op) | Sweep, `SUSPENSION_STATE_ ≠ 1` satırıyla karşılaşır | Asla dokunmaz — resume bekler | Read-only | DEBUG (rutin) | BR-A2-005 / FR-A5 / US-A3 | `[BA-VERIFIED]` `ExternalTask.xml` fetchable predicate |
 
@@ -70,8 +71,8 @@
 
 | Kod | Statü | Tetikleyen koşul | Davranış | Idempotency etkisi | Log seviyesi | BR/FR/US | Kanıt |
 |---|---|---|---|---|---|---|---|
-| `VAL_UMBRELLA_LOCK_TOO_SHORT` | **davranış BAQ-3'e bağlı** | Topic-özel `L` override'ı, `L ≥ M·W+Σbackoff+S+ε` şemsiye koşulunu ihlal eder | (a) reject-startup: topic aktivasyonu engellenir, VEYA (b) warn-only: config kabul edilir + log WARN — **US-A5 AC metni "validasyon/uyarı" diyerek ikisini de açık bırakıyor, BAQ-3 onayı gerekli** | N/A (deployment-zamanı) | ERROR (reject ise) / WARN (warn-only ise) | BR-A2-006 / FR-A8 / US-A5 | `06 §5.4` D-B formülü |
-| `VAL_TOPIC_NAMESPACE_COLLISION` | **davranış BAQ-4'e bağlı** | Flowable inbound channel subject'i `jobs.*` önekiyle çakışır (US-C4 DLQ routing'i `dlq.jobs.>`'u sabit olarak incident-bridge'e yönlendiriyor) | Şu an **tespit edilmiyor** (dokümante bir kısıt yok) — DLQ mesajı yanlış bridge'e gider. BAQ-4 onayına kadar önerilen: deployment-time bir subject-namespace validasyonu eklenmeli | N/A (deployment-zamanı) | ERROR (önerilen) | BR-SUB-004 (edge-case) / FR-C4 / US-C4 | Bu fazda türetildi — bkz. DECISION_MATRIX.md Ek Matris 5, satır 3 |
+| `VAL_UMBRELLA_LOCK_TOO_SHORT` | **reject-startup DEFAULT** (BAQ-3 kararı, 2026-07-14) | Topic-özel `L` override'ı, `L ≥ M·W+Σbackoff+S+ε` şemsiye koşulunu ihlal eder | **Default: reject-startup** — topic aktivasyonu ENGELLENİR (ERROR). Bilinçli kaçış: `allow-unsafe-lock-duration=true` config flag'i set edilirse config kabul edilir AMA her ilgili döngüde (dispatch/sweep) **kalıcı WARN** log'lanır | N/A (deployment-zamanı) | ERROR (default reject) / kalıcı WARN (escape-flag ile) | BR-A2-006 / FR-A8 / US-A5 | `06 §5.4` D-B formülü; BAQ-3 kararı |
+| `VAL_TOPIC_NAMESPACE_COLLISION` | **aktif deployment-time validasyon (ERROR, engeller)** (BAQ-4 kararı, 2026-07-14) | Flowable inbound channel subject'i `jobs.*` önekiyle çakışır (`jobs.*` A2'ye REZERVE — US-C4 DLQ routing'i `dlq.jobs.>`'u sabit olarak incident-bridge'e yönlendiriyor) | Bootstrap sırasında Flowable channel'ı `jobs.` önekiyle tanımlanmaya çalışılırsa **deployment ENGELLENİR** (artık yalnız dokümante bir kısıt değil, mekanik bir kapı) | N/A (deployment-zamanı) | ERROR (engeller) | BR-SUB-004 / FR-C4 / US-C4 | Bu fazda türetildi — bkz. DECISION_MATRIX.md Ek Matris 5, satır 3; BAQ-4 kararı |
 
 ---
 
@@ -104,14 +105,14 @@
 | BUS_WORKER_BUSINESS_ERROR | BR-A2-008 | FR-A7 | US-A4 |
 | SYS_WORKER_TRANSIENT_FAILURE | BR-A2-001, BR-FLW-002 | FR-A1, FR-B2 | US-A1, US-B2 |
 | BUS_JOB_DELIVERY_BUDGET_EXCEEDED | BR-A2-009 | FR-A10 | US-A6 |
-| VAL_EMPTY_MESSAGE_BODY | BR-FLW-002 | FR-B2 | US-B2 |
+| VAL_EMPTY_MESSAGE_BODY | BR-SUB-007 | FR-C2, FR-B2 | US-C2, US-B2 |
 | BUS_REPLY_DELIVERY_BUDGET_EXCEEDED | BR-A2-009, BR-FLW-003 | FR-A10, FR-B3 | US-A6, US-B3 |
 | SYS_DLQ_PUBLISH_FAILED | BR-SUB-002 | FR-C2 | US-C2 |
 | RES_EXTERNAL_TASK_NOT_FOUND | BR-A2-011 | FR-A12 | US-A7 |
 | SYS_SENTINEL_WORKER_CONFLICT | BR-A2-003 | FR-A3 | US-A2 |
 | BUS_EVENT_CORRELATION_NOT_FOUND | BR-FLW-005 | FR-B5 | US-B5 |
 | RES_FAILURE_EVENT_CORRELATION_MISS | BR-FLW-003 | FR-B3 | US-B3 |
-| SYS_DLQ_BRIDGE_PROCESSING_FAILED | BR-A2-009, BR-FLW-003 | FR-A10, FR-B3 | US-A6, US-B3 |
+| SYS_DLQ_BRIDGE_PROCESSING_FAILED | BR-A2-009, BR-FLW-003, BR-SUB-008 | FR-A10, FR-B3 | US-A6, US-B3 |
 | BUS_INCIDENT_ALREADY_CREATED | BR-A2-009 | FR-A10 | US-A6 |
 | SYS_SWEEP_QUERY_FAILED | BR-A2-005 | FR-A5 | US-A3 |
 | SYS_SWEEP_RELOCK_FAILED | BR-A2-005 | FR-A5 | US-A3 |
@@ -129,18 +130,18 @@
 
 ---
 
-## 10. BA-QUESTIONS referansı
+## 10. BAQ karar referansı (Levent onayı, 2026-07-14)
 
-Bu katalogdaki 5 kodun davranışı doğrudan `BUSINESS_LOGIC.md §9`'daki BA-QUESTIONS'a bağlıdır:
-- `SYS_DLQ_BRIDGE_PROCESSING_FAILED` → **BAQ-6** (backoff/circuit-breaker politikası)
-- `SYS_SENTINEL_WORKER_CONFLICT` → **BAQ-7** (paging ciddiyeti)
-- `RES_FAILURE_EVENT_CORRELATION_MISS` → **BAQ-8** (WARN vs ERROR)
-- `VAL_UMBRELLA_LOCK_TOO_SHORT` → **BAQ-3** (reject vs warn)
-- `VAL_TOPIC_NAMESPACE_COLLISION` → **BAQ-4** (namespace rezervasyonu)
-- `VAL_EMPTY_MESSAGE_BODY` → **BAQ-5** (5. contract-fix mi, bilinçli savunma-kodu mu)
-- `SYS_SWEEP_REPUBLISH_FAILED` → **BAQ-1** (re-lock/re-publish sıralama garantisi)
+Bu katalogdaki 7 kodun davranışı `BUSINESS_LOGIC.md §9`'daki BAQ-1…8 karar kaydıyla netleşti (hepsi cevaplandı, aşağıda uygulanan karar özetlenir):
+- `SYS_DLQ_BRIDGE_PROCESSING_FAILED` → **BAQ-6:** nak-backoff + circuit-breaker (guideline §4.2 eşikleri); CB OPEN'da mesaj stream'de kalıcı bekler
+- `SYS_SENTINEL_WORKER_CONFLICT` → **BAQ-7:** CRITICAL + on-call page (invariant ihlali, "BUS_=WARN" kapsamı dışı)
+- `RES_FAILURE_EVENT_CORRELATION_MISS` → **BAQ-8:** WARN + metrik + eşik-alarmı (tek olay benign, süreklilik alarm tetikler)
+- `VAL_UMBRELLA_LOCK_TOO_SHORT` → **BAQ-3:** reject-startup default + `allow-unsafe-lock-duration=true` escape-flag + kalıcı WARN
+- `VAL_TOPIC_NAMESPACE_COLLISION` → **BAQ-4:** `jobs.*` A2'ye rezerve + aktif deployment-time validasyon (engeller)
+- `VAL_EMPTY_MESSAGE_BODY` → **BAQ-5:** 5. kontrat açığı — WARN + DLQ-route (sessiz ack kalktı)
+- `SYS_SWEEP_REPUBLISH_FAILED` → **BAQ-1:** sıra sabit (re-lock→publish); arası çökme kabul edilen nadir risk (≤+L gecikme), atomiklik Phase 3/4'e bırakıldı
 
-Tam soru metinleri ve gerekçeleri: `BUSINESS_LOGIC.md §9`.
+Tam soru metinleri ve karar gerekçeleri: `BUSINESS_LOGIC.md §9` (Q→A karar kaydı formatı).
 
 ---
 

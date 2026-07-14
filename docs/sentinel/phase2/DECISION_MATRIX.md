@@ -4,6 +4,7 @@
 **Sentinel fazı:** Phase 2 — Business Analyst
 **İlgili:** `BUSINESS_LOGIC.md` (BR-XXX kataloğu, süreç akışları, durum makineleri), `EXCEPTION_CODES.md`
 **Tarih:** 2026-07-14
+**Durum:** Onaylı (2026-07-14) — BAQ-1…8 cevaplandı + phase-review KOŞULLU ONAY koşulları karşılandı
 
 > BA Guideline §2.2 gereği "if-this-then-that" mantığı burada tablo olarak sabitlenir — düz metin YASAK. Her satır bir BR/FR/US'ye bağlıdır. Kanıtlar `[BA-VERIFIED]` (bu fazda kaynak koddan bizzat okundu) ya da `[phase1-verified]` (Phase 1'de doğrulandı, bu fazda yeniden kullanıldı) etiketlidir. BA-QUESTION referansları (`BAQ-N`) `BUSINESS_LOGIC.md §9`'a bağlıdır.
 
@@ -30,7 +31,7 @@ Custody-transfer ilkesinin durum-geçiş matrisi. **Üç rol ayrı satır grupla
 | 1 | Reply/event teslim edildi, data boş değil | `deliveryCount ≤ maxDeliver` | İşle: `complete()` (A2) / `eventReceived()` (Flowable) | — (aşağıdaki alt-satırlara bağlı) | BR-A2-008, BR-FLW-002 | `[BA-VERIFIED]` `JetStreamInboundEventChannelAdapter.java:149-160` |
 | 1a | ...işlem başarılı | complete/correlate döndü | ACK | Complete/correlate-dönüşü-sonrası-ack | BR-A2-008 / FR-A7 | `06 §7` |
 | 1b | ...işlem exception fırlattı (genel) | herhangi bir `Exception` | `metrics.nakCount++` → `nakWithBackoff` | Custody transfer OLMADI | BR-SUB-002 / FR-C6 | `[BA-VERIFIED]` `:165-172` |
-| 2 | Data boş (`data==null \|\| length==0`) | — | log DEBUG + **ACK** (BAQ-5 — mevcut davranış, fix listesi dışı) | Vacuous — hiçbir yan-etki üretilmedi ama custody devredilmiş sayılıyor | BR-FLW-002 (edge-case) | `[BA-VERIFIED]` `:124-131` |
+| 2 | Data boş (`data==null \|\| length==0`) | — | **WARN log + `metrics.dlqCount++` + `publishToDlq` + ACK** (BAQ-5 kararı, 2026-07-14: contract-fix #5 — eski sessiz DEBUG+ACK davranışı KALKTI) | Vacuous iş yapılmadı ama artık gözlemlenebilir (WARN+metrik) ve DLQ'ya yönlendirilmiş — sessiz kayıp yok | BR-SUB-007 | `[BA-VERIFIED]` `:124-131` (Flowable) + `JetStreamMessageCorrelationSubscriber.java:107-114` (A2/CadenzaFlow, aynı desen) |
 | 3 | `deliveryCount > maxDeliver` | in-band tespit | `publishToDlq(msg)` → orijinal mesajı ACK'le | DLQ-PubAck-sonrası-ack (§ Matris 1.C ile devam) | BR-A2-009, BR-FLW-003 / FR-A10, FR-B3 | `[BA-VERIFIED]` `:133-146` |
 | 4 | DLQ publish (JetStream) başarılı | `dlqSubject != null` | Orijinal mesajı ACK'le | DLQ-PubAck-sonrası-ack | BR-SUB-002 / FR-C2 | `[BA-VERIFIED]` `:210,217-221` |
 | 5 | DLQ publish (JetStream) başarısız, core-NATS fallback başarılı | — | Orijinal mesajı ACK'le | Fallback-PubAck-sonrası-ack | BR-SUB-002 / FR-C2 | `[BA-VERIFIED]` `:222-230` |
@@ -43,9 +44,9 @@ Custody-transfer ilkesinin durum-geçiş matrisi. **Üç rol ayrı satır grupla
 |---|---|---|---|---|---|---|
 | 1 | DLQ mesajı tüketildi, header'lar korunmuş (US-C1 fix uygulandı) | correlation key okunabilir | Camunda: `handleFailure(retries=0)` → incident / Flowable: failure-event → `eventReceived` | İncident-oluşturma/correlate-sonrası-ack | BR-A2-009, BR-FLW-003 | BR-SUB-001 |
 | 2 | ...işlem başarılı | — | ACK | İncident-oluşturma/correlate-sonrası-ack | aynı | — |
-| 3 | ...işlem sırasında exception (DB down, event registry down) | — | **nak + alert** (asla ack-drop, dlq-of-dlq yok) | Custody transfer OLMADI | `06 §7` "dlq-of-dlq YOK" | `[phase1-verified]` |
-| 4 | ...redeliver edilen AYNI DLQ mesajı ikinci kez işlenir | `handleFailure(retries=0)` tekrar çağrılır | `setRetriesAndManageIncidents(0)`: `areRetriesLeft()` artık false → **duplicate incident OLUŞMAZ** | ACK (doğal idempotency) | BR-A2-009 | `[BA-VERIFIED]` `ExternalTaskEntity.java:443-448` |
-| 5 | Flowable: `eventReceived` bekleyen subscription bulamadı | correlation miss (instance zaten resolve / key kayıp) | Log + metrik; ciddiyet **BAQ-8**'e bağlı (WARN+metrik vs ERROR+alert) | Ack edilir (mesajın kendisi işlendi, iş sonucu ayrı konu) | BR-FLW-003 | US-B3 AC#4, `[phase3'te doğrulanacak]` |
+| 3 | ...işlem sırasında exception (DB down, event registry down) | — | **nak-backoff (2^(n-1)s, cap 30s) → 5 ardışık hata → circuit-breaker OPEN (30s) → HALF_OPEN → 3 başarı → CLOSED** (BAQ-6 kararı, 2026-07-14 — guideline §4.2); CB OPEN iken mesaj stream'de kalıcı bekler, asla ack-drop (dlq-of-dlq yok) | Custody transfer OLMADI (nak'lı bekleme) — CB OPEN'da bile mesaj KAYBOLMAZ | `06 §7` "dlq-of-dlq YOK"; BR-SUB-008 | `[phase1-verified]` + BAQ-6 kararı |
+| 4 | ...redeliver edilen AYNI DLQ mesajı ikinci kez işlenir | `handleFailure(retries=0, retryDuration=0)` tekrar çağrılır | `setRetriesAndManageIncidents(0)`: `areRetriesLeft()` artık false → **duplicate incident OLUŞMAZ** | ACK (doğal idempotency) | BR-A2-009 | `[BA-VERIFIED]` `ExternalTaskEntity.java:443-448` |
+| 5 | Flowable: `eventReceived` bekleyen subscription bulamadı | correlation miss (instance zaten resolve / key kayıp) | **WARN + metrik** (BAQ-8 kararı, 2026-07-14: tek olay benign yarış olabilir); `failure_event_correlation_miss` sayacı üzerinden süreklilik/eşik-alarmı ayrıca tanımlanır | Ack edilir (mesajın kendisi işlendi, iş sonucu ayrı konu) | BR-FLW-003 | US-B3 AC#4, `[phase3'te doğrulanacak]` |
 
 ---
 
@@ -57,7 +58,7 @@ Reply geldi → 4 olası çıktı (US-A4/A7 kabul kriterleri).
 |---|---|---|---|---|---|---|---|
 | 1 | Reply işlendi, `complete(extTaskId, SENTINEL, vars)` çağrıldı | Task bulundu (`findExternalTaskById != null`) VE `workerId == SENTINEL` | `complete()` çalışır → token ilerler | ACK (complete-sonrası) | Normal, tek-seferlik yürütme | BR-A2-008 / FR-A7 | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:44-68` |
 | 2 | Reply işlendi ama task **bulunamadı** | `findExternalTaskById == null` → `NotFoundException` (`ensureNotNull`) | Yakala + log WARN | **ACK** (idempotent yut) | Bu, US-A7'nin idempotency mekanizmasıdır — duplicate/geç reply sessizce yutulur | BR-A2-011 / FR-A12 | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:48-50` |
-| 3 | Reply işlendi, task bulundu ama **workerId eşit değil** | `validateWorkerViolation==true` → `BadUserRequestException` | **ASLA olmamalı — invariant.** Log ERROR + alert (BAQ-7) | **ACK edilmez** (nak veya manuel müdahale — ciddiyet BAQ-7'ye bağlı) | Otomatik retry YAPILMAZ — invariant ihlali insan incelemesi gerektirir | (yeni, invariant) | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:52-53` |
+| 3 | Reply işlendi, task bulundu ama **workerId eşit değil** | `validateWorkerViolation==true` → `BadUserRequestException` | **ASLA olmamalı — invariant.** **CRITICAL: log ERROR + on-call page** (BAQ-7 kararı, 2026-07-14) | **ACK edilmez** — kök neden düzeltilmeden otomatik retry YAPILMAZ, insan incelemesi gerektirir | Otomatik retry YAPILMAZ — invariant ihlali insan incelemesi gerektirir | (yeni, invariant) | `[BA-VERIFIED]` `HandleExternalTaskCmd.java:52-53` |
 | 4 | `complete()` çağrısı sırasında transient hata (DB bağlantısı koptu vb.) | Task bulundu + workerId eşit AMA DB write fail | NAK (redelivery) | NAK — bir sonraki redelivery'de tekrar denenir | At-least-once — worker'ın reply'ı idempotent tekrar işlenebilir olmalı (aynı task, aynı complete çağrısı) | BR-A2-008 (transient dal) | `06 §7` custody-transfer genel ilkesi |
 
 **Not — satır 2 vs 3 ayrımı (BUSINESS_LOGIC.md §1.2'de vurgulandı):** Bu iki çıktı **FARKLI exception tipleriyle** (`NotFoundException` vs `BadUserRequestException`) ayırt edilebilir — bridge implementasyonu iki ayrı `catch` bloğu ile bunları karıştırmadan yönlendirebilir. Satır 2 **beklenen/benign** (WARN, iş akışı normal), satır 3 **hiç beklenmeyen** (ERROR, sistem/config sağlığı sorunu) — ERROR_HANDLING_GUIDELINE §6 "Business rule violations WARN, unexpected errors ERROR" ayrımı burada birebir uygulanır: satır 2 bir iş kuralı sonucu değildir (motor davranışı — expiry kontrolsüz complete zaten BR-A2-011'in TASARLANMIŞ sonucu), satır 3 gerçek bir beklenmeyen durumdur.
@@ -74,8 +75,8 @@ Her satır (ACT_RU_EXT_TASK / A2-topic adayı), fetchable-parite predicate'ine g
 | 2 | `RETRIES_ = 0` (diğer koşullar ne olursa olsun) | **Atla** — asla yeniden yayınlama (DLQ'lanmış/incident bölgesi) | BR-A2-009 / FR-A11 | `[BA-VERIFIED]` `ExternalTask.xml` (`RETRIES_ null OR >0` AND'i tek başına satırı dışlar) |
 | 3 | `SUSPENSION_STATE_ ≠ 1` (process/instance askıda) | **Atla** — resume bekle | BR-A2-005 / FR-A5 | Aynı predicate, üçüncü AND bileşeni |
 | 4 | `LOCK_EXP_TIME_ > now` (kilit hâlâ taze — in-flight) | **Atla** — orphan değil, normal yürüyor | BR-A2-005 / FR-A5 | Aynı predicate, birinci AND bileşeni |
-| 5 | **(edge-case, BAQ-1)** Kilit taze GÖRÜNÜYOR ama bir ÖNCEKİ sweep döngüsünde re-lock başarılı + re-publish BAŞARISIZ olmuştu | Bu döngüde de **Atla** (satır 4 ile aynı guard, ama mesaj hiçbir zaman teslim edilmedi) — **iş kuralı ihlali riski**: satır fiilen orphan ama predicate'e göre "taze" | BR-A2-013 (yeni) | Bu fazda türetildi — bkz. BUSINESS_LOGIC.md BR-A2-013, state machine §2.1 guard notu |
-| 6 | **(edge-case, BAQ-2)** `RETRIES_>0` (Cockpit retry verildi) AMA `LOCK_EXP_TIME_` hâlâ DLQ-anındaki `now+retryDuration` değerinde (gelecekte) | Satır 4'ün guard'ına düşer → **Atla**, ta ki `retryDuration` süresi geçene kadar | BR-A2-010 (edge-case) | `[BA-VERIFIED]` `SetExternalTaskRetriesCmd.java:48-51` (lockExpirationTime'a dokunmaz) + `ExternalTaskEntity.java:402-419` (`failed()`'in lockExpirationTime ataması) |
+| 5 | **(edge-case, BAQ-1 kararıyla netleşti)** Kilit taze GÖRÜNÜYOR ama bir ÖNCEKİ sweep döngüsünde re-lock başarılı + re-publish BAŞARISIZ olmuştu | Bu döngüde de **Atla** (satır 4 ile aynı guard, ama mesaj hiçbir zaman teslim edilmedi) — **BAQ-1 kararı (2026-07-14): kabul edilen nadir risk**, bedeli ≤+L ek gecikme (bir sonraki fetchable-parite döngüsünde yine orphan sayılır); atomiklik mekanizması Phase 3/4'e bırakıldı | BR-A2-013 | Bu fazda türetildi — bkz. BUSINESS_LOGIC.md BR-A2-013, state machine §2.1 guard notu |
+| 6 | **(edge-case, BAQ-2 kararıyla ÇÖZÜLDÜ)** `RETRIES_>0` (Cockpit retry verildi); `LOCK_EXP_TIME_` artık DAİMA `now+0=now` (DLQ→incident bridge `retryDuration=0` sabit kullanır — BAQ-2 kararı) | Guard **her zaman sağlanır** → satır **anında** fetchable-parite'e girer, gecikme YOK | BR-A2-010 | `[BA-VERIFIED]` `SetExternalTaskRetriesCmd.java:48-51` (lockExpirationTime'a dokunmaz) + `ExternalTaskEntity.java:402-419` (`failed()`'in lockExpirationTime ataması, artık `retryDuration=0` ile çağrılır) |
 
 **Sweep'in kendisi başarısız olursa (DB read/write hatası):** ayrı bir dal — bkz. `EXCEPTION_CODES.md` `SYS_SWEEP_QUERY_FAILED` / `SYS_SWEEP_RELOCK_FAILED` / `SYS_SWEEP_REPUBLISH_FAILED`.
 
@@ -87,7 +88,7 @@ Her satır (ACT_RU_EXT_TASK / A2-topic adayı), fetchable-parite predicate'ine g
 |---|---|---|---|---|---|
 | 1 | Worker jobs-consumer deliveryCount > M (kalıcı worker ölümü) | Default (opt-in timer modellenmemiş de olsa HER ZAMAN çalışır) | **DLQ→failure-event bridge**: aynı correlation key'lerle failure-event oluştur → `eventReceived` | BR-FLW-003 / FR-B3 | `06 §6.2` D-D |
 | 2 | ...failure-event bekleyen subscription bulur | Model escalation biçimi: event-based gateway / event-registry boundary event / event subprocess | Model escalation path'ini işler (token leak yok) | BR-FLW-003 | `[phase3'te doğrulanacak]` (D-D a — hangi yakalama biçimleri desteklenir) |
-| 3 | ...failure-event bekleyen subscription BULAMAZ | Instance zaten resolve olmuş / correlation key kaybı | `RES_FAILURE_EVENT_CORRELATION_MISS` — ciddiyet BAQ-8'e bağlı | BR-FLW-003 | NFR-R6 (token-leak yasağı) |
+| 3 | ...failure-event bekleyen subscription BULAMAZ | Instance zaten resolve olmuş / correlation key kaybı | `RES_FAILURE_EVENT_CORRELATION_MISS` — **WARN + metrik + eşik-alarmı** (BAQ-8 kararı, 2026-07-14: tek olay benign yarış, süreklilik ayrı alarm tetikler) | BR-FLW-003 | NFR-R6 (token-leak yasağı) |
 | 4 | Model gerçek wall-clock SLA'sına sahip | **Opt-in** boundary timer modellenmiş | Deadline aşılırsa timer tetiklenir — **worker canlı olsa BİLE** (DLQ'dan bağımsız) | BR-FLW-004 / FR-B4 | `06 §6.2` D-D opt-in |
 | 5 | Model SLA'sız (default, timer modellenmemiş) | — | Yalnız satır 1-3 (DLQ→failure-event) geçerli; timer YOK | BR-FLW-004 | REDDEDİLDİ: timer-only default |
 | 6 | Escalation (DLQ→failure-event VEYA timer) zaten fırlamış — **interrupting** | Geç sonuç (worker'ın gecikmiş reply'ı) sonradan gelir | Subscription artık YOK → **ACK + log + metric (drop)** | BR-FLW-005 / FR-B5 | US-B5 AC#1 |
@@ -104,7 +105,7 @@ Her satır (ACT_RU_EXT_TASK / A2-topic adayı), fetchable-parite predicate'ine g
 |---|---|---|---|---|
 | 1 | `dlq.jobs.<topic>` | Camunda/CadenzaFlow incident-bridge | Subject `jobs.` öneki ile başlıyor | BR-SUB-004 / FR-C4 |
 | 2 | `dlq.<event-channel-subject>` (jobs. önekiyle BAŞLAMAYAN) | Flowable failure-event bridge | Subject filtre-dışı kalan her şey | BR-SUB-004 / FR-C4 |
-| 3 | **(BAQ-4)** Flowable inbound channel `jobs.<x>` adlandırılmış | Belirsiz — subject-prefix routing'e göre YANLIŞLIKLA incident-bridge'e gider | Namespace çakışması — çözüm BAQ-4'e bağlı | BR-SUB-004 (edge-case) |
+| 3 | **(BAQ-4 kararıyla netleşti)** Flowable inbound channel `jobs.<x>` adlandırılmaya ÇALIŞILIRSA | `jobs.*` A2'ye REZERVE (BAQ-4 kararı, 2026-07-14) | **Deployment-time `VAL_TOPIC_NAMESPACE_COLLISION` (ERROR) — deployment ENGELLENİR** (artık aktif validasyon, önceden yalnız dokümante edilmemiş bir riskti) | BR-SUB-004 |
 
 ---
 
@@ -113,7 +114,7 @@ Her satır (ACT_RU_EXT_TASK / A2-topic adayı), fetchable-parite predicate'ine g
 | # | Girdi (operatör config) | Guard koşulu | Aksiyon | BR/FR |
 |---|---|---|---|---|
 | 1 | Topic-özel `L`, `W`, `M`, `S`, `ε` girilmiş | `L ≥ M·W + Σbackoff + S + ε` sağlanıyor | Kabul, config aktive edilir | BR-A2-006 / FR-A8 |
-| 2 | Topic-özel `L` girilmiş, formülün ALTINDA | `L < M·W + Σbackoff + S + ε` | `VAL_UMBRELLA_LOCK_TOO_SHORT` — **davranış BAQ-3'e bağlı**: (a) reject-startup (topic aktive edilmez) veya (b) warn-only (config kabul edilir, log WARN) | BR-A2-006 (edge-case) |
+| 2 | Topic-özel `L` girilmiş, formülün ALTINDA | `L < M·W + Σbackoff + S + ε` | `VAL_UMBRELLA_LOCK_TOO_SHORT` — **reject-startup DEFAULT** (BAQ-3 kararı, 2026-07-14): topic aktivasyonu ENGELLENİR (ERROR). Bilinçli kaçış: `allow-unsafe-lock-duration=true` flag'i + kalıcı WARN (her döngüde) | BR-A2-006 |
 | 3 | `W`/`M`/`S`/`ε` değişmiş ama `L` default'tan türetilmemiş (elle sabit bırakılmış) | Tutarsızlık riski | Aynı VAL_ kodu — yeniden hesaplama önerisi log'lanmalı | BR-A2-006 |
 | 4 | Hiçbir override yok | Default'lar (W=30,M=4,S=120,ε=60,Σbackoff=7,L=320) | Kabul | BR-A2-006 |
 
@@ -123,15 +124,15 @@ Her satır (ACT_RU_EXT_TASK / A2-topic adayı), fetchable-parite predicate'ine g
 
 | Matris | Kapsadığı BR | Kapsadığı FR | Kapsadığı US |
 |---|---|---|---|
-| Matris 1 (mesaj-yaşamdöngüsü, 3 alt-tablo) | BR-SUB-002, BR-A2-008, BR-A2-009, BR-FLW-002, BR-FLW-003 | FR-C2, FR-C6, FR-A7, FR-A10, FR-B2, FR-B3 | US-A4, US-A6, US-B2, US-B3, US-C2 |
+| Matris 1 (mesaj-yaşamdöngüsü, 3 alt-tablo) | BR-SUB-002, BR-SUB-007, BR-SUB-008, BR-A2-008, BR-A2-009, BR-FLW-002, BR-FLW-003 | FR-C2, FR-C6, FR-A7, FR-A10, FR-B2, FR-B3 | US-A4, US-A6, US-B2, US-B3, US-C2 |
 | Matris 2 (complete yolu) | BR-A2-008, BR-A2-011 | FR-A7, FR-A12 | US-A4, US-A7 |
 | Matris 3 (sweep) | BR-A2-005, BR-A2-009, BR-A2-010, BR-A2-013 | FR-A5, FR-A6, FR-A10, FR-A11 | US-A3, US-A5, US-A6 |
 | Matris 4 (escalation) | BR-FLW-003, BR-FLW-004, BR-FLW-005 | FR-B3, FR-B4, FR-B5 | US-B3, US-B4, US-B5 |
 | Ek Matris 5 (DLQ topoloji) | BR-SUB-004 | FR-C4 | US-C4 |
 | Ek Matris 6 (L-doğrulama) | BR-A2-006 | FR-A8 | US-A5 |
 
-**Toplam:** 6 karar matrisi (4 birincil + 2 destekleyici), toplam **44 karar satırı** (Matris 1: 1.A=5 + 1.B=9 + 1.C=5 → 19 satır; Matris 2: 4; Matris 3: 6; Matris 4: 8; Ek Matris 5: 3; Ek Matris 6: 4 → 19+4+6+8+3+4=44).
+**Toplam:** 6 karar matrisi (4 birincil + 2 destekleyici), toplam **44 karar satırı** (Matris 1: 1.A=5 + 1.B=9 + 1.C=5 → 19 satır; Matris 2: 4; Matris 3: 6; Matris 4: 8; Ek Matris 5: 3; Ek Matris 6: 4 → 19+4+6+8+3+4=44). BAQ-1…8 kararları (2026-07-14) mevcut satırların içeriğini netleştirdi — satır SAYISI değişmedi, BR-SUB-007/008 (BAQ-5/BAQ-6 ile eklenen yeni iş kuralları) Matris 1'in ilgili satırlarına (1.B satır 2, 1.C satır 3) bağlandı.
 
 ---
 
-*İlgili: `BUSINESS_LOGIC.md` (BR-XXX tanımları, süreç akışları), `EXCEPTION_CODES.md` (bu matrislerdeki her "aksiyon" hücresinin exception-code karşılığı). BA-QUESTIONS: `BUSINESS_LOGIC.md §9` (BAQ-1…8).*
+*İlgili: `BUSINESS_LOGIC.md` (BR-XXX tanımları, süreç akışları), `EXCEPTION_CODES.md` (bu matrislerdeki her "aksiyon" hücresinin exception-code karşılığı). BAQ-1…8 karar kaydı: `BUSINESS_LOGIC.md §9` (soru→karar formatı, 2026-07-14).*
