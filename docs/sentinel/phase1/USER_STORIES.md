@@ -12,7 +12,7 @@
 
 ## 0. Kapsam sınırı (bu fazı okurken)
 
-**KAPSAM İÇİ (basamak-1 kod teslimatı, `06 §8` durum notu):** custom `ExternalTaskActivityBehavior` + post-commit publisher (D-A/D-C), soğuk orphan-sweep (D-B), inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge — D-D/D-E), ortak JetStream substratı + `06 §7` kontrat-fix listesi (**4 fix:** DLQ header kaybı, koşulsuz ack, DLQ dedup id, trace-header adı — Q2 kararı 2026-07-14), Testcontainers yük-bench modülü (D-F), JavaDelegate outbound **tam phase-out**.
+**KAPSAM İÇİ (basamak-1 kod teslimatı, `06 §8` durum notu):** custom `ExternalTaskActivityBehavior` + post-commit publisher (D-A/D-C), soğuk orphan-sweep (D-B), inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge — D-D/D-E), ortak JetStream substratı + `06 §7` kontrat-fix listesi (**5 fix:** DLQ header kaybı, koşulsuz ack, DLQ dedup id, trace-header adı — Q2 kararı 2026-07-14; boş-body sessiz-ack — phase2 BAQ-5 kararı 2026-07-14, BR-SUB-007), Testcontainers yük-bench modülü (D-F), JavaDelegate outbound **tam phase-out**.
 
 **KAPSAM DIŞI (bilinçli, yeniden açılmaz):** hot central poller (D-A'da REDDEDİLDİ), timer-only escalation (D-D'de REDDEDİLDİ), advisory-tabanlı DLQ tespiti (D-E'de REDDEDİLDİ), InProgress heartbeat (D-H — ertelendi), gRPC worker ön kapısı (D-G — ertelendi), token-move/completion transaction'ın kaldırılması (P2 — basamak-6), history offload (basamak-2), büyük değişken externalization (basamak-3), DB sharding (basamak-5).
 

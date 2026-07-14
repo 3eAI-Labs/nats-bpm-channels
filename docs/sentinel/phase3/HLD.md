@@ -5,7 +5,7 @@
 **Sentinel fazı:** Phase 3 — Architect (AI performs, Human validates)
 **Girdi:** `docs/sentinel/phase2/` (BUSINESS_LOGIC 31 BR, DECISION_MATRIX 44 satır, EXCEPTION_CODES 23 kod), `docs/sentinel/phase1/` (24 US, 30 FR + 23 NFR + 6 IR), `docs/06-external-task-over-jetstream.md` (D-A…D-F kilitli)
 **Tarih:** 2026-07-14
-**Durum:** İnceleme bekliyor — ADR-0002/0003/0007 ARCH-QUESTIONS'a bağlı
+**Durum:** KOŞULLU ONAY sonrası güncellendi (2026-07-14) — ARCH-Q1…4 kararlaştı (ADR-0002/0003/0007 Kabul), yeni ADR-0008 (subject-authz, MAJOR-2), MAJOR-1/MINOR/NIT işlendi
 
 > Bu belge **HLD**'dir (bileşen mimarisi + entegrasyon), LLD değildir. Sınıf-içi algoritma detayı phase4'e bırakılır. Motor/adapter iddiaları `file:line` kanıtlıdır (phase1/2 doğrulamaları temel alındı). Kilitli kararlar (D-A…D-F, PO-Q1…7, BAQ-1…8) DEĞİŞTİRİLMEZ; mimari onların üstüne kurulur. **Effort tahmini içermez.** Dokümantasyon TR, kod/tanımlayıcı EN.
 
@@ -98,7 +98,9 @@ flowchart LR
 
 ### 2.3 A2OrphanSweep + SweepLeaderLease (US-A3/A5, FR-A5/A6 · BR-A2-005/013 · D-A/D-B · ADR-0002/0003)
 
-**Sorumluluk:** post-commit'in kaçırdığı **çökme-orphan'larını** (commit oldu, publish çalışmadı) toplar. **Soğuk · read-only · `SELECT FOR UPDATE`'siz · tek node/leader.**
+**Sorumluluk:** post-commit'in kaçırdığı **çökme-orphan'larını** (commit oldu, publish çalışmadı) toplar. **Soğuk · tek node/leader.**
+
+> **NIT-1 netleştirmesi:** "read-only / `SELECT FOR UPDATE`'siz" yalnız **fetchable-parite SELECT'i** için geçerlidir (hot-path'te DB'ye bindirmeyen kısım — NFR-P5). Sweep'in **DB yazısı üreten iki dalı** vardır ve bunlar sıcak-yol değildir: (a) re-publish edilecek her orphan için `re-lock(SENTINEL,L)` (BR-A2-005); (b) publish-fail dalında telafi `unlock()` (ADR-0003). Yani "read-only" bir bütün-bileşen niteliği değil, **tarama sorgusunun** niteliğidir.
 
 - **Sorgu = fetchable-parite:** engine'in native fetchable predicate'inin (`ExternalTask.xml:220-222`) birebir aynısı — `LOCK_EXP_TIME_ null|≤now AND RETRIES_ null|>0 AND SUSPENSION_STATE_ null|=1 AND TOPIC_ IN (a2-topics)`. "Native poller neyi alabilirse onu ve yalnız onu."
 - **Re-lock → publish (BAQ-1 sabit sıra):** yayın öncesi `re-lock(SENTINEL, L)` (aynı workerId her zaman geçer — `LockExternalTaskCmd.java:50-61`), sonra publish. Atomiklik: **ADR-0003 telafi edici unlock** (publish fail → `LOCK_EXP_TIME_=now`, görünmez-orphan penceresi ≤S).
@@ -178,7 +180,7 @@ Mevcut iki adapter (`JetStreamInboundEventChannelAdapter` flowable / `JetStreamM
 | FailureEventBridge, boş-body fix, JetStream inbound sağlamlığı | `flowable-nats-channel` | `org.flowable.eventregistry.spring.nats.*` |
 | Bench (iki-mod) | **`nats-bpm-bench`** (yeni) | `com.threeai.nats.bench` |
 
-Ayna-tekrar (camunda ↔ cadenzaflow) mevcut repo deseniyle tutarlı (NFR-M2); ortak `a2-core` soyutlaması **ARCH-Q4**.
+Ayna-tekrar (camunda ↔ cadenzaflow) mevcut repo deseniyle tutarlı (NFR-M2); ortak `a2-core` soyutlaması **ARCH-Q4 = ONAYLANDI ayna-tekrar** (soyutlama basamak-6'ya ertelendi — ADR-0007).
 
 ---
 
@@ -218,19 +220,19 @@ Tam taksonomi: `EXCEPTION_CODES.md` (23 kod, 7 kaynak). Mimari-düzey ilkeler:
 
 ## 7. Güvenlik & veri koruma (per DATA_CLASSIFICATION / SECURITY)
 
-Tam envanter: `DATA_CLASSIFICATION.md` (DP-1…8). Mimari-düzey kararlar:
+Tam envanter: `DATA_CLASSIFICATION.md` (DP-1…8). **Uyumluluk sürücüsü:** telco-PII (MSISDN/IMSI/IMEI) işlendiğinden **KVKK + GDPR** normatiftir (GUIDELINES_MANIFEST compliance.enabled); aşağıdaki kararlar bu iki rejimin veri-minimizasyon/erişim-kontrolü yükümlülüklerini karşılar (ayrıntı DATA_CLASSIFICATION §4-§5). Mimari-düzey kararlar:
 
 | Konu | Karar | Kaynak |
 |---|---|---|
-| **Transport** | Production'da TLS + NKey/JWT zorunlu; `NatsProperties.Tls` + credentials/nkey alanları mevcut (`NatsProperties.java:14-15,97-135`) | DP-4/NFR-S3 |
-| **Subject-level authz** | jobs.* / dlq.* namespace izolasyonu + per-tenant subject permission — **kapsam ARCH-Q3** (NFR-S3 detayı phase3'te netleşecek demişti) | DP-4 |
+| **Transport** | Production'da TLS + NKey/JWT zorunlu; `NatsProperties.Tls` + credentials/nkey alanları mevcut (`NatsProperties.java:14-15,97-135`) | DP-4/NFR-S3 · **ADR-0008** |
+| **Subject-level authz** | jobs.* / dlq.* namespace izolasyonu + subject-level permission **tabanı basamak-1'e DAHİL** (worker yalnız kendi topic'inin job/reply subject'lerine pub/sub); kiracı-başına granülerlik deploy kararına ertelendi. **NFR-S3 bununla kapanır.** | DP-4 · **ADR-0008** |
 | **Log/metrik PII** | payload/business-key değeri log/metrik-tag'e YAZILMAZ; metrik tag yalnız `subject`/`channel` (düşük kardinalite) | DP-1/DP-2/NFR-S1 |
 | **DLQ maruziyeti** | DLQ payload byte-aynen (14g) = en uzun PII maruziyeti → erişim kontrolü + kiracı-bazlı retention kısaltma (PII kiracı) | DP-3/NFR-S2 |
 | **`-Dlq-Reason`** | yalnız hata sınıfı/kod; payload/PII sızdırMAZ | DP-6 |
 | **Business-Key masking** | normatif DEĞİL — hash/mask önerilir, karar kiracının (`TENANT_PII_CHECKLIST_TEMPLATE.md`) | DP-8/NFR-S1 |
 | **Worker güven sınırı** | Business-Key + process değişkenleri motor-dışı polyglot worker'a (güven sınırı dışına) geçer → erişim kontrolü + saklama dokümante (worker impl repo dışı) | DP-5/NFR-S4 |
 
-**Yeni saldırı yüzeyi:** post-commit publisher + bridge'ler NATS'a dışarı açılır; kimlik doğrulanmamış bir worker `jobs.*.reply`'a sahte reply yazarsa `complete` tetiklenebilir → **subject-level authz** (ARCH-Q3) bunun birincil savunmasıdır; ayrıca `complete` yalnız var olan (SENTINEL-kilitli, `externalTaskId`-bilinen) task'ı ilerletir → körlemesine enjeksiyon `NotFoundException`'a düşer.
+**Yeni saldırı yüzeyi (katmanlı savunma — ADR-0008):** post-commit publisher + bridge'ler NATS'a dışarı açılır; kimlik doğrulanmamış/yetkisiz bir aktör `jobs.*.reply`'a sahte reply yazarsa `complete` tetiklenebilir. **Birincil (yapısal) hat:** subject-level authz — worker hesabı yalnız kendi topic'inin subject'lerine yetkili, `jobs.*.reply`'ı yalnız engine-inbound tüketir (ADR-0008). **İkincil hat:** `complete` yalnız var olan (SENTINEL-kilitli, `externalTaskId`-bilinen) task'ı ilerletir → körlemesine enjeksiyon `NotFoundException`'a düşer; yanlış workerId → `SYS_SENTINEL_WORKER_CONFLICT` (CRITICAL+page).
 
 ---
 
@@ -250,20 +252,21 @@ Mevcut Micrometer tabanı (`NatsChannelMetrics.java:15-82`) üstüne kurulur:
 | Bileşen (§2) | BR | FR | US | ADR |
 |---|---|---|---|---|
 | A2ExternalTaskBehavior + ParseListener | BR-A2-002/003/012 | FR-A2/A3/A13 | US-A2/A8 | 0005 |
-| A2PostCommitPublisher | BR-A2-004 | FR-A4 | US-A3 | — |
+| A2PostCommitPublisher (+ push-dispatch sonucu: fetchAndLock=0) | BR-A2-001/004 | FR-A1/A4 | US-A1/A3 | — |
 | A2OrphanSweep + SweepLeaderLease | BR-A2-005/013 | FR-A5/A6 | US-A3 | 0002/0003 |
 | A2CompletionBridge | BR-A2-008/011 | FR-A7/A12 | US-A4/A7 | — |
 | A2IncidentBridge | BR-A2-009/010 | FR-A10/A11 | US-A6 | 0004 |
 | FailureEventBridge | BR-FLW-003/005 | FR-B3/B5 | US-B3/B5 | 0004 |
-| Ortak `publishToDlq` + 5 fix | BR-SUB-001/002/003/006/007 | FR-C1/C2/C3/C7 | US-C1/C2/C3/C6 | 0006 |
+| Ortak `publishToDlq` + 5 fix + transient-nak backoff | BR-SUB-001/002/003/006/007 | FR-C1/C2/C3/C6/C7 | US-C1/C2/C3/C6 | 0006 |
 | Substrat (WorkQueue/DLQ/dedup/namespace) | BR-SUB-004/005/008 | FR-C4/C5 | US-C4/C5 | 0004/0006 |
 | Flowable outbound/inbound olgunluk | BR-FLW-001/002 | FR-B1/B2 | US-B1/B2 | — |
 | Umbrella-lock config+validasyon | BR-A2-006/007 | FR-A8/A9 | US-A5 | 0001 |
+| Transport + subject-level authz | (NFR-S3/S4) | — | US-A4/A7 (savunma) | 0008 |
 | Delegate phase-out + idiom netliği | BR-MIG-001/002 | FR-E1/E2 | US-E1/E2 | — |
 | Bench modülü | BR-OBS-001/002/003 | FR-D1/D2/D3 | US-D1/D2/D3 | 0007 |
 | Boundary-timer (opt-in, model) | BR-FLW-004 | FR-B4 | US-B4 | — |
 
-Toplam 24/24 US, 30/30 FR bir bileşene bağlı (0 boşluk).
+**Sayarak doğrulama (MAJOR-1):** FR-A(13: A1–A13) + FR-B(5: B1–B5) + FR-C(7: C1–C7) + FR-D(3: D1–D3) + FR-E(2: E1–E2) = **30/30 FR**; US-A(8: A1–A8) + US-B(5: B1–B5) + US-C(6: C1–C6) + US-D(3: D1–D3) + US-E(2: E1–E2) = **24/24 US**. Her satır ≥1 BR/FR/US'ye bağlı — **0 boşluk** (izlenebilirlik: SRS §6, USER_STORIES §3, BUSINESS_LOGIC §8).
 
 ---
 
@@ -272,12 +275,13 @@ Toplam 24/24 US, 30/30 FR bir bileşene bağlı (0 boşluk).
 | ADR | Başlık | Durum |
 |---|---|---|
 | [0001](ADR/0001-umbrella-lock-parameter-ownership.md) | W/M/S/ε/L parametre sahipliği + default'lar | Kabul |
-| [0002](ADR/0002-orphan-sweep-leader-election.md) | Orphan-sweep leader seçimi (KV-lease) | Önerildi (ARCH-Q2) |
-| [0003](ADR/0003-sweep-relock-publish-atomicity.md) | Sweep re-lock→publish atomiklik (telafi unlock) | Önerildi (ARCH-Q1) |
+| [0002](ADR/0002-orphan-sweep-leader-election.md) | Orphan-sweep leader seçimi (KV-lease) | **Kabul** (ARCH-Q2) |
+| [0003](ADR/0003-sweep-relock-publish-atomicity.md) | Sweep re-lock→publish atomiklik (telafi unlock) | **Kabul** (ARCH-Q1) |
 | [0004](ADR/0004-dlq-bridge-circuit-breaker.md) | DLQ-bridge circuit-breaker | Kabul |
 | [0005](ADR/0005-engine-impl-class-dependency-upgrade-strategy.md) | Engine impl-sınıf bağımlılığı + upgrade | Kabul |
 | [0006](ADR/0006-asyncapi-machine-readable-wire-contract.md) | AsyncAPI contract-first | Kabul |
-| [0007](ADR/0007-module-package-placement.md) | Modül/paket yerleşimi | Önerildi (ARCH-Q4) |
+| [0007](ADR/0007-module-package-placement.md) | Modül/paket yerleşimi | **Kabul** (ARCH-Q4) |
+| [0008](ADR/0008-nats-transport-and-subject-level-authz.md) | NATS transport + subject-level authz (NFR-S3 kapanır) | **Kabul** (ARCH-Q3, MAJOR-2) |
 
 ---
 

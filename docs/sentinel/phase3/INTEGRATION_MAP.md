@@ -105,6 +105,9 @@ flowchart TB
 | I-14 | Tüm bileşenler → Observability | Micrometer sayaç/timer + MDC log | `NatsChannelMetrics` | BR-OBS-002 / FR-D2 | — |
 | I-15 | Bootstrap → config validasyon | deployment-time (L-floor, namespace) | `VAL_UMBRELLA_LOCK_TOO_SHORT` / `VAL_TOPIC_NAMESPACE_COLLISION` | BR-A2-006/BR-SUB-004 / FR-A8/C4 | 0001 |
 | I-16 | Bench → PG+engine+NATS+worker | Testcontainers (iki mod) | `pg_stat_statements` fingerprint | BR-OBS-001/003 / FR-D1/D3 | 0007 |
+| I-17 | Engine/bridge/worker ↔ NATS | TLS + NKey/JWT + subject-level ACL | jobs.*/dlq.* permission | NFR-S3/S4 | 0008 |
+
+> **NIT-1 netleştirmesi (sweep DB erişimi):** I-3 (fetchable-parite SELECT) **read-only · FOR-UPDATE'siz**'dir (hot-path yükü bindirmez, NFR-P5). I-4 iki **DB yazısı** içerir: `re-lock(SENTINEL,L)` (her re-publish adayı için) ve publish-fail dalında telafi `unlock()` (ADR-0003). Diyagramdaki "read-only" etiketi yalnız I-3 SELECT'ini niteler, sweep bileşeninin tamamını değil.
 
 ---
 
@@ -118,7 +121,7 @@ flowchart TB
 ```
 
 - **Kritik geçiş (DP-5/NFR-S4):** Business-Key + process değişkenleri motor-dışı polyglot worker'a geçer → PII güven sınırından çıkar. Worker erişim kontrolü dokümante (worker impl repo dışı).
-- **Yeni saldırı yüzeyi:** kimliksiz worker `jobs.*.reply`'a sahte reply yazarsa `complete` tetiklenebilir → savunma: **subject-level authz (ARCH-Q3)** + `complete`'in yalnız var-olan SENTINEL-kilitli task'ı ilerletmesi (aksi `NotFoundException`).
+- **Yeni saldırı yüzeyi (katmanlı — ADR-0008):** kimliksiz/yetkisiz aktör `jobs.*.reply`'a sahte reply yazarsa `complete` tetiklenebilir → **birincil (yapısal) savunma: subject-level authz** (worker yalnız kendi topic'ine yetkili, reply'ı yalnız engine tüketir); **ikincil:** `complete` yalnız var-olan SENTINEL-kilitli task'ı ilerletir (aksi `NotFoundException`), yanlış workerId → `SYS_SENTINEL_WORKER_CONFLICT`.
 - **En uzun maruziyet:** DLQ stream (14g) — erişim kontrolü + kiracı-bazlı retention (Q3/DP-3).
 
 ---

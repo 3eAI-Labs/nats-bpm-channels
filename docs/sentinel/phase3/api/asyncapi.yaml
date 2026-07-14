@@ -30,7 +30,8 @@ servers:
     description: >
       NATS/JetStream 2.10+ broker. Production'da TLS + NKey/JWT zorunlu (NFR-S3 / DP-4);
       subject-level permission ile jobs.* ve dlq.* namespace'leri izole edilir
-      (bkz. ARCH-QUESTIONS Q3, kapsam phase3 sonu onayına bağlı).
+      (worker yalnız kendi topic'inin job/reply subject'lerine pub/sub yetkilidir).
+      Bkz. ADR-0008 (subject-level authz tabanı basamak-1'e dahil; NFR-S3 kapanır).
 
 channels:
   a2JobDispatch:
@@ -307,7 +308,11 @@ components:
 
     ReplyHeaders:
       type: object
-      description: Reply/complete için header'lar; correlation-id birebir echo (IR-5).
+      description: >
+        Reply/complete için header'lar; correlation-id birebir echo (IR-5). NOT:
+        X-Cadenzaflow-Correlation-Id ve X-Cadenzaflow-Reply-Subject **yeni kontrat
+        header'larıdır** — kod'da (BpmHeaders.java yalnız 3 sabit: TRACE_ID/BUSINESS_KEY/
+        IDEMPOTENCY_KEY, :12-14) HENÜZ yoktur; sabitleri phase5'te eklenir.
       properties:
         Nats-Msg-Id:
           type: string
@@ -316,7 +321,10 @@ components:
           type: string
         X-Cadenzaflow-Correlation-Id:
           type: string
-          description: Async reply eşleştirme (echo).
+          description: Async reply eşleştirme (echo). Yeni kontrat header'ı — kod phase5.
+        X-Cadenzaflow-Reply-Subject:
+          type: string
+          description: Reply routing hedefi (INTERNAL). Yeni kontrat header'ı — kod phase5.
       required:
         - Nats-Msg-Id
 

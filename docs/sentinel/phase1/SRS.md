@@ -18,7 +18,7 @@
 Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transaction polling'inden JetStream push'a taşınması — yazılım gereksinimlerini tanımlar. İki motor idiomu (Camunda 7 / CadenzaFlow **A2**, Flowable **Event Registry**) ortak bir JetStream substratı üzerinde buluşur. Amaç, motorun tek-DB dispatch yükünü DB-dışına almak; **token-move/completion transaction bilinçli olarak kalır** (P2, basamak-6'ya kadar).
 
 ### 1.2 Kapsam
-**Kapsam içi:** custom `ExternalTaskActivityBehavior` + post-commit publisher, soğuk orphan-sweep, inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge), ortak JetStream substratı + wire-contract fix'leri (**4 fix:** DLQ header kaybı, koşulsuz ack, DLQ dedup id, trace-header adı — Q2 2026-07-14), Testcontainers yük-bench modülü, JavaDelegate outbound tam phase-out.
+**Kapsam içi:** custom `ExternalTaskActivityBehavior` + post-commit publisher, soğuk orphan-sweep, inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge), ortak JetStream substratı + wire-contract fix'leri (**5 fix:** DLQ header kaybı, koşulsuz ack, DLQ dedup id, trace-header adı — Q2 2026-07-14; boş-body sessiz-ack — phase2 BAQ-5 2026-07-14, BR-SUB-007), Testcontainers yük-bench modülü, JavaDelegate outbound tam phase-out.
 
 **Kapsam dışı (bkz. §7):** hot central poller, timer-only escalation, advisory-tabanlı DLQ tespiti (üçü REDDEDİLDİ), heartbeat (D-H), gRPC ön kapısı (D-G), token-move tx kaldırılması (basamak-6), history offload (basamak-2), büyük değişken externalization (basamak-3), DB sharding (basamak-5).
 
@@ -54,7 +54,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 2. Yayınlanmamış çökme-orphan'larını soğuk sweep ile topla.
 3. Worker sonucunu inbound bridge ile completion'a bağla (A2 `complete` / Event Registry correlate).
 4. Delivery bütçesi bitince DLQ → incident (Camunda) / failure-event (Flowable).
-5. Ortak DLQ/ack/dedup wire-contract'ını uygula; mevcut 4 kontrat açığını kapat (FR-C1..C3, C7).
+5. Ortak DLQ/ack/dedup wire-contract'ını uygula; mevcut 5 kontrat açığını kapat (FR-C1..C3, C7; 5. fix boş-body — phase2 BAQ-5 kararı, FR-C2/FR-B2 kapsamında BR-SUB-007 ile tanımlı, ayrı FR açılmadı).
 6. Başarıyı normalize DB-round-trip metriği + Testcontainers bench ile kanıtla.
 7. JavaDelegate outbound'u tam phase-out et.
 
@@ -195,7 +195,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 **IR-1 — Subject şeması:** `jobs.<type>` (A2 job) + `jobs.<type>.reply` (A2 reply); Event Registry channel subject'leri + inbound channel; DLQ `dlq.<orijinal-subject>` (tek `dlq.>` stream). → `06 §7`.
 
-**IR-2 — Header'lar (mandatory):** `X-Cadenzaflow-Trace-Id`, `-Business-Key`, `-Idempotency-Key` (`BpmHeaders.java:12-14`); async: `-Correlation-Id`, `-Reply-Subject`; DLQ meta: `X-Cadenzaflow-Dlq-Original-Subject`, `-Dlq-Delivery-Count`, `-Dlq-Reason`, `-Dlq-Timestamp`.
+**IR-2 — Header'lar (mandatory):** `X-Cadenzaflow-Trace-Id`, `-Business-Key`, `-Idempotency-Key` (mevcut kod: `BpmHeaders.java:12-14` — yalnız bu üç sabit); async: `-Correlation-Id`, `-Reply-Subject` (**yeni kontrat header'ları** — kodda henüz yok, phase5'te `BpmHeaders`'a eklenir; kanonik tanım `phase3/api/asyncapi.yaml`); DLQ meta: `X-Cadenzaflow-Dlq-Original-Subject`, `-Dlq-Delivery-Count`, `-Dlq-Reason`, `-Dlq-Timestamp` (yeni, D-E).
 - **Trace-header (Q2 2026-07-14):** yazma yalnız `X-Cadenzaflow-Trace-Id`; okuma `X-Trace-Id` fallback kabul eder (FR-C7).
 - **Business-Key (Q4 2026-07-14, normatif DEĞİL):** kiracıya hash/mask **önerilir**; kod zorunluluğu değildir, karar kiracının (bkz. `DATA_CLASSIFICATION.md` DP-7, `TENANT_PII_CHECKLIST_TEMPLATE.md`).
 

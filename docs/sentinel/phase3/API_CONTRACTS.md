@@ -74,8 +74,8 @@ Header **adları ve sınıfları** (değer şemaları asyncapi'de `BpmHeadersWit
 | `X-Cadenzaflow-Trace-Id` | opsiyonel | PSEUDONYMOUS | yazma tek ad; okuma `X-Trace-Id` fallback (FR-C7) |
 | `X-Cadenzaflow-Business-Key` | opsiyonel | **CONFIDENTIAL/koşullu PII** | telco'da MSISDN olabilir; masking kiracı kararı (DP-8) |
 | `X-Cadenzaflow-Idempotency-Key` | opsiyonel | PSEUDONYMOUS | apply-zamanı idempotency |
-| `X-Cadenzaflow-Correlation-Id` | async | PSEUDONYMOUS | reply eşleştirme (echo) |
-| `X-Cadenzaflow-Reply-Subject` | async | INTERNAL | reply routing |
+| `X-Cadenzaflow-Correlation-Id` | async | PSEUDONYMOUS | reply eşleştirme (echo). **Yeni kontrat header'ı** — `BpmHeaders.java`'da HENÜZ yok (yalnız 3 sabit `:12-14`); sabit phase5'te |
+| `X-Cadenzaflow-Reply-Subject` | async | INTERNAL | reply routing. **Yeni kontrat header'ı** — kod phase5 (asyncapi `ReplyHeaders` ile hizalı) |
 | `X-Cadenzaflow-Dlq-Original-Subject` | DLQ | PUBLIC | routing meta |
 | `X-Cadenzaflow-Dlq-Delivery-Count` | DLQ | INTERNAL | ops meta |
 | `X-Cadenzaflow-Dlq-Reason` | DLQ | INTERNAL | yalnız hata sınıfı/kod — **PII sızdırMAZ** (DP-6) |

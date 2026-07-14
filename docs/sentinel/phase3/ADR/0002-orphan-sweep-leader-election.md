@@ -1,6 +1,6 @@
 # ADR-0002 — Orphan-sweep leader seçim mekanizması
 
-- **Durum:** Önerildi — ARCH-Q2 Levent onayına bağlı (2026-07-14, Phase 3)
+- **Durum:** Kabul edildi (2026-07-14, Levent onayı — ARCH-Q2)
 - **İzlenebilirlik:** US-A3 → FR-A5 → BR-A2-005/BR-A2-004 → `SYS_SWEEP_*` (EXCEPTION_CODES §4) → docs/06 §5.3 (D-A) / NFR-P5
 
 ## Bağlam
@@ -12,7 +12,7 @@ D-A (docs/06 §5.3, kilitli): outbound tetikleme = post-commit `TransactionListe
 
 Soru (phase3'e devir): **leader nasıl seçilir?** Tezin özü DB yükünü azaltmak olduğundan leader-seçiminin kendisi DB'ye yeni bir sıcak-yol yükü bindirmemeli.
 
-## Karar (öneri — ARCH-Q2)
+## Karar (ARCH-Q2 = ONAYLANDI, 2026-07-14)
 
 **JetStream KV lease-tabanlı leader election (substrat-hizalı, DB-dışı).**
 
@@ -42,4 +42,4 @@ Soru (phase3'e devir): **leader nasıl seçilir?** Tezin özü DB yükünü azal
 
 **Olumsuz / kabul edilen:** KV bağımlılığı aktive olur; leader devri sırasında (≤ TTL) kısa bir "sweep boşluğu" olabilir — orphan zaten ≤ L+S toleranslı (NFR-R3), bu boşluk o tolerans içinde kalır.
 
-**ARCH-Q2 (Levent onayı):** KV-lease (DB-dışı, KV'yi aktive eder) mi, DB-backed ShedLock (tez ayağını hafif kirletir, KV'siz) mi? Öneri: KV-lease.
+**ARCH-Q2 (KARARLAŞTI, 2026-07-14):** KV-lease **ONAYLANDI** (DB-dışı, tez-hizalı). DATA_CLASSIFICATION kapsam notu geçerli: KV aktive edilir; lease anahtarı PSEUDONYMOUS (TTL'li), **PII taşımaz**. DB-backed ShedLock alternatifi yedek olarak kayıtta.

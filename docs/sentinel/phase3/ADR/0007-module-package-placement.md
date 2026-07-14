@@ -1,6 +1,6 @@
 # ADR-0007 — A2 bileşenlerinin modül/paket yerleşimi
 
-- **Durum:** Önerildi — yerleşim kabul, paylaşım-stratejisi ARCH-Q4 (2026-07-14, Phase 3)
+- **Durum:** Kabul edildi (2026-07-14, Levent onayı — ARCH-Q4)
 - **İzlenebilirlik:** tüm EPIC-A…E bileşenleri → NFR-M1/M2/M3 → mevcut repo yapısı (`nats-core` + üç channel modülü + `pom.xml`)
 
 ## Bağlam
@@ -37,4 +37,4 @@ Yeni basamak-1 kod kapsamı yerleştirilmeli: custom activity behavior + post-co
 
 **Olumsuz / kabul edilen:** A2 mantığı iki modülde **aynalanır** (camunda + cadenzaflow) → kod tekrarı. Mevcut repo bunu zaten yapıyor (`JetStreamMessageCorrelationSubscriber`). Alternatif — ortak `a2-core` soyutlama modülü + engine SPI — impl-sınıf paket farkını reflection/SPI ile köprülemeyi gerektirir (daha kırılgan, ADR-0005 ile gerilim).
 
-**ARCH-Q4 (Levent onayı):** Ayna-tekrar (mevcut desenle tutarlı, önerilen) mi kabul edilsin, yoksa ortak `a2-core` soyutlaması mı hedeflensin? Öneri: ayna-tekrar (basamak-1'de; soyutlama basamak-6 native-core'a doğru ayrı bir refactor işi).
+**ARCH-Q4 (KARARLAŞTI, 2026-07-14):** Ayna-tekrar **ONAYLANDI** (mevcut repo deseniyle tutarlı). Ortak `a2-core` soyutlaması **basamak-6 native-core refactor'una** ait bir ileri-iş notu olarak kayıtta kalır — basamak-1 kapsamında değil.
