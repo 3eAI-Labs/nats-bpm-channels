@@ -88,7 +88,7 @@
 | Kategori | Kod sayısı | Anlamı (guideline §1.1) |
 |---|---|---|
 | `VAL_` | 3 | Girdi/config biçim hatası (boş body, L-floor, namespace çakışması) |
-| `BUS_` | 7 | İş kuralı sonucu — **beklenen davranış**, çoğunlukla WARN (worker-business-error, job/reply-delivery-budget-exceeded ×2, event-correlation-not-found, incident-already-created, task-retries-exhausted, bench-metric-regression) |
+| `BUS_` | 7 | İş kuralı sonucu — **beklenen davranış**, çoğunlukla WARN (worker-business-error, job/reply-delivery-budget-exceeded ×2, event-correlation-not-found, incident-already-created, task-retries-exhausted, bench-metric-regression) — *not: `BUS_BENCH_METRIC_REGRESSION` bir kabul-kapısı ihlalidir → ERROR + build-fail; "BUS_=WARN" kuralının bilinçli istisnasıdır (Q7: tek sert kapı)* |
 | `RES_` | 3 | Varlık-durum sorunu (task-not-found, task-suspended, failure-event-correlation-miss) |
 | `SYS_` | 9 | Sistem/altyapı arızası — çoğunlukla ERROR (worker-transient-failure, dlq-publish-failed, sentinel-conflict, dlq-bridge-processing-failed, sweep-query/relock/republish-failed ×3, bench-environment-unavailable, bench-sli-drift) — *not: SYS_WORKER_TRANSIENT_FAILURE (redelivery bütçesi dahilinde), SYS_BENCH_ENVIRONMENT_UNAVAILABLE ve SYS_BENCH_SLI_DRIFT WARN'dır, kategori SYS_ olsa da build'i bloklamaz* |
 | `EXT_` | 1 | Harici bağımlılık (broker) geçici kullanılamazlığı — tasarım gereği tolere edilir |

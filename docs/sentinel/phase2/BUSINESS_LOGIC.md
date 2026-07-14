@@ -2,7 +2,7 @@
 
 **Repo:** `nats-bpm-channels` (3eAI Labs, Apache 2.0)
 **Sentinel fazı:** Phase 2 — Business Analyst
-**Girdi:** `docs/sentinel/phase1/USER_STORIES.md` (24 US, 5 epic), `SRS.md` (27 FR + 21 NFR + 6 IR), `docs/06-external-task-over-jetstream.md` (D-A…D-F)
+**Girdi:** `docs/sentinel/phase1/USER_STORIES.md` (24 US, 5 epic), `SRS.md` (30 FR + 23 NFR + 6 IR), `docs/06-external-task-over-jetstream.md` (D-A…D-F)
 **Tarih:** 2026-07-14
 **Durum:** İnceleme bekliyor (insan onayı — Phase 3 kapısı)
 
@@ -12,7 +12,7 @@
 
 ## 0. Kapsam ve yöntem notu
 
-Bu iş mantığı belgesi 24 user story'nin tamamını kapsar (EPIC-A…E). BA Guideline §1 "Edge Case Rule" gereği her gereksinim için en az 3 hata/kenar-durum senaryosu tanımlanmıştır; bu süreçte SRS/US'de açıkça çözülmemiş **5 yeni kenar-durum bulgusu** ortaya çıktı (kaynak koddan bizzat doğrulandı) — bunlar ilgili iş kuralına eklenmiş ve §9 BA-QUESTIONS'a taşınmıştır. Bunlar **kapsam genişletmesi değildir**; mevcut US/FR'lerin içindeki tanımsız kenar durumlardır.
+Bu iş mantığı belgesi 24 user story'nin tamamını kapsar (EPIC-A…E). BA Guideline §1 "Edge Case Rule" gereği her gereksinim için en az 3 hata/kenar-durum senaryosu tanımlanmıştır; bu süreçte SRS/US'de açıkça çözülmemiş **5 yeni kenar-durum bulgusu** ortaya çıktı — 4'ü kaynak koddan bizzat doğrulandı, 1'i tasarım analizinden türetildi (açık liste — review MINOR-2 düzeltmesi 2026-07-14): **(1)** sweep re-lock→re-publish sıralama açığı — BAQ-1 / BR-A2-013 (`LockExternalTaskCmd.java:50-61`); **(2)** Cockpit-retry residual-lock gecikmesi — BAQ-2 / BR-A2-010 (`SetExternalTaskRetriesCmd.java:48-51` lockExpiration'a dokunmaz); **(3)** boş-mesaj-gövdesi sessiz-ack — BAQ-5 (`JetStreamInboundEventChannelAdapter.java:124-131`); **(4)** sentinel workerId çakışma invariant'ı — BR-A2-003 / `SYS_SENTINEL_WORKER_CONFLICT` (`HandleExternalTaskCmd.java:89-91`); **(5)** `jobs.*` namespace çakışması — BAQ-4 (tasarım-türevi, kod-çıpasız). Bunlar ilgili iş kuralına eklenmiş ve §9 BA-QUESTIONS'a taşınmıştır. Bunlar **kapsam genişletmesi değildir**; mevcut US/FR'lerin içindeki tanımsız kenar durumlardır.
 
 ---
 

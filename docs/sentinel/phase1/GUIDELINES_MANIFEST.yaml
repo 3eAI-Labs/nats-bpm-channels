@@ -7,6 +7,12 @@ system_tier: carrier-grade-backend   # telco BPM messaging katmanı; UI'sız (he
 layout_deviation: >
   Sentinel standart yerleşimi (docs/01_product/) yerine docs/sentinel/phase<N>/
   kullanılır — PO-Q1 kararı (2026-07-14, tek klasör faz-bazlı). Manifest bu dizinde tutulur.
+  Bu manifest BESPOKE şemadır: standart loader'a (load_phase_context.sh) beslenmez —
+  loader docs/01_product/ bekler ve exit 3 verir; system_tier T1-T4 şeması dışıdır;
+  guideline adları plugin guidelines/*/ dosyalarına çözülmez. Faz-review agent'ları
+  manifest'i bu yoldan DOĞRUDAN okur ve disiplinleri manuel denetler (phase2-review
+  MINOR-4 kaydı, 2026-07-14). Standart araç entegrasyonu istenirse MANIFEST_SCHEMA'ya
+  taşınması gerekir — bilinçli olarak yapılmadı.
 
 guidelines:
   enabled:
