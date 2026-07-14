@@ -4,8 +4,8 @@
 **Repo:** `nats-bpm-channels` (3eAI Labs, Apache 2.0)
 **Sentinel fazı:** Phase 1 — Product Owner
 **Tarih:** 2026-07-14
-**Durum:** Taslak — Levent onayı bekleniyor
-**İlgili teslimatlar:** `USER_STORIES.md`, `SRS.md`
+**Durum:** Onaylı (2026-07-14) — PO-QUESTIONS cevaplandı (bkz. §8 PO Karar Kaydı)
+**İlgili teslimatlar:** `USER_STORIES.md`, `SRS.md`, `TENANT_PII_CHECKLIST_TEMPLATE.md`
 
 > Bu belge basamak-1 kapsamında **wire üzerinde akan, saklanan ve loglanan tüm veri öğelerini** sınıflandırır ve veri koruma gereksinimlerini bağlar. Kod-kanıtlı öğeler `file:line` referanslıdır. `nats-bpm-channels` bir **altyapı katmanıdır**: işlenen iş verisinin (process değişkenleri) içeriği **kiracı/uygulama tarafından tanımlanır** — bu yüzden bazı öğeler "kiracı-tanımlı, en yüksek risk" olarak sınıflanır ve minimizasyon gereksinimi taşır.
 
@@ -41,7 +41,7 @@
 | `X-Cadenzaflow-Dlq-Delivery-Count` | `06 §7` (US-C1) | INTERNAL | Ops meta |
 | `X-Cadenzaflow-Dlq-Reason` | `06 §7` (US-C1) | INTERNAL | Hata sınıfı; **payload/PII sızdırmamalı** (bkz. §4) |
 | `X-Cadenzaflow-Dlq-Timestamp` | `06 §7` (US-C1) | PUBLIC | Zaman damgası |
-| `X-Trace-Id` (mevcut MDC okuması) | `JetStreamInboundEventChannelAdapter.java:119` | PSEUDONYMOUS | **Ad tutarsızlığı** — bkz. PO-QUESTIONS (standart `X-Cadenzaflow-Trace-Id` ile hizalanmalı) |
+| `X-Trace-Id` (mevcut MDC okuması) | `JetStreamInboundEventChannelAdapter.java:119` | PSEUDONYMOUS | **Q2 kararı (2026-07-14):** basamak-1'de düzeltilir — okuma fallback kabul eder, yazma yalnız `X-Cadenzaflow-Trace-Id` (US-C6 / FR-C7) |
 
 ### 2.2 Mesaj gövdesi (payload)
 
@@ -98,11 +98,12 @@
 |---|---|---|
 | **DP-1** | Payload / `Business-Key` / header **değerleri** loglara ve metrik tag'lerine yazılmamalı | NFR-S1 |
 | **DP-2** | Metrik tag'leri yalnız düşük-kardinalite PII-içermeyen alanlar (`subject`, `channel`); business-key subject'e gömülmemeli | NFR-S1 |
-| **DP-3** | DLQ stream'ine erişim kontrolü + saklama politikası (default 14g); retention gözden geçirilmeli (PII maruziyeti) | NFR-S2 |
+| **DP-3** | DLQ stream'ine erişim kontrolü + saklama politikası. **Q3 kararı (2026-07-14):** 14g default + **kiracı-bazlı konfig**; **PII işleyen kiracı retention'ı kısaltmalı / erişimi kısıtlamalı** | NFR-S2 |
 | **DP-4** | NATS transport güvenliği (TLS + NKey/JWT) production'da zorunlu | NFR-S3 |
 | **DP-5** | Motor-dışı worker güven sınırı + erişim kontrolü dokümante edilmeli | NFR-S4 |
 | **DP-6** | `X-Cadenzaflow-Dlq-Reason` gibi meta header'lar payload/PII değeri sızdırmamalı (yalnız hata sınıfı/kod) | NFR-S1 |
 | **DP-7** | `Idempotency-Key`/`Correlation-Id` business-key'den türetiliyorsa dolaylı PII taşır → PSEUDONYMOUS muamelesi (hash/opak öner) | NFR-S1 |
+| **DP-8** | **Q4 kararı (2026-07-14, normatif DEĞİL):** `Business-Key` için hash/mask **önerilir**; karar kiracının, **kod değişikliği yok** — kiracı `TENANT_PII_CHECKLIST_TEMPLATE.md`'de karar verir | NFR-S1 |
 
 ---
 
@@ -116,7 +117,7 @@
 | Dedup penceresi (`duplicate_window`) | default 2dk | Çok kısa |
 | Metrik/log | Ops retention (bu repo dışı) | PII yok (DP-1 uygulanırsa) |
 
-**Governance kararı gerektiren:** DLQ retention süresi (14g) ile PII saklama uyumluluğu (GDPR/KVKK minimizasyon) — kiracıya/regülasyona göre kısaltılabilmeli. Bkz. PO-QUESTIONS.
+**Governance kararı (Q3, 2026-07-14 — ONAYLANDI):** DLQ retention **14g default + kiracı-bazlı konfig**; PII işleyen kiracı GDPR/KVKK minimizasyonu için retention'ı **kısaltmalı** ve DLQ erişimini **kısıtlamalı** (DP-3).
 
 ---
 
@@ -134,11 +135,24 @@ Aşağıdaki tüm PII/koşullu-PII taşıyıcı öğeler sınıflandırıldı ve
 - [x] `ACT_RU_EXT_TASK` / `ACT_RU_VARIABLE` (at-rest PII) → DP-3
 - [x] JetStream WorkQueue / DLQ stream (at-rest PII) → DP-3, DP-4
 
-**Kapsanmayan / açık:** payload içeriğinin alan-düzeyi (field-level) PII haritası **kiracı-tanımlı** olduğundan bu repo düzeyinde çıkarılamaz → kiracı entegrasyonunda field-level classification gerekir (bkz. PO-QUESTIONS). Basamak-3 (büyük değişken externalization) PII minimizasyonu için kaldıraç sağlar (kapsam dışı, ileri referans).
+**Alan-düzeyi kapsam (Q5, 2026-07-14 — ONAYLANDI):** payload alan-düzeyi (field-level) PII haritası **kiracı-tanımlı** olduğundan bu repo düzeyinde çıkarılamaz; kiracı entegrasyonunda doldurulmak üzere **`TENANT_PII_CHECKLIST_TEMPLATE.md`** (alan → sınıf → masking kararı → retention notu) basamak-1 doküman teslimatı olarak oluşturuldu. Basamak-3 (büyük değişken externalization) PII minimizasyonu için kaldıraç sağlar (kapsam dışı, ileri referans).
 
 ---
 
 ## 7. Phase3'e taşınan doğrulamalar
 - NATS auth/authz mekanizmasının (NKey/JWT + subject-level permission) basamak-1'de nasıl konfigüre edileceği (NFR-S3 detayı).
-- DLQ retention'ın kiracı-bazlı override edilebilirliği (stream provisioning tasarımı).
-- `X-Trace-Id` ↔ `X-Cadenzaflow-Trace-Id` header adı standardizasyonu etkisi (mevcut kod `JetStreamInboundEventChannelAdapter.java:119` `X-Trace-Id` okuyor; `BpmHeaders.java:12` `X-Cadenzaflow-Trace-Id` yazıyor).
+- DLQ retention'ın kiracı-bazlı override edilebilirliği (stream provisioning tasarımı — Q3 kararı sabit, teknik gerçekleştirme phase3).
+- ~~`X-Trace-Id` ↔ `X-Cadenzaflow-Trace-Id` standardizasyonu~~ → **Q2 (2026-07-14): basamak-1'de çözülüyor** (US-C6 / FR-C7); phase3 kapsamından çıktı.
+
+---
+
+## 8. PO Karar Kaydı (Q→A, 2026-07-14)
+
+Veri koruma / sınıflandırmayı etkileyen PO kararları (tam kayıt: `USER_STORIES.md §4`):
+
+| # | Soru | Karar | Bu belgeye etki |
+|---|---|---|---|
+| **Q2** | Trace header tutarsızlığı | Basamak-1'de düzeltilir (yazma tek ad, okuma fallback) | §2.1 `X-Trace-Id` satırı; §7 |
+| **Q3** | DLQ retention (14g) vs PII | 14g default + kiracı-bazlı konfig; PII kiracı kısaltmalı/kısıtlamalı | DP-3, §5 |
+| **Q4** | `Business-Key` masking | Normatif olmayan öneri (hash/mask), kod değişikliği yok | DP-8 |
+| **Q5** | Field-level PII checklist | Basamak-1 doküman teslimatı (EVET) | `TENANT_PII_CHECKLIST_TEMPLATE.md`; §6 |

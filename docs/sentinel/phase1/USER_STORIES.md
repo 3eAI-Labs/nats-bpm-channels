@@ -4,7 +4,7 @@
 **Sentinel fazı:** Phase 1 — Product Owner
 **Kapsam:** `05-db-offload-strategy.md` §6.7 **basamak-1** (Dispatch push) — `06-external-task-over-jetstream.md`'in somutlaştırdığı iş
 **Tarih:** 2026-07-14
-**Durum:** Taslak — Levent onayı bekleniyor (bkz. PO-QUESTIONS)
+**Durum:** Onaylı (2026-07-14) — PO-QUESTIONS cevaplandı (bkz. §4 PO Karar Kaydı)
 
 > **Dokümantasyon dili Türkçe; kod/tanımlayıcılar İngilizce.** Motor/adapter davranışına dair her iddia `file:line` kanıtlıdır (`06 §9`'da doğrulanmış kanıtlar temel alındı). Doğrulanmamış varsayımlar açıkça "phase3'te doğrulanacak" etiketlidir. **Effort tahmini içermez** (workspace kuralı).
 
@@ -12,7 +12,7 @@
 
 ## 0. Kapsam sınırı (bu fazı okurken)
 
-**KAPSAM İÇİ (basamak-1 kod teslimatı, `06 §8` durum notu):** custom `ExternalTaskActivityBehavior` + post-commit publisher (D-A/D-C), soğuk orphan-sweep (D-B), inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge — D-D/D-E), ortak JetStream substratı + `07 §7` kontrat-fix listesi (3 açık), Testcontainers yük-bench modülü (D-F), JavaDelegate outbound **tam phase-out**.
+**KAPSAM İÇİ (basamak-1 kod teslimatı, `06 §8` durum notu):** custom `ExternalTaskActivityBehavior` + post-commit publisher (D-A/D-C), soğuk orphan-sweep (D-B), inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge — D-D/D-E), ortak JetStream substratı + `06 §7` kontrat-fix listesi (**4 fix:** DLQ header kaybı, koşulsuz ack, DLQ dedup id, trace-header adı — Q2 kararı 2026-07-14), Testcontainers yük-bench modülü (D-F), JavaDelegate outbound **tam phase-out**.
 
 **KAPSAM DIŞI (bilinçli, yeniden açılmaz):** hot central poller (D-A'da REDDEDİLDİ), timer-only escalation (D-D'de REDDEDİLDİ), advisory-tabanlı DLQ tespiti (D-E'de REDDEDİLDİ), InProgress heartbeat (D-H — ertelendi), gRPC worker ön kapısı (D-G — ertelendi), token-move/completion transaction'ın kaldırılması (P2 — basamak-6), history offload (basamak-2), büyük değişken externalization (basamak-3), DB sharding (basamak-5).
 
@@ -29,7 +29,7 @@
 | **P5** | **Bakımcı Mühendis** | 3eAI Labs; DB-offload tezini ölçülebilir kanıtla göstermek isteyen |
 | **P6** | **Veri Koruma Sorumlusu** | Payload/header içindeki PII akışını ve saklama süresini yöneten (bkz. `DATA_CLASSIFICATION.md`) |
 
-**Öncelik ölçeği (MoSCoW):** M = Must (basamak-1 kapanışı için zorunlu), S = Should, C = Could.
+**Öncelik ölçeği (MoSCoW):** M = Must (basamak-1 kapanışı için zorunlu), S = Should, C = Could. **Q6 kararı (2026-07-14): tüm S kalemleri (US-A8, B4, B5, C4, D2, E2) basamak-1 kapanışına DAHİLDİR** — takip işine ertelenmez; S yalnız göreli önem sırasını gösterir.
 
 ---
 
@@ -39,11 +39,11 @@
 |---|---|---|
 | **EPIC-A** | Camunda 7 / CadenzaFlow — A2 external-task-over-JetStream | US-A1 … US-A8 |
 | **EPIC-B** | Flowable — Event Registry basamak-1 olgunluğu | US-B1 … US-B5 |
-| **EPIC-C** | Ortak JetStream substratı & wire-contract (DLQ/ack/dedup) | US-C1 … US-C5 |
+| **EPIC-C** | Ortak JetStream substratı & wire-contract (DLQ/ack/dedup + trace-header) | US-C1 … US-C6 |
 | **EPIC-D** | Gözlemlenebilirlik & başarı metriği (SLI + bench) | US-D1 … US-D3 |
 | **EPIC-E** | JavaDelegate phase-out & idiom netliği | US-E1 … US-E2 |
 
-Toplam: **23 user story.**
+Toplam: **24 user story.**
 
 ---
 
@@ -281,6 +281,18 @@ Toplam: **23 user story.**
 
 ---
 
+### US-C6 — Trace header adı standardizasyonu (contract-fix #4)
+**P2 Worker Geliştirici** olarak, trace header adının tel boyunca **tutarlı** olmasını ve geçiş döneminde eski/yeni adın birlikte çalışmasını istiyorum; **böylece** izleme korelasyonu (`Trace-Id`) kopmasın.
+**Öncelik:** M
+**Kabul kriterleri:**
+- [ ] **Yazma tarafı** yalnız `X-Cadenzaflow-Trace-Id` üretir (`BpmHeaders.java:12`); hiçbir yerde `X-Trace-Id` yazımı kalmaz.
+- [ ] **Okuma tarafı** iki adı da kabul eder (fallback): önce `X-Cadenzaflow-Trace-Id`, yoksa `X-Trace-Id` (mevcut MDC okuması `JetStreamInboundEventChannelAdapter.java:119` — eski üreticilerle geriye uyum).
+- [ ] MDC/trace korelasyonu her iki header adında da çalışır; test her iki girdiyle doğrular.
+**Dayanak:** `06 §7` kontrat-fix #4 (Q2 kararı 2026-07-14). Bu fazda **bizzat gözlemlendi:** okuma `JetStreamInboundEventChannelAdapter.java:119` `X-Trace-Id`; standart yazım `BpmHeaders.java:12` `X-Cadenzaflow-Trace-Id`.
+**Bağımlılık:** yok (fix).
+
+---
+
 ## EPIC-D — Gözlemlenebilirlik & başarı metriği
 
 ### US-D1 — Normalize birincil metrik: task-yaşamdöngüsü başına DB round-trip
@@ -290,6 +302,7 @@ Toplam: **23 user story.**
 - [ ] Metrik bileşenleri raporlanır: Task INSERT (1, sentinel kilit dahil), Poll sorguları (**0**), `fetchAndLock` UPDATE (**0**), `complete` token-move tx (1 — dürüst tavan), Sweep okuması (amortize ≈ ~0).
 - [ ] Ölçüm `pg_stat_statements` fingerprint sayaçları (veya datasource-proxy) ile yapılır; `fetchAndLock` SQL'inin ayrı fingerprint verdiği **phase3'te doğrulanacak** (`06 §9` D-F).
 - [ ] Kabul: birincil metrikte poll + fetchAndLock bileşenleri **0**, INSERT/complete bileşenleri **artmıyor**.
+- [ ] **Bu normalize DB-roundtrip metriği, basamak-1 kapanışının TEK sert kabul kapısıdır** (Q7 kararı 2026-07-14); latency SLI'ları (US-D2) sert kapı değildir.
 **Dayanak:** `06 §5.6` (D-F birincil metrik). REDDEDİLEN: yalnız-mutlak-QPS, latency-öncelikli metrik — yeniden açılmaz.
 **Bağımlılık:** US-A1, US-A2, US-A4.
 
@@ -302,7 +315,7 @@ Toplam: **23 user story.**
 - [ ] `fetchAndLock` QPS: hot-path **0/s**; yalnız sweep ≤ 1 FOR-UPDATE'siz read / 120s / cluster.
 - [ ] `ACT_RU_EXT_TASK` lock-wait ~0 (`pg_locks` / `innodb_row_lock_waits`).
 - [ ] HikariCP aktif connection aynı yükte düşer (connection-tutma ayağı).
-- [ ] Dispatch latency (commit → worker deliver): **p95 ≤ 200ms**.
+- [ ] Dispatch latency (commit → worker deliver): **p95 ≤ 200ms** — **izlenen SLI hedefi, sert kabul kapısı DEĞİL** (Q7 kararı 2026-07-14; sert kapı yalnız US-D1 normalize DB-roundtrip metriği).
 - [ ] Failure-path sayaçları: mevcut `NatsChannelMetrics` (dlq/nak/ack + `processingTimer` — `NatsChannelMetrics.java:25-63`) + sweep-republish sayacı + en-yaşlı-orphan yaşı.
 - [ ] Yeni sayaçlar mevcut Micrometer tabanı üstüne kurulur (`nats-core/.../metrics/NatsChannelMetrics.java`).
 **Dayanak:** `06 §5.6` (destekleyici SLI'lar), `§9` (D-F altyapı DOĞRULANDI: Micrometer tabanı mevcut).
@@ -373,6 +386,7 @@ Toplam: **23 user story.**
 | US-C3 | D-E | `:218` (bizzat doğrulandı) |
 | US-C4 | D-E | `06 §7` topoloji |
 | US-C5 | — | `06 §7`, `05 §7` |
+| US-C6 | D-E (Q2 fix #4) | `JetStreamInboundEventChannelAdapter.java:119` (okuma) vs `BpmHeaders.java:12` (yazma) |
 | US-D1 | D-F | `06 §5.6` (phase3: fingerprint izolasyonu) |
 | US-D2 | D-F | `NatsChannelMetrics.java:25-63` |
 | US-D3 | D-F | `06 §5.6` metodoloji |
@@ -381,4 +395,22 @@ Toplam: **23 user story.**
 
 ---
 
-*Detaylı fonksiyonel/non-fonksiyonel gereksinim türetimi: `SRS.md`. PII ve veri hassasiyeti eşlemesi: `DATA_CLASSIFICATION.md`.*
+---
+
+## 4. PO Karar Kaydı (Q→A, 2026-07-14)
+
+Phase-1 kapanışında Levent'e sunulan 7 PO-QUESTION ve verilen kararlar (sorular korunur, cevaplar eklenir):
+
+| # | Soru (PO-QUESTION) | Verilen karar (2026-07-14) | Bu fazda uygulanışı |
+|---|---|---|---|
+| **Q1** | Teslimat konumu: `docs/sentinel/phase1/` mi, idiom-başına ayrı mı? | **Tek klasör, faz-bazlı ONAYLANDI** — `docs/sentinel/phase1/` kalır; taşıma yok. İdiom ayrımı epic düzeyinde yeterli. | Konum korundu; EPIC-A (A2) / EPIC-B (Flowable) ayrımı epic düzeyinde. |
+| **Q2** | `X-Trace-Id` ↔ `X-Cadenzaflow-Trace-Id` tutarsızlığı basamak-1'de mi düzeltilsin? | **Basamak-1'de düzeltilir** — kontrat-fix listesine 4. madde (docs/06 §7). Kural: okuma iki adı da kabul (fallback), yazma yalnız `X-Cadenzaflow-Trace-Id`. | **US-C6** eklendi; §0 kapsam "4 fix"; izlenebilirlik tablosu güncellendi. |
+| **Q3** | DLQ retention (14g) vs PII minimizasyonu? | **14g default + kiracı-bazlı konfig ONAYLANDI.** | `DATA_CLASSIFICATION.md` DP-3 + §5 notu: PII işleyen kiracı retention'ı kısaltmalı / erişimi kısıtlamalı. |
+| **Q4** | `Business-Key` masking/hashing kontrata girsin mi? | **Normatif olmayan öneri-notu** (hash/mask önerilir, karar kiracının) — **kod değişikliği YOK.** | `SRS.md` IR-2/NFR-S1 + `DATA_CLASSIFICATION.md` DP-7 öneri notu olarak hizalandı. |
+| **Q5** | Field-level PII checklist template'i basamak-1 teslimatı mı? | **EVET** — `TENANT_PII_CHECKLIST_TEMPLATE.md` oluşturulur. | Yeni dosya `docs/sentinel/phase1/TENANT_PII_CHECKLIST_TEMPLATE.md`; `DATA_CLASSIFICATION.md §6` referans verir. |
+| **Q6** | "Should" kalemleri basamak-1'e dahil mi? | **Altısı da (US-A8, B4, B5, C4, D2, E2) DAHİL.** | §1 MoSCoW notu güncellendi; S kalemleri kapsam-içi. |
+| **Q7** | Bench p95 ≤ 200ms sert kapı mı? | **İzlenen SLI hedefi, sert kapı DEĞİL.** Sert kapı yalnız normalize DB-roundtrip metriği. | US-D1 tek sert kapı olarak işaretlendi; US-D2 p95 SLI-hedefi olarak yumuşatıldı. |
+
+---
+
+*Detaylı fonksiyonel/non-fonksiyonel gereksinim türetimi: `SRS.md`. PII ve veri hassasiyeti eşlemesi: `DATA_CLASSIFICATION.md`. Kiracı-entegrasyon PII şablonu: `TENANT_PII_CHECKLIST_TEMPLATE.md`.*

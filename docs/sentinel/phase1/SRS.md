@@ -5,8 +5,8 @@
 **Sentinel fazı:** Phase 1 — Product Owner
 **Kapsam:** `05-db-offload-strategy.md` §6.7 **basamak-1** (`06-external-task-over-jetstream.md`'in gereksinimleştirilmesi)
 **Tarih:** 2026-07-14
-**Durum:** Taslak — Levent onayı bekleniyor
-**Sürüm:** 0.1
+**Durum:** Onaylı (2026-07-14) — PO-QUESTIONS cevaplandı (bkz. §8 PO Karar Kaydı)
+**Sürüm:** 1.0
 
 > Bu SRS, LLD değildir; **ne** yapılacağını (gereksinim) sabitler, **nasıl** yapılacağını (tasarım) `06`'ya + phase3/phase4'e bırakır. Motor/adapter davranış iddiaları `file:line` kanıtlıdır. Doğrulanmamış varsayımlar "phase3'te doğrulanacak" etiketlidir. **Effort tahmini içermez.**
 
@@ -18,7 +18,7 @@
 Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transaction polling'inden JetStream push'a taşınması — yazılım gereksinimlerini tanımlar. İki motor idiomu (Camunda 7 / CadenzaFlow **A2**, Flowable **Event Registry**) ortak bir JetStream substratı üzerinde buluşur. Amaç, motorun tek-DB dispatch yükünü DB-dışına almak; **token-move/completion transaction bilinçli olarak kalır** (P2, basamak-6'ya kadar).
 
 ### 1.2 Kapsam
-**Kapsam içi:** custom `ExternalTaskActivityBehavior` + post-commit publisher, soğuk orphan-sweep, inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge), ortak JetStream substratı + wire-contract fix'leri (3 açık), Testcontainers yük-bench modülü, JavaDelegate outbound tam phase-out.
+**Kapsam içi:** custom `ExternalTaskActivityBehavior` + post-commit publisher, soğuk orphan-sweep, inbound completion-bridge, DLQ bridge'leri (Camunda incident-bridge + Flowable failure-event bridge), ortak JetStream substratı + wire-contract fix'leri (**4 fix:** DLQ header kaybı, koşulsuz ack, DLQ dedup id, trace-header adı — Q2 2026-07-14), Testcontainers yük-bench modülü, JavaDelegate outbound tam phase-out.
 
 **Kapsam dışı (bkz. §7):** hot central poller, timer-only escalation, advisory-tabanlı DLQ tespiti (üçü REDDEDİLDİ), heartbeat (D-H), gRPC ön kapısı (D-G), token-move tx kaldırılması (basamak-6), history offload (basamak-2), büyük değişken externalization (basamak-3), DB sharding (basamak-5).
 
@@ -134,11 +134,13 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 **FR-C6** [M] — Transient hata `nakWithDelay` ile ele alınmalı (üstel backoff `2^(n-1)`s, cap 30s — mevcut ortak desen). → US-C2 → `JetStreamInboundEventChannelAdapter.java:204-208`.
 
+**FR-C7** [M] — Trace header standardize edilmeli: **yazma** yalnız `X-Cadenzaflow-Trace-Id` (`BpmHeaders.java:12`) üretmeli; **okuma** iki adı da fallback ile kabul etmeli (önce `X-Cadenzaflow-Trace-Id`, yoksa `X-Trace-Id`). *Mevcut açık:* okuma `X-Trace-Id` bekliyor, yazma `X-Cadenzaflow-Trace-Id`. → US-C6 → `06 §7` kontrat-fix #4 (Q2 2026-07-14); **bizzat gözlemlendi** `JetStreamInboundEventChannelAdapter.java:119` (okuma) vs `BpmHeaders.java:12` (yazma).
+
 ### 3.4 Gözlemlenebilirlik & bench (EPIC-D)
 
-**FR-D1** [M] — Sistem, task-yaşamdöngüsü başına DB round-trip metriğini üretmeli; kabul: poll + `fetchAndLock` bileşenleri **0**, INSERT/complete bileşenleri **artmıyor**. Ölçüm `pg_stat_statements` fingerprint (veya datasource-proxy). → US-D1 → `06 §5.6` (fingerprint izolasyonu phase3'te doğrulanacak).
+**FR-D1** [M] — Sistem, task-yaşamdöngüsü başına DB round-trip metriğini üretmeli; kabul: poll + `fetchAndLock` bileşenleri **0**, INSERT/complete bileşenleri **artmıyor**. Ölçüm `pg_stat_statements` fingerprint (veya datasource-proxy). **Bu metrik basamak-1 kapanışının TEK sert kabul kapısıdır (Q7 2026-07-14).** → US-D1 → `06 §5.6` (fingerprint izolasyonu phase3'te doğrulanacak).
 
-**FR-D2** [S] — Sistem, destekleyici SLI'ları yayınlamalı: `fetchAndLock` QPS (hot-path 0/s), lock-wait (~0), HikariCP aktif connection (düşer), dispatch latency (**p95 ≤ 200ms**), failure sayaçları + sweep-republish + en-yaşlı-orphan yaşı; mevcut `NatsChannelMetrics` üstüne kurulmalı. → US-D2 → `NatsChannelMetrics.java:25-63`.
+**FR-D2** [S] — Sistem, destekleyici SLI'ları yayınlamalı: `fetchAndLock` QPS (hot-path 0/s), lock-wait (~0), HikariCP aktif connection (düşer), dispatch latency (**p95 ≤ 200ms — SLI hedefi, sert kapı değil, Q7**), failure sayaçları + sweep-republish + en-yaşlı-orphan yaşı; mevcut `NatsChannelMetrics` üstüne kurulmalı. → US-D2 → `NatsChannelMetrics.java:25-63`.
 
 **FR-D3** [M] — Testcontainers yük-bench modülü, aynı senaryoyu native-poll ↔ A2-push iki modda koşmalı (`@Tag("bench")`), FR-D1 metriğini iki mod için üretmeli; basamak-1 teslimatına dahil olmalı. → US-D3 → `06 §5.6`.
 
@@ -154,7 +156,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 ### 4.1 Performans & ölçeklenebilirlik
 **NFR-P1** [M] — Happy-path'te external task doğumu → worker teslim, **`fetchAndLock` sorgusu içermemeli** (poll bileşeni = 0). → FR-D1.
-**NFR-P2** [M] — Dispatch latency (commit → worker deliver) **p95 ≤ 200ms** olmalı. → FR-D2.
+**NFR-P2** [S] — Dispatch latency (commit → worker deliver) **p95 ≤ 200ms** — **izlenen SLI hedefi, sert kabul kapısı değil** (Q7 2026-07-14; sert kapı yalnız NFR-P1/FR-D1). → FR-D2.
 **NFR-P3** [S] — Aynı yükte HikariCP aktif connection sayısı, native-poll baseline'a göre **düşmeli** (connection-tutma ayağı).
 **NFR-P4** [S] — `ACT_RU_EXT_TASK` lock-wait ~0 olmalı (`pg_locks` / `innodb_row_lock_waits`).
 **NFR-P5** [M] — Sweep DB okuması amortize ≤ 1 read / S(120s) / cluster olmalı (hot-path'e yük bindirmemeli).
@@ -175,7 +177,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 ### 4.4 Gözlemlenebilirlik
 **NFR-O1** [M] — Tüm inbound/outbound/DLQ/nak/ack olayları Micrometer sayaçlarıyla ölçülmeli (`NatsChannelMetrics` üstüne). → FR-D2.
-**NFR-O2** [S] — `X-Cadenzaflow-Trace-Id` MDC'ye taşınmalı (mevcut desen `JetStreamInboundEventChannelAdapter.java:119-122` `X-Trace-Id`→MDC — **not:** header adı standardizasyonu bkz. PO-QUESTIONS).
+**NFR-O2** [S] — `X-Cadenzaflow-Trace-Id` MDC'ye taşınmalı (mevcut desen `JetStreamInboundEventChannelAdapter.java:119-122` `X-Trace-Id`→MDC — **Q2 2026-07-14:** okuma iki adı da fallback ile kabul eder, yazma yalnız `X-Cadenzaflow-Trace-Id`; bkz. FR-C7 / US-C6).
 **NFR-O3** [S] — Bench çıktısı CI'da nightly/manuel üretilebilir olmalı, sonuç raporu karşılaştırmalı (baseline ↔ A2). → FR-D3.
 
 ### 4.5 Taşınabilirlik & bakım
@@ -194,6 +196,8 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 **IR-1 — Subject şeması:** `jobs.<type>` (A2 job) + `jobs.<type>.reply` (A2 reply); Event Registry channel subject'leri + inbound channel; DLQ `dlq.<orijinal-subject>` (tek `dlq.>` stream). → `06 §7`.
 
 **IR-2 — Header'lar (mandatory):** `X-Cadenzaflow-Trace-Id`, `-Business-Key`, `-Idempotency-Key` (`BpmHeaders.java:12-14`); async: `-Correlation-Id`, `-Reply-Subject`; DLQ meta: `X-Cadenzaflow-Dlq-Original-Subject`, `-Dlq-Delivery-Count`, `-Dlq-Reason`, `-Dlq-Timestamp`.
+- **Trace-header (Q2 2026-07-14):** yazma yalnız `X-Cadenzaflow-Trace-Id`; okuma `X-Trace-Id` fallback kabul eder (FR-C7).
+- **Business-Key (Q4 2026-07-14, normatif DEĞİL):** kiracıya hash/mask **önerilir**; kod zorunluluğu değildir, karar kiracının (bkz. `DATA_CLASSIFICATION.md` DP-7, `TENANT_PII_CHECKLIST_TEMPLATE.md`).
 
 **IR-3 — Dedup:** `Nats-Msg-Id` = A2 `externalTaskId` / Event Registry correlation key; DLQ publish'te `<orijinal-msg-id>.dlq`.
 
@@ -227,6 +231,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 | FR-C3 | US-C3 | D-E | M |
 | FR-C4 | US-C4 | D-E | S |
 | FR-C5 | US-C5 | — | M |
+| FR-C7 | US-C6 | D-E (Q2 fix #4) | M |
 | FR-D1 | US-D1 | D-F | M |
 | FR-D2 | US-D2 | D-F | S |
 | FR-D3 | US-D3 | D-F | M |
@@ -253,5 +258,20 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 ---
 
-## 8. Açık noktalar
-PO düzeyinde karar bekleyen maddeler için bkz. bu fazın kapanış özeti "PO-QUESTIONS" (parent'a döndürülür). Teknik açık kararlar D-A…D-F **çözülü**; D-G/D-H bilinçli ertelenmiş. Phase3'e taşınan doğrulama kalemleri §2.5'te ve ilgili FR notlarında "phase3'te doğrulanacak" olarak işaretlidir.
+## 8. PO Karar Kaydı (Q→A, 2026-07-14)
+
+Phase-1 PO-QUESTION'larının hepsi Levent tarafından cevaplandı; SRS'i etkileyen kararlar (sorular korunur, cevaplar eklenir):
+
+| # | Soru | Karar | SRS'e etki |
+|---|---|---|---|
+| **Q1** | Teslimat konumu | `docs/sentinel/phase1/` tek klasör ONAYLANDI | Konum korundu |
+| **Q2** | Trace header tutarsızlığı | Basamak-1'de düzeltilir (yazma tek ad, okuma fallback) | **FR-C7** eklendi; §1.2 "4 fix"; IR-2 notu; matris |
+| **Q3** | DLQ retention vs PII | 14g default + kiracı-bazlı konfig ONAYLANDI | NFR-S2 korunur; ayrıntı `DATA_CLASSIFICATION.md` DP-3/§5 |
+| **Q4** | Business-Key masking | Normatif olmayan öneri (kod değişikliği yok) | IR-2 + NFR-S1 öneri notu; `DATA_CLASSIFICATION.md` DP-7 |
+| **Q5** | Field-level PII checklist | Basamak-1 doküman teslimatı (EVET) | `TENANT_PII_CHECKLIST_TEMPLATE.md` referansı |
+| **Q6** | "Should" kalemleri kapsam | Altısı da basamak-1'e DAHİL | Tüm S-FR'ler kapsam-içi (§3) |
+| **Q7** | Bench p95 sert kapı mı | SLI hedefi; sert kapı yalnız DB-roundtrip | **NFR-P2 → S**; FR-D1 tek sert kapı; FR-D2 SLI notu |
+
+Tam Q→A karar kaydı: `USER_STORIES.md §4`.
+
+**Teknik açık kararlar durumu:** D-A…D-F **çözülü**; D-G/D-H bilinçli ertelenmiş (§7). Phase3'e taşınan doğrulama kalemleri §2.5'te ve ilgili FR notlarında "phase3'te doğrulanacak" olarak işaretlidir.
