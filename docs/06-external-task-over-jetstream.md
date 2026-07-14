@@ -173,6 +173,31 @@ Kanıt zinciri: `complete` kilitsiz task'ta **başarısız olur** (workerId null
 | `ACT_RU_EXT_TASK` satırı | 1 INSERT/task | **kalır** (outbox olarak kullanılıyor) |
 | `complete` = token-move tx | kısa tx + optimistic lock | **kalır** (P2 → basamak 6) |
 
+### 5.6 Başarı metriği (D-F çözüldü 2026-07-14: normalize metrik + SLI katmanı)
+
+**Birincil — task-yaşamdöngüsü başına DB round-trip** (donanım-bağımsız, §5.5 iddiasını doğrudan kanıtlar):
+
+| Bileşen | Baseline (native poll) | A2 hedef |
+|---|---|---|
+| Task INSERT | 1 | 1 (sentinel kilit dahil — D-C, aynı INSERT) |
+| Poll sorguları (amortize) | N_worker × f_poll ÷ throughput | **0** |
+| `fetchAndLock` UPDATE | 1 | **0** (kilit doğumda) |
+| `complete` token-move tx | 1 | 1 (P2 — basamak 6'ya kadar, dürüst tavan) |
+| Sweep okuması (amortize) | — | ≤ 1 read / S(120s) / cluster ≈ ~0 |
+
+Ölçüm: `pg_stat_statements` sorgu-parmak-izi sayaçları (fetchAndLock SQL'i ayrı fingerprint verir → poll bileşeni izole sayılır) ya da datasource-proxy sayacı.
+
+**Destekleyici SLI'lar (ops gerçeği):**
+- `fetchAndLock` QPS: hot-path **0/s**; yalnız sweep ≤ 1 FOR-UPDATE'siz read / 120s / cluster.
+- `ACT_RU_EXT_TASK` lock-wait: ~0 (`pg_locks` / `innodb_row_lock_waits`).
+- HikariCP aktif connection (aynı yükte): düşmeli — tezin connection-tutma ayağı.
+- Dispatch latency (commit → worker deliver): **p95 ≤ 200ms**; baseline'da yapısal alt sınır ≈ poll-aralığı/2.
+- Failure-path: mevcut `NatsChannelMetrics` sayaçları (dlq/nak/ack + processingTimer) + sweep-republish sayacı + en-yaşlı-orphan yaşı.
+
+**Metodoloji — Testcontainers yük-bench modülü (basamak-1 teslimatına DAHİL):** PG + engine + NATS + N simüle worker; **aynı senaryo iki modda** koşar (native-poll baseline ↔ A2-push), `@Tag("bench")`, CI'da nightly/manuel. **Kabul kriteri:** birincil metrikte poll + fetchAndLock bileşenleri **0**, INSERT/complete bileşenleri **artmıyor**; destekleyici SLI'lar tablo hedeflerinde.
+
+**REDDEDİLEN:** yalnız-mutlak-QPS (ortam-bağımlı, karşılaştırılamaz); latency-öncelikli (tezi dolaylı ölçer, poll-aralığı seçimiyle şişirilebilir); bench'siz staging ölçümü (baseline kontrolsüz → kapanış kriteri muğlak).
+
 ---
 
 ## 6. Flowable — Event Registry over JetStream
@@ -229,9 +254,11 @@ Yani basamak 1'in büyük kısmı (poll→push) Flowable'da **zaten yapılmış.
 - **D-C — sentinel-lock modeli:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **doğumda in-tx kilit**: custom `ExternalTaskActivityBehavior` (BpmnParseListener swap) `createAndInsert` + `lock(SENTINEL, L)` aynı tx → kilit aynı INSERT'e biner (sıfır ek yazı); aynı noktada COMMITTED TransactionListener = D-A publish kancası. Sentinel workerId küme-geneli tek sabit. Post-commit `lock()` ve lazy kilit **reddedildi**. Fork değişikliği yok; impl-sınıf bağımlılığı var. (§5.4)
 - **D-D — Flowable escalation:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **katmanlı**: default DLQ→failure-event bridge (deterministik worker ölümü, tespit=W·M, happy-path ek DB maliyeti sıfır, aynı correlation key'ler) + opt-in boundary timer (yalnız gerçek wall-clock deadline'lı modeller). Timer-only ve DLQ→ops-only **reddedildi**. (§6.2)
 - **D-E — DLQ/ack semantiği:** ✅ **ÇÖZÜLDÜ (2026-07-14)** = **ortak kontrat + idiom-özel post-DLQ**: custody-transfer ack ilkesi (ack yalnız kalıcılık el değiştirince); in-band `maxDeliver+1` tespiti (advisory reddedildi); DLQ şeması = orijinal payload+header'lar aynen + `X-*-Dlq-*` meta + `Nats-Msg-Id=<orijinal>.dlq`; TEK `DLQ` stream (`dlq.>`, limits, 14g); dlq-of-dlq yok. Mevcut adapter'larda 3 kontrat açığı fix-listesine alındı (header kaybı, koşulsuz ack, dedup yok). D-B şemsiyesi rafine: `L ≥ M·W + Σbackoff + S + ε`. (§7)
-- **D-F — başarı metriği:** poll-storm azalması nasıl ölçülür (DB QPS / lock-wait)? Baseline + hedef.
+- **D-F — başarı metriği:** ✅ **ÇÖZÜLDÜ (2026-07-14)** = **normalize birincil metrik** (task başına DB round-trip; poll + fetchAndLock bileşenleri → 0, INSERT/complete artmaz) + **destekleyici SLI katmanı** (fetchAndLock QPS=0, lock-wait~0, HikariCP↓, dispatch p95≤200ms, failure sayaçları). Baseline+hedef **Testcontainers yük-bench** modülüyle üretilir (aynı senaryo, native-poll ↔ A2-push, `@Tag("bench")`, basamak-1 teslimatına dahil). (§5.6)
 - **D-G — gRPC ön kapısı:** gerekli mi (Zeebe-uyum / broker'sız worker), ne zaman? Ayrı belge. (§1.4)
 - **D-H — InProgress heartbeat (basamak-1 SONRASI):** uzun işli topic'lerde küçük W + `msg.inProgress()` (DB-yazısız ack-wait uzatma; deliveryCount artırmaz). Kontrata "toplam heartbeat süresi ≤ L−ε" sınırı gerekir. Basamak-1 için **reddedildi** (2026-07-13, sabit W·M bütçesi tercih edildi — basit kontrat, statik L). (§5.4)
+
+> **Durum (2026-07-14):** D-A…D-F **tamamı çözüldü**; D-G/D-H bilinçli ertelendi. Bu belge **Sentinel phase1 girdisi olarak HAZIR.** Basamak-1 kod kapsamı: custom activity behavior + post-commit publisher (D-A/D-C), sweep (D-B), inbound completion-bridge, DLQ bridge'leri (D-D/D-E), §7 kontrat-fix listesi (3 açık), bench modülü (D-F).
 
 ---
 
@@ -242,6 +269,7 @@ Yani basamak 1'in büyük kısmı (poll→push) Flowable'da **zaten yapılmış.
 - **`complete()` lock zorunluluğu** → ✅ **DOĞRULANDI (2026-07-13):** yalnız workerId eşitliği kontrol edilir (`HandleExternalTaskCmd.java:89-91`), lock-expiry kontrolü YOK. Fetchable predicate: `ExternalTask.xml:220-222`; re-lock kuralı: `LockExternalTaskCmd.java:50-61`; `failed()`'in saat-bağlaması: `ExternalTaskEntity.java:419,443-446`. → D-B/D-C bu davranışlar üzerine kuruldu, fork değişikliği gerektirmez.
 - **JetStream tarafı (NATS docs'tan phase3'te doğrulanacak):** stream `duplicate_window` default 2dk; `msg.inProgress()` ack-wait'i sıfırlar ve deliveryCount'u ARTIRMAZ; maxDeliver aşımında `$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES` advisory'si yayınlanır (DLQ köprüsü için alternatif tetik).
 - **D-D Flowable tarafı (phase3'te doğrulanacak — lokal Flowable engine kaynağı yok):** (a) Event Registry'nin hangi yakalama biçimlerini desteklediği (event-registry boundary event / event subprocess ve sürüm eşiği); (b) boundary timer'ın instance-başına `ACT_RU_TIMER_JOB` INSERT+DELETE maliyeti; (c) `eventReceived`'ın eşleşmeyen (geç) event'teki davranışı (sessiz drop mu, hata mı) → geç-sonuç politikasının dayanağı. Repo tarafı kanıtlı: DLQ tesisatı `JetStreamInboundEventChannelAdapter.java:75-77,133-146`.
+- **D-F altyapı tespiti (2026-07-14):** Micrometer tabanı mevcut (`nats-core/.../metrics/NatsChannelMetrics.java`, adapter'lar dlq/ack/nak/processingTimer yayınlıyor); dört modülde Testcontainers entegrasyon testi var → bench modülü mevcut altyapı üstüne kurulur. Phase3 doğrulaması: `pg_stat_statements`'ın fetchAndLock SQL'ini ayrı fingerprint olarak verdiği (parametrizasyon farkları tek fingerprint'te toplanmayabilir).
 - **D-E kanıtları** → ✅ **DOĞRULANDI (2026-07-14):** iki adapter'da özdeş DLQ/backoff deseni (`MAX_BACKOFF=30s`, `calculateBackoff=2^(n-1)`s — flowable `:32,207` / cadenzaflow `:32,199`); üç kontrat açığı file:line ile §7'de işaretli. JetStream tarafı phase3 doğrulaması: core-NATS fallback publish'inin stream'e yakalanma koşulu (DLQ stream subject'e bound ise core publish de yakalanır — PubAck'siz) ve `Nats-Msg-Id` dedup'unun core publish'te ÇALIŞMADIĞI varsayımı.
 - **D-C kanca noktaları** → ✅ **DOĞRULANDI (2026-07-13):** `createAndInsert` kilitsiz doğurur + entity döndürür (`ExternalTaskEntity.java:568-588`); behavior tek noktada takılır (`BpmnParse.java:2564`); `preParseListeners` extension mevcut (`ProcessEngineConfigurationImpl.java:687,2189,3469`); `TransactionContext.addTransactionListener` + `TransactionState.COMMITTED` command içinden erişilebilir (`TransactionContext.java:49`, `TransactionState.java:25`). Phase3'te ek doğrulama: custom behavior'da `lock()`'un flush-öncesi çağrısının tek INSERT ürettiği (ikinci UPDATE çıkmadığı) entegrasyon testiyle kanıtlanacak.
 - **Mevcut kodda external task yok** → `camunda/cadenzaflow` kaynaklarında `ExternalTask`/`fetchAndLock`/`camunda:type="external"` sıfır eşleşme (2026-06-28); A2 tamamen yeni kod.
