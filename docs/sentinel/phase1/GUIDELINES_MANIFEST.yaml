@@ -1,0 +1,37 @@
+# Sentinel guideline manifest — nats-bpm-channels, basamak-1
+# Oluşturulma: 2026-07-14 (phase-review MAJOR-A düzeltmesi — manifest yoktu, manifest-discipline
+# kategorisi mekanik denetlenemiyordu). Sonraki tüm faz-review'lar bu manifest'i yükler.
+project: nats-bpm-channels
+scope: basamak-1-external-task-over-jetstream
+system_tier: carrier-grade-backend   # telco BPM messaging katmanı; UI'sız (headless)
+layout_deviation: >
+  Sentinel standart yerleşimi (docs/01_product/) yerine docs/sentinel/phase<N>/
+  kullanılır — PO-Q1 kararı (2026-07-14, tek klasör faz-bazlı). Manifest bu dizinde tutulur.
+
+guidelines:
+  enabled:
+    - evidence-based-analysis        # her motor/adapter iddiası file:line kanıtlı (06 §9 deseni)
+    - no-effort-estimates            # workspace kuralı: süre/kişi-gün tahmini yasak
+    - turkish-docs-english-code      # doküman dili TR; kod/tanımlayıcılar EN
+    - traceability-chain             # US ↔ FR ↔ tasarım kararı (docs/06 D-A…D-F) zinciri zorunlu
+    - rejected-alternatives-locked   # reddedilen/ertelenen kararlar yeniden açılamaz:
+                                     # hot-poll, timer-only escalation, advisory-DLQ tespiti,
+                                     # heartbeat (D-H), gRPC (D-G), basamak 2/3/5/6 kapsamı
+    - unverified-claims-tagged       # doğrulanmamış varsayımlar "phase3'te doğrulanacak" etiketli
+  disabled:
+    - ui-ux-guidelines               # headless messaging katmanı — UI yok
+    - frontend-security              # kapsam dışı (UI/istemci yok)
+
+compliance:
+  enabled:
+    - KVKK                           # telco-PII: MSISDN/IMSI/IMEI (DATA_CLASSIFICATION DP-1…DP-8)
+    - GDPR                           # AB kiracıları
+  disabled:
+    - PCI-DSS                        # kart verisi işlenmez
+    - HIPAA                          # sağlık verisi işlenmez
+
+review:
+  spot_check_minimum: 5              # faz-review başına en az 5 file:line doğrulaması
+  phase_gate: >
+    MAJOR bulgular çözülmeden (veya yazılı gerekçeli kabul verilmeden) bir sonraki faza
+    geçilmez; KOŞULLU ONAY'da MINOR'lar bir sonraki fazla paralel kapatılabilir.

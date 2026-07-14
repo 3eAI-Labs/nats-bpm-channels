@@ -54,7 +54,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 2. Yayınlanmamış çökme-orphan'larını soğuk sweep ile topla.
 3. Worker sonucunu inbound bridge ile completion'a bağla (A2 `complete` / Event Registry correlate).
 4. Delivery bütçesi bitince DLQ → incident (Camunda) / failure-event (Flowable).
-5. Ortak DLQ/ack/dedup wire-contract'ını uygula; mevcut 3 kontrat açığını kapat.
+5. Ortak DLQ/ack/dedup wire-contract'ını uygula; mevcut 4 kontrat açığını kapat (FR-C1..C3, C7).
 6. Başarıyı normalize DB-round-trip metriği + Testcontainers bench ile kanıtla.
 7. JavaDelegate outbound'u tam phase-out et.
 
@@ -96,7 +96,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 **FR-A7** [M] — Inbound bridge, `jobs.<topic>.reply` mesajını `externalTaskService.complete(extTaskId, SENTINEL, vars)` çağrısına bağlamalı; business-error → `handleBpmnError`, transient → `handleFailure`. → US-A4 → `06 §5.2`; `HandleExternalTaskCmd.java:89-91`.
 
-**FR-A8** [M] — Sistem, şemsiye koşulunu `L ≥ M·W + Σbackoff + S + ε` sağlamalı; default'lar W=30s, M=4, S=120s, ε=60s, L=300s. W topic-başına override edilebilmeli; L default'u parametrelerden türetilebilmeli. → US-A5 → `06 §5.4`.
+**FR-A8** [M] — Sistem, şemsiye koşulunu `L ≥ M·W + Σbackoff + S + ε` sağlamalı; default'lar W=30s, M=4, S=120s, ε=60s → alt sınır **307s**, default **L=320s** (13s marj). W topic-başına override edilebilmeli; L default'u parametrelerden türetilebilmeli. → US-A5 → `06 §5.4` (phase-review MAJOR-B düzeltmesi 2026-07-14).
 
 **FR-A9** [M] — Sistem heartbeat kullanmamalı; W·M sert tavan olmalı (`msg.inProgress()` ve engine `extendLock` **kullanılmaz**). → US-A5 → `ExtendLockOnExternalTaskCmd.java:46-47`.
 

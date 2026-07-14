@@ -125,7 +125,7 @@
 
 Aşağıdaki tüm PII/koşullu-PII taşıyıcı öğeler sınıflandırıldı ve bir koruma gereksinimine bağlandı:
 
-- [x] `Business-Key` (CONFIDENTIAL/koşullu PII) → DP-1, DP-2
+- [x] `Business-Key` (CONFIDENTIAL/koşullu PII) → DP-1, DP-2, DP-3 (DLQ'ya düşebilir), DP-8 (masking önerisi)
 - [x] Job payload / process değişkenleri (RESTRICTED/PII) → DP-3, DP-4, DP-5
 - [x] Reply payload (RESTRICTED/PII) → DP-4, DP-5
 - [x] Event payload — Flowable (RESTRICTED/PII) → DP-4, DP-5

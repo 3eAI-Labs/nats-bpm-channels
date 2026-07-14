@@ -117,7 +117,7 @@ Native external-task **semantiğini koru** (BPMN `camunda:type="external"`, `com
 
 **Kanıt önce** (fork: `~/Workspaces/cadenzaflow/cadenzaflow-bpm-platform/engine`, hepsi upstream-Camunda7 davranışı — **D-B fork değişikliği gerektirmez**, tümü public API):
 - `HandleExternalTaskCmd.java:89-91` — `complete`/`handleFailure` YALNIZ `workerId` eşitliğini kontrol eder, **lock expiry'yi kontrol ETMEZ.** Süresi dolmuş kilitle geç gelen complete, araya farklı workerId'li kilit girmediyse başarılıdır.
-- `ExternalTask.xml:220-222` — fetchable = `LOCK_EXP_TIME_ null|<=now` **AND** `RETRIES_ null|>0`. `retries=0` task hiçbir fetch'e görünmez (incident bölgesi).
+- `ExternalTask.xml:220-222` — fetchable = `LOCK_EXP_TIME_ null|<=now` **AND** `RETRIES_ null|>0` **AND** `SUSPENSION_STATE_ null|=1` (`:221`; review NIT-1 ile tamamlandı). `retries=0` task hiçbir fetch'e görünmez (incident bölgesi).
 - `LockExternalTaskCmd.java:50-61` — kilit ihlali yalnız *farklı worker + süresi dolmamış kilit* kombinasyonunda; aynı sentinel workerId ile re-lock her zaman geçer.
 - `ExternalTaskEntity.java:419,443-446` — `failed()` her çağrıda `lockExpirationTime = now + retryDuration` yazar; `retries<=0` → incident yaratır.
 
@@ -135,9 +135,9 @@ L (sentinel lockDuration) = W·M (JetStream teslimat bütçesi) + S (sweep periy
 | M — `maxDeliver` | 4 (=3 retry) | mevcut adapter deseni: `maxDeliver+1` → DLQ (`:58,117`) |
 | S — sweep periyodu | 120s | soğuk, read-only (§5.3) |
 | ε — pay | 60s | reply/complete işleme payı |
-| **L — sentinel lock** | **300s (5dk)** | = 30·4 + 120 + 60 |
+| **L — sentinel lock** | **320s** | ≥ 30·4 + 7 + 120 + 60 = **307s alt sınır** → 320s (13s marj) |
 
-*(D-E rafinesi 2026-07-14: worker `nakWithDelay` kullanıyorsa teslimat bütçesi backoff toplamı kadar uzar → şemsiye koşulu genel haliyle **L ≥ M·W + Σbackoff + S + ε**. Defaults'ta Σbackoff = 1+2+4 = 7s → L=300s rahat tutar.)*
+*(D-E rafinesi 2026-07-14: worker `nakWithDelay` kullanıyorsa teslimat bütçesi backoff toplamı kadar uzar → şemsiye koşulu genel haliyle **L ≥ M·W + Σbackoff + S + ε**. Defaults'ta Σbackoff = 1+2+4 = 7s → alt sınır **307s**; default **L=320s**. İlk yazımdaki L=300s bu koşulu 7s ihlal ediyordu — phase-review MAJOR-B düzeltmesi, 2026-07-14.)*
 
 **Redelivery politikası:**
 1. **Happy path:** worker işi bitirir → `jobs.<topic>.reply`'a yayınlar → **sonra** job mesajını ACK'ler (reply-önce-ack = at-least-once). Inbound bridge reply'ı alır → `complete(extTaskId, sentinelWorkerId)` → complete **başarılıysa** reply mesajını ACK'ler.
@@ -146,9 +146,9 @@ L (sentinel lockDuration) = W·M (JetStream teslimat bütçesi) + S (sweep periy
 4. **Geç complete:** L dolduktan sonra gelen reply yine başarılıdır (kanıt: expiry kontrolü yok) — tek sentinel workerId olduğundan sahiplik asla el değiştirmez. Çift işlenen işin ikinci complete'i "task yok" → yakala + ACK (**idempotency**: anahtar `externalTaskId`).
 5. **Heartbeat YOK (basamak-1):** W·M sert tavandır. `msg.inProgress()` (JetStream'in DB-yazısız extendLock muadili) basamak-1 worker kontratında yok → D-H'ye ertelendi. Engine `extendLock` da kullanılmaz (DB yazısı üretir + süresi dolmuş kilidi uzatamaz — `ExtendLockOnExternalTaskCmd.java:46-47`).
 
-**Sweep kriteri = fetchable-parite:** sweep, engine'in fetchable predicate'inin (`ExternalTask.xml:220-222`) birebir aynısını sorgular (lock süresi dolmuş/yok **ve** retries≠0, A2 topic'leri) → "native bir poller neyi alabilirse onu ve yalnız onu" yeniden yayınlar (yayın öncesi sentinel re-lock — aynı workerId, her zaman geçer). DLQ'lu task dirilmez; tamamlanan task satırı zaten silinmiştir.
+**Sweep kriteri = fetchable-parite:** sweep, engine'in fetchable predicate'inin (`ExternalTask.xml:220-222`) birebir aynısını sorgular (lock süresi dolmuş/yok **ve** retries≠0 **ve** süreç askıda değil — `SUSPENSION_STATE_`, A2 topic'leri) → "native bir poller neyi alabilirse onu ve yalnız onu" yeniden yayınlar (yayın öncesi sentinel re-lock — aynı workerId, her zaman geçer). DLQ'lu task dirilmez; tamamlanan task satırı zaten silinmiştir.
 
-**Dürüst sınır:** `Nats-Msg-Id` dedup penceresi sonludur (stream `duplicate_window`, default 2dk). L (5dk) sonrası sweep re-publish'i pencere dışıdır → çifti stream değil, **inbound complete-idempotency** (madde 4) yutar. At-least-once'ın bedeli budur; vanilla external-task'ta da aynıdır (lock-expiry sonrası re-fetch).
+**Dürüst sınır:** `Nats-Msg-Id` dedup penceresi sonludur (stream `duplicate_window`, default 2dk). L (320s) sonrası sweep re-publish'i pencere dışıdır → çifti stream değil, **inbound complete-idempotency** (madde 4) yutar. At-least-once'ın bedeli budur; vanilla external-task'ta da aynıdır (lock-expiry sonrası re-fetch).
 
 **Lock sahipliği (D-C çözüldü 2026-07-13: doğumda in-tx kilit):**
 
@@ -250,15 +250,15 @@ Yani basamak 1'in büyük kısmı (poll→push) Flowable'da **zaten yapılmış.
 ## 8. Açık kararlar (Sentinel phase1/phase3)
 
 - **D-A — A2 outbound tetikleme:** ✅ **ÇÖZÜLDÜ (2026-07-02)** = post-commit `TransactionListener` (oluşturan node, tx dışı, **sorgusuz**) + soğuk read-only orphan-sweep + `Nats-Msg-Id` dedup. Hot central poller **reddedildi** (N-node poller `fetchAndLock` contention'ı = P1 ihlali). (§5.3)
-- **D-B — lockDuration ↔ ack-wait hizalaması:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **şemsiye kilit**: JetStream tek redelivery otoritesi; `L = W·M + S + ε` (default 30s·4 + 120s + 60s = **5dk**); DLQ → `handleFailure(retries=0)` → incident; sweep kriteri = fetchable-parite; heartbeat yok (→ D-H). Kilit kanıt: complete lock-expiry kontrol etmez (`HandleExternalTaskCmd.java:89-91`) → engine kilidi redelivery saati değil, şemsiye. Fork değişikliği gerektirmez. (§5.4)
+- **D-B — lockDuration ↔ ack-wait hizalaması:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **şemsiye kilit**: JetStream tek redelivery otoritesi; `L ≥ M·W + Σbackoff + S + ε` (defaults → alt sınır 307s, default **L=320s** — D-E rafinesi + review MAJOR-B sonrası); DLQ → `handleFailure(retries=0)` → incident; sweep kriteri = fetchable-parite; heartbeat yok (→ D-H). Kilit kanıt: complete lock-expiry kontrol etmez (`HandleExternalTaskCmd.java:89-91`) → engine kilidi redelivery saati değil, şemsiye. Fork değişikliği gerektirmez. (§5.4)
 - **D-C — sentinel-lock modeli:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **doğumda in-tx kilit**: custom `ExternalTaskActivityBehavior` (BpmnParseListener swap) `createAndInsert` + `lock(SENTINEL, L)` aynı tx → kilit aynı INSERT'e biner (sıfır ek yazı); aynı noktada COMMITTED TransactionListener = D-A publish kancası. Sentinel workerId küme-geneli tek sabit. Post-commit `lock()` ve lazy kilit **reddedildi**. Fork değişikliği yok; impl-sınıf bağımlılığı var. (§5.4)
 - **D-D — Flowable escalation:** ✅ **ÇÖZÜLDÜ (2026-07-13)** = **katmanlı**: default DLQ→failure-event bridge (deterministik worker ölümü, tespit=W·M, happy-path ek DB maliyeti sıfır, aynı correlation key'ler) + opt-in boundary timer (yalnız gerçek wall-clock deadline'lı modeller). Timer-only ve DLQ→ops-only **reddedildi**. (§6.2)
-- **D-E — DLQ/ack semantiği:** ✅ **ÇÖZÜLDÜ (2026-07-14)** = **ortak kontrat + idiom-özel post-DLQ**: custody-transfer ack ilkesi (ack yalnız kalıcılık el değiştirince); in-band `maxDeliver+1` tespiti (advisory reddedildi); DLQ şeması = orijinal payload+header'lar aynen + `X-*-Dlq-*` meta + `Nats-Msg-Id=<orijinal>.dlq`; TEK `DLQ` stream (`dlq.>`, limits, 14g); dlq-of-dlq yok. Mevcut adapter'larda 3 kontrat açığı fix-listesine alındı (header kaybı, koşulsuz ack, dedup yok). D-B şemsiyesi rafine: `L ≥ M·W + Σbackoff + S + ε`. (§7)
+- **D-E — DLQ/ack semantiği:** ✅ **ÇÖZÜLDÜ (2026-07-14)** = **ortak kontrat + idiom-özel post-DLQ**: custody-transfer ack ilkesi (ack yalnız kalıcılık el değiştirince); in-band `maxDeliver+1` tespiti (advisory reddedildi); DLQ şeması = orijinal payload+header'lar aynen + `X-*-Dlq-*` meta + `Nats-Msg-Id=<orijinal>.dlq`; TEK `DLQ` stream (`dlq.>`, limits, 14g); dlq-of-dlq yok. Mevcut adapter'larda fix-listesi **4 kontrat açığı** (header kaybı, koşulsuz ack, dedup yok; PO-Q2 ile trace-header eklendi). D-B şemsiyesi rafine: `L ≥ M·W + Σbackoff + S + ε`. (§7)
 - **D-F — başarı metriği:** ✅ **ÇÖZÜLDÜ (2026-07-14)** = **normalize birincil metrik** (task başına DB round-trip; poll + fetchAndLock bileşenleri → 0, INSERT/complete artmaz) + **destekleyici SLI katmanı** (fetchAndLock QPS=0, lock-wait~0, HikariCP↓, dispatch p95≤200ms, failure sayaçları). Baseline+hedef **Testcontainers yük-bench** modülüyle üretilir (aynı senaryo, native-poll ↔ A2-push, `@Tag("bench")`, basamak-1 teslimatına dahil). (§5.6)
 - **D-G — gRPC ön kapısı:** gerekli mi (Zeebe-uyum / broker'sız worker), ne zaman? Ayrı belge. (§1.4)
 - **D-H — InProgress heartbeat (basamak-1 SONRASI):** uzun işli topic'lerde küçük W + `msg.inProgress()` (DB-yazısız ack-wait uzatma; deliveryCount artırmaz). Kontrata "toplam heartbeat süresi ≤ L−ε" sınırı gerekir. Basamak-1 için **reddedildi** (2026-07-13, sabit W·M bütçesi tercih edildi — basit kontrat, statik L). (§5.4)
 
-> **Durum (2026-07-14):** D-A…D-F **tamamı çözüldü**; D-G/D-H bilinçli ertelendi. Bu belge **Sentinel phase1 girdisi olarak HAZIR.** Basamak-1 kod kapsamı: custom activity behavior + post-commit publisher (D-A/D-C), sweep (D-B), inbound completion-bridge, DLQ bridge'leri (D-D/D-E), §7 kontrat-fix listesi (3 açık), bench modülü (D-F).
+> **Durum (2026-07-14):** D-A…D-F **tamamı çözüldü**; D-G/D-H bilinçli ertelendi. Bu belge **Sentinel phase1 girdisi olarak HAZIR.** Basamak-1 kod kapsamı: custom activity behavior + post-commit publisher (D-A/D-C), sweep (D-B), inbound completion-bridge, DLQ bridge'leri (D-D/D-E), §7 kontrat-fix listesi (4 açık), bench modülü (D-F).
 
 ---
 

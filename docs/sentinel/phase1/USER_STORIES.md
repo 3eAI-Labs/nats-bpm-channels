@@ -71,7 +71,7 @@ Toplam: **24 user story.**
 - [ ] `createAndInsert(...)` ile üretilen entity, flush'tan önce `lock(SENTINEL, L)` çağrılır → kilit alanları **aynı INSERT'e biner**; entegrasyon testi ikinci bir `UPDATE` üretilmediğini kanıtlar (bkz. `06 §9` phase3 doğrulaması).
 - [ ] `SENTINEL` workerId **küme-geneli tek sabittir** (örn. `a2-jetstream-bridge`); payload'da audit için taşınır.
 - [ ] Doğuştan kilitli task, native fetchable-predicate dışındadır → legacy poller onu asla fetch edemez (`ExternalTask.xml:220-222`).
-- [ ] `L` (sentinel lockDuration) topic-başına override edilebilir; default **300s** (bkz. US-A5).
+- [ ] `L` (sentinel lockDuration) topic-başına override edilebilir; default **320s** (bkz. US-A5).
 **Dayanak:** `06 §5.4` (D-C), `§9` (D-C kanca noktaları DOĞRULANDI): `ExternalTaskEntity.java:568-588` (createAndInsert kilitsiz doğurur), `:472-474` (lock), `BpmnParse.java:2564`, `ProcessEngineConfigurationImpl.java:687,2189`. REDDEDİLEN: post-commit `lock()`, complete-önü lazy kilit (`06 §5.4`) — yeniden açılmaz.
 **Bağımlılık:** yok (kanca noktası; US-A1/A3'ün temeli).
 
@@ -82,7 +82,7 @@ Toplam: **24 user story.**
 **Öncelik:** M
 **Kabul kriterleri:**
 - [ ] Task'ı oluşturan node, `TransactionState.COMMITTED` listener'ında elindeki entity ile yayınlar — **DB sorgusu yok, cross-node yarış yok** (herkes yalnız kendi yarattığını yayınlar).
-- [ ] Orphan-sweep **tek node/leader**'da koşar; sorgu, engine fetchable-predicate'inin birebir aynısıdır (lock süresi dolmuş/yok **ve** `retries≠0`, yalnız A2 topic'leri) — `SELECT FOR UPDATE` **kullanmaz**.
+- [ ] Orphan-sweep **tek node/leader**'da koşar; sorgu, engine fetchable-predicate'inin birebir aynısıdır (lock süresi dolmuş/yok **ve** `retries≠0` **ve** süreç askıda değil — `SUSPENSION_STATE_`, yalnız A2 topic'leri) — `SELECT FOR UPDATE` **kullanmaz**.
 - [ ] Sweep periyodu `S` yapılandırılabilir; default **120s**.
 - [ ] Sweep, yayın öncesi sentinel re-lock yapar (aynı workerId → her zaman geçer, `LockExternalTaskCmd.java:50-61`); DLQ'lanmış (`retries=0`) task'ı **asla** yeniden yayınlamaz.
 - [ ] Çift yayın (post-commit + sweep) `Nats-Msg-Id` dedup'u ile stream'de yutulur; pencere dışı çift, inbound complete-idempotency ile yutulur (US-A7).
@@ -110,7 +110,7 @@ Toplam: **24 user story.**
 **Öncelik:** M
 **Kabul kriterleri:**
 - [ ] Şemsiye koşulu tutar: `L ≥ M·W + Σbackoff + S + ε`.
-- [ ] Default değerler yapılandırılabilir ve şu ilişkiyi sağlar: W=30s, M=4, S=120s, ε=60s, Σbackoff=1+2+4=7s → **L=300s** koşulu rahat karşılar.
+- [ ] Default değerler yapılandırılabilir ve şu ilişkiyi sağlar: W=30s, M=4, S=120s, ε=60s, Σbackoff=1+2+4=7s → alt sınır **307s**; default **L=320s** (13s marj — phase-review MAJOR-B düzeltmesi 2026-07-14).
 - [ ] W topic-başına override edilebilir (uzun işli topic büyük W seçer); L default'u W/M/S/ε'den türetilebilir olmalı (elle tutarsız L yazımına karşı validasyon/uyarı).
 - [ ] Heartbeat **yok**; W·M sert tavandır (`msg.inProgress()` ve engine `extendLock` **kullanılmaz** — `ExtendLockOnExternalTaskCmd.java:46-47`).
 **Dayanak:** `06 §5.4` (D-B), `§9` (D-B davranışları DOĞRULANDI, fork değişikliği gerektirmez). REDDEDİLEN heartbeat (D-H) — yeniden açılmaz.
@@ -137,7 +137,7 @@ Toplam: **24 user story.**
 **Kabul kriterleri:**
 - [ ] L sonrası gelen reply yine başarılı complete olur (expiry kontrolü yok — `HandleExternalTaskCmd.java:89-91`); sahiplik el değiştirmez (tek `SENTINEL` workerId).
 - [ ] Çift işlenmiş işin ikinci complete'i "task yok" ile karşılaşır → **yakalanır + ACK** (idempotency anahtarı = `externalTaskId`).
-- [ ] `Nats-Msg-Id` dedup penceresi (`duplicate_window`, default 2dk) < L (300s) olduğu durumda pencere-dışı çiftin **complete-idempotency** tarafından yutulduğu test edilir.
+- [ ] `Nats-Msg-Id` dedup penceresi (`duplicate_window`, default 2dk) < L (320s) olduğu durumda pencere-dışı çiftin **complete-idempotency** tarafından yutulduğu test edilir.
 **Dayanak:** `06 §5.4` madde 4 + "Dürüst sınır".
 **Bağımlılık:** US-A4.
 
@@ -174,7 +174,7 @@ Toplam: **24 user story.**
 **Kabul kriterleri:**
 - [ ] JetStream variant kullanılır (`jetstream/JetStreamInboundEventChannelAdapter.java:152` `eventReceived`); core adapter'ın ack'siz/log-only yolu basamak-1 kritik iş için kullanılmaz.
 - [ ] `maxDeliver+1` deseni ile DLQ tespiti çalışır (`:75-77`, `:133-146`).
-- [ ] Dedup `Nats-Msg-Id`/correlation idempotency ile yapılır (`07 §7`).
+- [ ] Dedup `Nats-Msg-Id`/correlation idempotency ile yapılır (`06 §7`).
 - [ ] Custody-transfer ack ilkesi uygulanır (bkz. US-C2).
 **Dayanak:** `06 §6.2`, `§9` (D-E kanıtları DOĞRULANDI: `JetStreamInboundEventChannelAdapter.java:75-77,133-146`).
 **Bağımlılık:** US-C1, US-C2, US-C3.
