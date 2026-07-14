@@ -1,0 +1,390 @@
+asyncapi: 3.1.0
+info:
+  title: nats-bpm-channels — Basamak-1 Wire Contract (A2 + Event Registry over JetStream)
+  version: 1.0.0
+  description: >
+    Basamak-1 "External Task / Event-Driven Work Offload over JetStream" için
+    makine-okunur tel sözleşmesi (Sentinel Phase 3 teslimatı). İki motor idiomu
+    (Camunda 7 / CadenzaFlow **A2 external-task** ve Flowable **Event Registry**)
+    ortak bir JetStream substratını paylaşır. Bu belge subject şemasını, mesaj/header
+    formatlarını, DLQ sözleşmesini ve custody-transfer ack semantiğini sabitler.
+
+
+    Kaynak kararlar: docs/06-external-task-over-jetstream.md (D-A…D-F), docs/05 §7
+    (ortak wire-contract), SRS IR-1…IR-6, BUSINESS_LOGIC BR-SUB-001…008. JetStream
+    stream/consumer konfigürasyonları AsyncAPI standart binding'i olmadığından
+    `x-jetstream-*` uzantı alanlarıyla ve API_CONTRACTS.md §3 tablolarıyla taşınır.
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: 3eAI Labs
+    url: https://github.com/3eAI-Labs/nats-bpm-channels
+
+defaultContentType: application/octet-stream
+
+servers:
+  broker:
+    host: 'localhost:4222'
+    protocol: nats
+    description: >
+      NATS/JetStream 2.10+ broker. Production'da TLS + NKey/JWT zorunlu (NFR-S3 / DP-4);
+      subject-level permission ile jobs.* ve dlq.* namespace'leri izole edilir
+      (bkz. ARCH-QUESTIONS Q3, kapsam phase3 sonu onayına bağlı).
+
+channels:
+  a2JobDispatch:
+    address: 'jobs.{type}'
+    title: A2 external-task job dispatch (WorkQueue)
+    description: >
+      Camunda 7 / CadenzaFlow external task'ı worker'lara push eder. Stream tipi
+      WorkQueue (her mesaj tek tüketiciye). `jobs.*` namespace'i A2'ye REZERVEDİR
+      (BR-SUB-004 / VAL_TOPIC_NAMESPACE_COLLISION).
+    parameters:
+      type:
+        description: A2 external-task topic adı (BPMN camunda:type="external" topic).
+    messages:
+      jobRequest:
+        $ref: '#/components/messages/JobRequest'
+    x-jetstream:
+      streamRetention: WorkQueue
+      ackWaitSeconds: 30
+      maxDeliver: 4
+      duplicateWindowSeconds: 120
+      dedupHeader: Nats-Msg-Id
+      dedupValue: externalTaskId
+
+  a2JobReply:
+    address: 'jobs.{type}.reply'
+    title: A2 external-task reply
+    description: >
+      Worker'ın iş sonucunu (başarı / BPMN-error / transient) engine-inbound
+      completion-bridge'e taşır. Bridge success → complete(), bpmn-error →
+      handleBpmnError(), transient → handleFailure() eşler.
+    parameters:
+      type:
+        description: A2 external-task topic adı (job ile aynı type).
+    messages:
+      jobSuccessReply:
+        $ref: '#/components/messages/JobSuccessReply'
+      jobBpmnErrorReply:
+        $ref: '#/components/messages/JobBpmnErrorReply'
+      jobTransientFailureReply:
+        $ref: '#/components/messages/JobTransientFailureReply'
+    x-jetstream:
+      streamRetention: WorkQueue
+      ackWaitSeconds: 30
+      maxDeliver: 4
+      duplicateWindowSeconds: 120
+      dedupHeader: Nats-Msg-Id
+      dedupValue: externalTaskId
+
+  flowableEventChannel:
+    address: '{eventChannelSubject}'
+    title: Flowable Event Registry channel (inbound + outbound)
+    description: >
+      Flowable Event Registry push idiomu. Outbound sendEvent yayınlar; inbound
+      JetStream adapter tüketip eventRegistry.eventReceived(...) ile correlate eder.
+      Subject `jobs.*` önekiyle ÇAKIŞAMAZ (BR-SUB-004).
+    parameters:
+      eventChannelSubject:
+        description: Kiracı-tanımlı event channel subject'i (jobs.* önekiyle başlayamaz).
+    messages:
+      eventMessage:
+        $ref: '#/components/messages/EventMessage'
+    x-jetstream:
+      streamRetention: WorkQueue
+      ackWaitSeconds: 30
+      maxDeliver: 4
+      duplicateWindowSeconds: 120
+      dedupHeader: Nats-Msg-Id
+      dedupValue: correlationKey
+
+  deadLetter:
+    address: 'dlq.{originalSubject}'
+    title: Dead-letter queue (tek ortak DLQ stream, dlq.>)
+    description: >
+      Tüm idiomların poison/bütçe-aşımı/boş-body mesajları. TEK `DLQ` stream
+      (`dlq.>`), retention limits-based (default 14 gün, kiracı-bazlı override).
+      Tüketiciler subject filtresiyle ayrışır: `dlq.jobs.>` → Camunda/CadenzaFlow
+      incident-bridge; diğer `dlq.>` → Flowable failure-event bridge.
+    parameters:
+      originalSubject:
+        description: DLQ'ya yönlendirilmeden önceki orijinal subject (jobs.<topic> veya event-channel).
+    messages:
+      deadLetterMessage:
+        $ref: '#/components/messages/DeadLetterMessage'
+    x-jetstream:
+      streamRetention: Limits
+      retentionDays: 14
+      dedupHeader: Nats-Msg-Id
+      dedupValue: '<original-msg-id>.dlq'
+
+operations:
+  dispatchJob:
+    action: send
+    title: Engine → JetStream (post-commit publish / sweep re-publish)
+    channel:
+      $ref: '#/channels/a2JobDispatch'
+    messages:
+      - $ref: '#/channels/a2JobDispatch/messages/jobRequest'
+    description: >
+      Post-commit TransactionListener (fast-path, at-most-once) veya soğuk
+      orphan-sweep (re-lock→publish, at-least-once tamamlayıcı) tarafından yapılır.
+      Publisher DB sorgusu yapmaz (FR-A4). BR-A2-004 / EXT_JETSTREAM_PUBLISH_UNAVAILABLE.
+
+  consumeJob:
+    action: receive
+    title: Worker ← JetStream (queue-group WorkQueue claim)
+    channel:
+      $ref: '#/channels/a2JobDispatch'
+    messages:
+      - $ref: '#/channels/a2JobDispatch/messages/jobRequest'
+    description: >
+      Motor-dışı polyglot worker. queue-group ile tek-worker-alır. Custody-transfer:
+      reply-PubAck-sonrası-ack. deliveryCount > M → dlq.jobs.<topic> (BR-A2-009).
+
+  publishReply:
+    action: send
+    title: Worker → JetStream reply
+    channel:
+      $ref: '#/channels/a2JobReply'
+    messages:
+      - $ref: '#/channels/a2JobReply/messages/jobSuccessReply'
+      - $ref: '#/channels/a2JobReply/messages/jobBpmnErrorReply'
+      - $ref: '#/channels/a2JobReply/messages/jobTransientFailureReply'
+    description: Business-error de bir reply'dır (error-reply → ack). IR-5.
+
+  consumeReply:
+    action: receive
+    title: Engine-inbound completion-bridge ← reply
+    channel:
+      $ref: '#/channels/a2JobReply'
+    messages:
+      - $ref: '#/channels/a2JobReply/messages/jobSuccessReply'
+      - $ref: '#/channels/a2JobReply/messages/jobBpmnErrorReply'
+      - $ref: '#/channels/a2JobReply/messages/jobTransientFailureReply'
+    description: >
+      complete/handleBpmnError/handleFailure (BR-A2-008). complete-sonrası-ack.
+      Task yoksa (geç/çift reply) → RES_EXTERNAL_TASK_NOT_FOUND → yut+ack (BR-A2-011).
+
+  sendFlowableEvent:
+    action: send
+    title: Flowable outbound → Event Registry channel
+    channel:
+      $ref: '#/channels/flowableEventChannel'
+    messages:
+      - $ref: '#/channels/flowableEventChannel/messages/eventMessage'
+    description: NatsOutboundEventChannelAdapter.sendEvent(...) (motor-dışı; FR-B1).
+
+  receiveFlowableEvent:
+    action: receive
+    title: Flowable inbound ← Event Registry channel
+    channel:
+      $ref: '#/channels/flowableEventChannel'
+    messages:
+      - $ref: '#/channels/flowableEventChannel/messages/eventMessage'
+    description: >
+      JetStreamInboundEventChannelAdapter → eventRegistry.eventReceived(...). ack+DLQ+dedup
+      zorunlu (FR-B2). Boş body → WARN+DLQ (BR-SUB-007 / VAL_EMPTY_MESSAGE_BODY).
+
+  routeToDlq:
+    action: send
+    title: Consumer → DLQ (in-band maxDeliver+1 / boş-body)
+    channel:
+      $ref: '#/channels/deadLetter'
+    messages:
+      - $ref: '#/channels/deadLetter/messages/deadLetterMessage'
+    description: >
+      publishToDlq: orijinal payload byte-aynen + orijinal header'lar AYNEN + 4 meta
+      header + Nats-Msg-Id=<orijinal>.dlq (BR-SUB-001/003). DLQ-PubAck-sonrası-ack;
+      publish fail → nak (BR-SUB-002, custody-transfer).
+
+  consumeDlq:
+    action: receive
+    title: DLQ-bridge ← DLQ
+    channel:
+      $ref: '#/channels/deadLetter'
+    messages:
+      - $ref: '#/channels/deadLetter/messages/deadLetterMessage'
+    description: >
+      dlq.jobs.> → incident-bridge (handleFailure retries=0 → Cockpit incident);
+      diğer dlq.> → failure-event bridge (eventReceived). nak-backoff + circuit-breaker
+      (BR-SUB-008 / SYS_DLQ_BRIDGE_PROCESSING_FAILED). dlq-of-dlq YOK.
+
+components:
+  parameters:
+    type:
+      description: A2 external-task topic adı.
+    eventChannelSubject:
+      description: Flowable Event Registry channel subject'i.
+    originalSubject:
+      description: DLQ öncesi orijinal subject.
+
+  messages:
+    JobRequest:
+      name: JobRequest
+      title: A2 job dispatch mesajı
+      summary: External task'ı worker'a taşır (WorkQueue).
+      contentType: application/octet-stream
+      headers:
+        $ref: '#/components/schemas/BpmHeadersWithDedup'
+      payload:
+        $ref: '#/components/schemas/OpaqueBusinessPayload'
+      x-data-classification: RESTRICTED/PII (kiracı-tanımlı process değişkenleri)
+
+    JobSuccessReply:
+      name: JobSuccessReply
+      title: Başarılı iş sonucu
+      summary: complete(extTaskId, SENTINEL, vars) tetikler.
+      contentType: application/octet-stream
+      headers:
+        $ref: '#/components/schemas/ReplyHeaders'
+      payload:
+        $ref: '#/components/schemas/OpaqueBusinessPayload'
+
+    JobBpmnErrorReply:
+      name: JobBpmnErrorReply
+      title: BPMN business-error reply
+      summary: handleBpmnError(extTaskId, SENTINEL, errorCode, ...) tetikler.
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/ReplyHeaders'
+      payload:
+        $ref: '#/components/schemas/BpmnErrorPayload'
+
+    JobTransientFailureReply:
+      name: JobTransientFailureReply
+      title: Transient-failure reply
+      summary: handleFailure(extTaskId, SENTINEL, ...) tetikler; redelivery/DLQ yolu.
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/ReplyHeaders'
+      payload:
+        $ref: '#/components/schemas/TransientFailurePayload'
+
+    EventMessage:
+      name: EventMessage
+      title: Flowable Event Registry mesajı
+      summary: Outbound sendEvent / inbound eventReceived payload'ı.
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/BpmHeadersWithDedup'
+      payload:
+        $ref: '#/components/schemas/OpaqueBusinessPayload'
+      x-data-classification: RESTRICTED/PII
+
+    DeadLetterMessage:
+      name: DeadLetterMessage
+      title: DLQ mesajı
+      summary: Orijinal payload byte-aynen + orijinal header'lar + DLQ meta header'lar.
+      contentType: application/octet-stream
+      headers:
+        $ref: '#/components/schemas/DlqHeaders'
+      payload:
+        $ref: '#/components/schemas/OpaqueBusinessPayload'
+      x-data-classification: RESTRICTED/PII (14 gün retention — en uzun maruziyet, DP-3)
+
+  schemas:
+    BpmHeadersWithDedup:
+      type: object
+      description: Mandatory BpmHeaders (BpmHeaders.java) + dedup id.
+      properties:
+        Nats-Msg-Id:
+          type: string
+          description: Dedup anahtarı; A2=externalTaskId, Event Registry=correlation key (IR-3).
+        X-Cadenzaflow-Trace-Id:
+          type: string
+          description: Dağıtık izleme kimliği (PSEUDONYMOUS). Yazma tek ad; okuma X-Trace-Id fallback (FR-C7).
+        X-Cadenzaflow-Business-Key:
+          type: string
+          description: İş kimliği (CONFIDENTIAL/koşullu PII — telco'da MSISDN olabilir; masking kiracı kararı, DP-8).
+        X-Cadenzaflow-Idempotency-Key:
+          type: string
+          description: Apply-zamanı idempotency anahtarı (PSEUDONYMOUS).
+      required:
+        - Nats-Msg-Id
+
+    ReplyHeaders:
+      type: object
+      description: Reply/complete için header'lar; correlation-id birebir echo (IR-5).
+      properties:
+        Nats-Msg-Id:
+          type: string
+          description: A2=externalTaskId (idempotency anahtarı).
+        X-Cadenzaflow-Trace-Id:
+          type: string
+        X-Cadenzaflow-Correlation-Id:
+          type: string
+          description: Async reply eşleştirme (echo).
+      required:
+        - Nats-Msg-Id
+
+    DlqHeaders:
+      type: object
+      description: Orijinal header'lar AYNEN + 4 meta header (BR-SUB-001).
+      properties:
+        Nats-Msg-Id:
+          type: string
+          description: '<orijinal-msg-id>.dlq (çift DLQ kaydına karşı; BR-SUB-003).'
+        X-Cadenzaflow-Trace-Id:
+          type: string
+        X-Cadenzaflow-Business-Key:
+          type: string
+        X-Cadenzaflow-Idempotency-Key:
+          type: string
+        X-Cadenzaflow-Dlq-Original-Subject:
+          type: string
+          description: DLQ öncesi orijinal subject (PUBLIC routing meta).
+        X-Cadenzaflow-Dlq-Delivery-Count:
+          type: integer
+          description: Son deliveryCount (INTERNAL ops meta).
+        X-Cadenzaflow-Dlq-Reason:
+          type: string
+          description: Yalnız hata SINIFI/kodu; payload/PII SIZDIRMAZ (DP-6).
+        X-Cadenzaflow-Dlq-Timestamp:
+          type: string
+          format: date-time
+          description: DLQ'ya yönlendirme zamanı (PUBLIC).
+      required:
+        - Nats-Msg-Id
+        - X-Cadenzaflow-Dlq-Original-Subject
+        - X-Cadenzaflow-Dlq-Delivery-Count
+        - X-Cadenzaflow-Dlq-Reason
+        - X-Cadenzaflow-Dlq-Timestamp
+
+    OpaqueBusinessPayload:
+      type: string
+      description: >
+        Kiracı-tanımlı iş verisi (process değişkenleri) — keyfi bytes/JSON. Bu katman
+        içeriği yorumlamaz. RESTRICTED/PII varsayılır; masking/minimizasyon kiracıya
+        aittir (TENANT_PII_CHECKLIST_TEMPLATE.md).
+
+    BpmnErrorPayload:
+      type: object
+      description: BPMN business-error reply gövdesi.
+      properties:
+        errorCode:
+          type: string
+          description: BPMN error code (handleBpmnError argümanı).
+        errorMessage:
+          type: string
+        variables:
+          type: object
+          additionalProperties: true
+      required:
+        - errorCode
+
+    TransientFailurePayload:
+      type: object
+      description: Transient-failure reply gövdesi (handleFailure).
+      properties:
+        errorMessage:
+          type: string
+        errorDetails:
+          type: string
+        retries:
+          type: integer
+          description: Kalan retry (informatif; DLQ yolunda bridge retries=0 sabitler — BAQ-2).
+      required:
+        - errorMessage
