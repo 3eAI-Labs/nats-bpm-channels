@@ -21,3 +21,6 @@ Thumbs.db
 
 # Firebase
 firebase-debug.log
+
+# Sentinel runtime state (teslimat değil; teslimatlar docs/sentinel/ altında)
+.sentinel/
