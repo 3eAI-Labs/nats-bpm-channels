@@ -20,8 +20,11 @@ public class A2Properties {
 
 public class UmbrellaLockDefaults {
     private long ackWaitSeconds = 30;      // W
-    private int maxDeliver = 4;            // M — DİKKAT: mevcut generic SubscriptionConfig.maxDeliver default'u (5)
-                                            // İLE KARIŞTIRILMAMALI (bkz. §1.5 not). A2Properties kendi default'unu taşır.
+    private int maxDeliver = 4;            // M — L-türetme formülünün girdisi. Bootstrap wiring, HER topic için
+                                            // bu değeri (veya TopicLockOverride.maxDeliver'ı) A2ConsumerConfig.maxDeliver'a
+                                            // AYNEN kopyalar (§1.5, `03_classes/2_camunda_a2.md` §4.0) — iki config
+                                            // nesnesi aynı M'i farklı tüketim noktaları (L-formülü / JetStream consumer)
+                                            // için taşır, ASLA bağımsız olarak override edilmez.
     private long sweepPeriodSeconds = 120;  // S
     private long epsilonSeconds = 60;       // ε
     private Long lockDurationSeconds;       // L — null ise türetilir (§1.2)
@@ -63,6 +66,8 @@ public final class UmbrellaLockCalculator {
 ```
 
 **Türetme kuralı gerekçesi (LLD-düzeyi karar, ADR-0001'in "L default'u türetilebilir olmalı" ilkesini somutlaştırır):** ADR-0001 yalnız alt-sınır formülünü sabitler, "default L nasıl türetilir" mekanizmasını açıkça vermez (yalnız sayısal örnek: 307+13=320). Bu LLD, türetmeyi **floor + sabit 13s marj** olarak sabitler — bu, ADR'nin verdiği tek sayısal örnekle **birebir tutarlıdır** ve W/M/S/ε herhangi biri değiştiğinde mekanik, öngörülebilir bir L üretir. Bu bir yeni mimari karar DEĞİL, ADR-0001'in eksik bıraktığı (ama tek örnekle ima ettiği) türetme algoritmasının LLD-düzeyi somutlaştırılmasıdır.
+
+**Marj mutlaktır, oransal DEĞİLDİR (review NIT-4 netleştirmesi, 2026-07-15):** `MARGIN_SECONDS = 13` **sabit saniye**dir, `floor`'un bir yüzdesi değildir. Sonuç: büyük `W` override'larında (ör. uzun-işli bir topic için `W=90s`), `floor` orantılı olarak büyür (`M·W` terimi baskın) ama marj **her zaman 13s** kalır — göreli marj (`13/floor`) küçülür. Bu **kabul edilebilir**dir çünkü `UmbrellaLockValidator` (§1.4) her durumda `L >= floor` şartını **mutlak** olarak doğrular — marjın göreli küçülmesi güvenlik garantisini ZAYIFLATMAZ, yalnız "ekstra tampon"un oransal payı azalır. Operatör daha büyük bir marj isterse `TopicLockOverride.lockDurationSeconds`'ı elle `floor`'un üzerinde bir değere ayarlayabilir (validator yine de yalnız `>= floor` şartını kontrol eder, marj büyüklüğüne karışmaz).
 
 ### 1.3 `UmbrellaLockResolver` (per-topic çözümleyici — cache'li)
 
@@ -113,9 +118,11 @@ public class UmbrellaLockValidator implements InitializingBean {   // NatsSubscr
 
 `A2PostCommitPublisher.publish(...)` ve `A2OrphanSweep.sweepCycle()`, `unsafeTopics.contains(topic)` ise **her çağrıda** `log.warn("Topic '{}' running with unsafe umbrella-lock duration (L < floor) — allow-unsafe-lock-duration=true", topic)` loglar (BAQ-3 kararının "sessiz bir kere uyar YOK" şartı).
 
-### 1.5 Config-default çakışma uyarısı (LLD-düzeyi netleştirme, bkz. LLD-QUESTIONS)
+### 1.5 Config-default çakışması — **çözüldü (review MINOR-1, 2026-07-15)**
 
-Mevcut `SubscriptionConfig` (`camunda-nats-channel/.../inbound/SubscriptionConfig.java:11`) `maxDeliver` alanı için default **5** taşır — bu, saf message-correlation subject'leri (US-E2'nin koruduğu "gerçek dış event bekleme" yolu) içindir. **A2Properties.UmbrellaLockDefaults.maxDeliver default'u 4'tür** (ADR-0001) — **farklı bir config ağacı, farklı bir varsayılan**. Phase 5 implementasyonu bu iki config sınıfını **karıştırmamalıdır** — `SubscriptionConfig` A2 job/reply subject'leri için KULLANILMAZ (A2 kendi `A2Properties`/`TopicLockOverride` modelini kullanır).
+Mevcut `SubscriptionConfig` (`camunda-nats-channel/.../inbound/SubscriptionConfig.java:11`) `maxDeliver` alanı için default **5** taşır — bu, saf message-correlation subject'leri (US-E2'nin koruduğu "gerçek dış event bekleme" yolu) içindir. **A2Properties.UmbrellaLockDefaults.maxDeliver default'u 4'tür** (ADR-0001) — **farklı bir config ağacı, farklı bir varsayılan**. Review bunu bir karışma riski olarak tespit etti (MINOR-1): `A2CompletionBridge`/`A2IncidentBridge` yanlışlıkla `SubscriptionConfig`'i miras alırsa maxDeliver sessizce 5 olurdu (asyncapi `a2JobReply.x-jetstream.maxDeliver: 4` ile **uyumsuz**).
+
+**Çözüm:** `A2CompletionBridge` ve `A2IncidentBridge`, `SubscriptionConfig`'i **hiç kullanmaz** — bunun yerine yeni, A2'ye özgü **`A2ConsumerConfig`** sınıfı (`03_classes/2_camunda_a2.md` §4.0, `maxDeliver` default **4**, asyncapi ile birebir). Bu, config-tipi düzeyinde bir ayrım olduğundan "karıştırmama" artık bir **disiplin uyarısı** değil, **derleme-zamanı yapısal bir garanti**dir (iki sınıf farklı tip, biri diğerinin yerine geçemez).
 
 **Bağımlılık:** BR-A2-006/007, FR-A8/A9, US-A5, ADR-0001, `EXCEPTION_CODES.md` `VAL_UMBRELLA_LOCK_TOO_SHORT`.
 
@@ -142,21 +149,25 @@ public final class NamespaceValidator {
 
 ---
 
-## 3. KV bucket konfigürasyonu (ADR-0002 — `a2-sweep-leader`)
+## 3. KV bucket konfigürasyonu (ADR-0002 + **LLD-Q1** — `a2-sweep-leader`)
 
 | Alan | Değer | Kaynak |
 |---|---|---|
-| Bucket adı | `a2-sweep-leader` | ADR-0002 |
+| Bucket adı | `a2-sweep-leader` (tek bucket, motor-aileleri arasında **paylaşılır**) | ADR-0002 |
 | Replikasyon | 3 (prod) | `stack/NATS_JETSTREAM.md` §3 genel kural — persistent/prod KV için R3 |
 | TTL | `2·S` = 240s (S=120s default) | ADR-0002 |
 | History | 1 (yalnız güncel lider gerekir) | Lease deseni — `NATS_JETSTREAM.md` §4 |
-| Anahtar | `leader` (tek anahtar) | ADR-0002 |
-| Değer | node kimliği (string, PSEUDONYMOUS — PII yok) | ADR-0002 sonuçlar |
+| Anahtar | **motor-başına ayrı**: `sweep-leader.<engineId>` (ör. `sweep-leader.camunda`, `sweep-leader.cadenzaflow`) | **LLD-Q1 kararı, 2026-07-15** (`03_classes/1_nats_core_common.md` §3.2) |
+| Değer | replika kimliği (string, PSEUDONYMOUS — PII yok) | ADR-0002 sonuçlar |
 
-Tam KV şeması + oluşturma prosedürü: `docs/sentinel/phase4/DB_ACCESS_MAP.md` §3.
+**LLD-Q1 gerekçesi:** Bucket paylaşılır (tek KV altyapısı yeterli) ama anahtar **motor-ailesi başına izoledir** — iki motor ailesi (Camunda/CadenzaFlow) asla aynı anahtar için yarışmaz, her biri kendi replikaları arasında bağımsız lider seçer. Tam KV şeması + oluşturma prosedürü: `docs/sentinel/phase4/DB_ACCESS_MAP.md` §3.
 
 ---
 
 ## 4. DLQ-bridge Circuit-Breaker eşikleri (ADR-0004 — sabit, konfigüre EDİLMEZ)
 
-ADR-0004'ün eşikleri (5 ardışık hata→OPEN, 30s→HALF_OPEN, 3 ardışık başarı→CLOSED) **kilitlidir**, operatör tarafından override edilebilir bir config alanı **YOKTUR** (bilinçli — ADR metni bunları sabit değer olarak kabul ediyor, bir override yüzeyi açmak ADR'nin ötesine geçer). `DlqBridgeCircuitBreakerFactory` (`03_classes/1_nats_core_common.md` §4) bu sabitleri **kod-içi** taşır.
+ADR-0004'ün eşikleri (5 ardışık hata→OPEN, 30s→HALF_OPEN, 3 izinli deneme→CLOSED/OPEN) **kilitlidir**, operatör tarafından override edilebilir bir config alanı **YOKTUR** (bilinçli — ADR metni bunları sabit değer olarak kabul ediyor, bir override yüzeyi açmak ADR'nin ötesine geçer). `DlqBridgeCircuitBreakerFactory` (`03_classes/1_nats_core_common.md` §4.1) bu sabitleri **kod-içi** taşır.
+
+**HALF_OPEN semantiği (review MAJOR-1b, karar 2026-07-15):** "3 izinli deneme→CLOSED/OPEN" ifadesi bilinçli olarak "3 ardışık başarı→CLOSED"'den farklıdır — Resilience4j'nin gerçek davranışı (erken-CLOSE mümkün) **kütüphaneye uyarlanarak kabul edilmiştir**, özel mantık yazılmamıştır. Ayrıntı: `03_classes/1_nats_core_common.md` §4.3.
+
+**`ignoreExceptions` bir eşik değildir, config alanı da DEĞİLDİR (review MAJOR-1a):** Hangi exception tiplerinin CB muhasebesine girmediği (`NotFoundException` vb.) her çağıranın **kod-içi** kararıdır (`03_classes/1_nats_core_common.md` §4.2, `03_classes/2_camunda_a2.md` §5) — ADR-0004'ün sayısal eşiklerinden **bağımsız** bir düzeltmedir, operatör konfigürasyonu ile ilgisi yoktur.

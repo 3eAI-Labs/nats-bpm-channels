@@ -1,6 +1,7 @@
 # DB / Entity Erişim Haritası — Basamak-1
 
 **Sentinel fazı:** Phase 4 — Developer (LLD). **Kaynak:** `docs/sentinel/phase3/HLD.md` §4 (veri akışı), §5 (ölçekleme); `docs/06-external-task-over-jetstream.md` §5.6/§7; ADR-0001/0002/0003.
+**Durum:** Onaylı (2026-07-15) — LLD-Q1…3 + review düzeltmeleri işlendi (§3 KV şeması motor-başına anahtar kararını yansıtır).
 **Tez (kilitli, DEĞİŞTİRİLMEZ):** `ACT_RU_EXT_TASK` = transactional outbox; basamak-1 **yeni tablo eklemez**. Bu belge LLD_GUIDELINE §2.1'in "DB şeması" talebini bu projeye özgü biçimde karşılar: **yeni DDL YOK** (aşağıda gerekçe), yalnız mevcut şemaya erişim haritası + tek yeni kalıcı-durum deposu (NATS JetStream KV — SQL değil).
 
 ---
@@ -71,15 +72,17 @@ where
 
 | Alan | Değer |
 |---|---|
-| Bucket adı | `a2-sweep-leader` |
+| Bucket adı | `a2-sweep-leader` (tek bucket, **motor-aileleri arasında paylaşılır**) |
 | Replikasyon | 3 |
 | TTL | 240s (`2·S`, S=120s default) |
 | History | 1 |
-| Anahtar sayısı | 1 (`leader`) |
-| Değer şeması | UTF-8 string, node kimliği (ör. `pod-name` veya `hostname:pid`) — **PSEUDONYMOUS, PII YOK** |
-| Erişim (yazma) | `SweepLeaderLease.tryAcquireOrRenew()` — `kv.create`/`kv.update` |
-| Erişim (okuma) | `SweepLeaderLease.tryAcquireOrRenew()` — `kv.get` (mevcut sahibi kontrolü) |
-| Oluşturma | `JetStreamKvManager.ensureBucket(...)` (bootstrap, `08_config.md` §3, `99_deployment.md` §2) |
+| Anahtar şeması | **motor-başına ayrı** — `sweep-leader.<engineId>` (ör. `sweep-leader.camunda`, `sweep-leader.cadenzaflow`) — **LLD-Q1 kararı, 2026-07-15** |
+| Değer şeması | UTF-8 string, replika kimliği (ör. `pod-name` veya `hostname:pid`) — **PSEUDONYMOUS, PII YOK** |
+| Erişim (yazma) | `SweepLeaderLease.tryAcquireOrRenew()` — `kv.create`/`kv.update` (yalnız kendi `engineId` anahtarına) |
+| Erişim (okuma) | `SweepLeaderLease.tryAcquireOrRenew()` — `kv.get` (mevcut sahibi kontrolü, yalnız kendi anahtarında) |
+| Oluşturma | `JetStreamKvManager.ensureBucket(...)` (bootstrap, `08_config.md` §3, `99_deployment.md` §2) — her iki motor autoconfig'i de aynı bucket'ı idempotent olarak sağlar |
+
+**LLD-Q1 (Levent onayı, 2026-07-15):** İlk taslakta tek paylaşılan `leader` anahtarı önerilmişti (çapraz-motor yarış riski, `03_classes/3_cadenzaflow_a2_mirror.md`'de LLD-QUESTION olarak işaretlenmişti). Karar: **bucket paylaşılır, anahtar motor-ailesi başına izole edilir** — iki motor ailesi asla aynı anahtar için yarışmaz, her biri kendi replikaları arasında bağımsız lider seçer.
 
 **DATA_CLASSIFICATION.md §2.3 kapsam notu:** bu karar (ADR-0002) KV katmanını "basamak-1'de opsiyonel"den **aktif**e çevirir — lease anahtarı PII taşımaz, TTL'li (§2.3 zaten bunu öngörmüştü).
 

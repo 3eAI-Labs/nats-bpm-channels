@@ -44,7 +44,7 @@
 | `com.threeai.nats.core.resilience` | `nats-core` | `DlqBridgeCircuitBreakerFactory` (**yeni**, Resilience4j sarmalayıcı) |
 | `com.threeai.nats.core.metrics` | `nats-core` | `NatsChannelMetrics` (mevcut, **genişletilir**) |
 | `com.threeai.nats.core.exception` | `nats-core` | `NatsChannelException` + alt sınıflar (**yeni** — `07_errors.md`) |
-| `com.threeai.nats.camunda.a2` | `camunda-nats-channel` | `A2ExternalTaskBehavior`, `A2BpmnParseListener`, `A2PostCommitPublisher`, `A2OrphanSweep`, `A2CompletionBridge`, `A2IncidentBridge`, `A2Properties`, `A2TopicConfig` (**hepsi yeni**) |
+| `com.threeai.nats.camunda.a2` | `camunda-nats-channel` | `A2ExternalTaskBehavior`, `A2BpmnParseListener`, `A2PostCommitPublisher`, `A2OrphanSweep`, `A2CompletionBridge`, `A2IncidentBridge`, `A2ConsumerConfig`, `A2Properties`, `A2TopicConfig` (**hepsi yeni**) |
 | `com.threeai.nats.camunda.config` | `camunda-nats-channel` | `CamundaNatsAutoConfiguration` (mevcut, **genişletilir** — A2 bean'leri + delegate bean'leri **kaldırılır**) |
 | `com.threeai.nats.cadenzaflow.a2` | `cadenzaflow-nats-channel` | Camunda ile **birebir ayna** (yalnız `org.cadenzaflow.bpm.*` importları) — bkz. `03_classes/3_cadenzaflow_a2_mirror.md` |
 | `org.flowable.eventregistry.spring.nats.escalation` | `flowable-nats-channel` | `FailureEventBridge` (**yeni** — paket adı `a2` değil, çünkü Flowable idiomunda A2 yok; bkz. isimlendirme notu aşağıda) |

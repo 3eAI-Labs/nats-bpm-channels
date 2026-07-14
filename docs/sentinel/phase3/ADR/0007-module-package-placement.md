@@ -22,7 +22,7 @@ Yeni basamak-1 kod kapsamı yerleştirilmeli: custom activity behavior + post-co
 - Gerekçe: impl-sınıf bağımlılığı (ADR-0005) engine-özgü paket ister; mevcut repo deseni zaten ayna. NFR-M2 (birebir taşınabilirlik) böyle korunur.
 
 ### 3. Flowable (Event Registry) → `flowable-nats-channel`
-- `A2FailureEventBridge` (DLQ→failure-event), boş-body fix, JetStream inbound sağlamlığı → mevcut `jetstream/` paketi. Boundary-timer opt-in **model kararı** (kod değil).
+- `FailureEventBridge` (DLQ→failure-event; *errata 2026-07-15, phase4-review NIT-3: ilk yazım `A2FailureEventBridge` idi — Flowable'da A2 idiomu olmadığından `A2` öneki düşürüldü, HLD §2.6/LLD ile hizalı*), boş-body fix, JetStream inbound sağlamlığı → mevcut `jetstream/` paketi. Boundary-timer opt-in **model kararı** (kod değil).
 
 ### 4. Bench → **yeni modül `nats-bpm-bench`** (`@Tag("bench")`)
 - Testcontainers PG+engine+NATS+N worker; native-poll ↔ A2-push iki mod; nightly/manuel. Ana CI'yı bloklamaz (`SYS_BENCH_ENVIRONMENT_UNAVAILABLE` → warn-only). `pom.xml`'e beşinci modül olarak eklenir.

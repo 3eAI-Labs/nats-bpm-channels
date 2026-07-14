@@ -31,7 +31,10 @@ public class FailureEventBridge {
 
     private final EventRegistry eventRegistry;
     private final ChannelModelLookup channelModelLookup;   // §2.2 — subject -> InboundChannelModel
-    private final CircuitBreaker circuitBreaker;            // "cb-failure-event-bridge-flowable" (ADR-0004)
+    private final CircuitBreaker circuitBreaker;            // DlqBridgeCircuitBreakerFactory.create(
+                                                             //     "cb-failure-event-bridge-flowable", registry,
+                                                             //     /* no-match exception türü — TEST_SPEC (d)
+                                                             //        netleşince eklenir, MAJOR-1a */)
     private final NatsChannelMetrics metrics;
 
     /** dlq.> tüketen consumer'ın işleyicisi — yalnız dlq.jobs.> DIŞINDAKİ subject'ler bu bridge'e yönlenir
@@ -75,7 +78,9 @@ public class FailureEventBridge {
 }
 ```
 
-**`NoMatchingSubscriptionException` notu (⏭ phase4/5 doğrulaması, HLD §11 kalem 6c):** Flowable `EventRegistry.eventReceived(...)`'ın eşleşmeyen event'te **gerçekten** bir exception fırlatıp fırlatmadığı (yoksa sessizce no-op mu döndüğü) resmi dokümanda **net değildir** — bu LLD, davranışı **her iki ihtimali de** ele alacak şekilde tasarlanmıştır: eğer `eventReceived` sessizce döner (exception yok), `FailureEventBridge` bunu **başarı** olarak yorumlar ve **yanlışlıkla ack+"başarılı" loglar** — bu durumda `RES_FAILURE_EVENT_CORRELATION_MISS` **hiç tetiklenmez** ve BAQ-8'in öngördüğü WARN+metrik **kaçırılır**. Bu, `TEST_SPECIFICATIONS.md` (d)'nin gerekçesidir: davranış test'le doğrulanana kadar, kod **her iki dalı da** ele alacak şekilde yazılmalı (örn. Flowable'ın gerçek davranışı `boolean`/sonuç nesnesi dönüyorsa ona göre dallan; exception atıyorsa yukarıdaki `catch` bloğu kalır). **Bu belirsizlik LLD-QUESTIONS'a taşınmıştır** (dosya sonu) — kodlanacak kesin dal Phase 5'te test sonucuna göre sabitlenir.
+**`NoMatchingSubscriptionException` notu (⏭ phase4/5 doğrulaması, HLD §11 kalem 6c):** Flowable `EventRegistry.eventReceived(...)`'ın eşleşmeyen event'te **gerçekten** bir exception fırlatıp fırlatmadığı (yoksa sessizce no-op mu döndüğü) resmi dokümanda **net değildir** — bu LLD, davranışı **her iki ihtimali de** ele alacak şekilde tasarlanmıştır: eğer `eventReceived` sessizce döner (exception yok), `FailureEventBridge` bunu **başarı** olarak yorumlar ve **yanlışlıkla ack+"başarılı" loglar** — bu durumda `RES_FAILURE_EVENT_CORRELATION_MISS` **hiç tetiklenmez** ve BAQ-8'in öngördüğü WARN+metrik **kaçırılır**. Bu, `TEST_SPECIFICATIONS.md` (d)'nin gerekçesidir: davranış test'le doğrulanana kadar, kod **her iki dalı da** ele alacak şekilde yazılmalı (örn. Flowable'ın gerçek davranışı `boolean`/sonuç nesnesi dönüyorsa ona göre dallan; exception atıyorsa yukarıdaki `catch` bloğu kalır). **Bu belirsizlik LLD-QUESTIONS'a taşınmıştır** (dosya sonu) — kodlanacak kesin dal Phase 5'te test sonucuna göre sabitlenir. **Karar (LLD-Q2, Levent onayı 2026-07-15):** bu yaklaşımın kendisi (varsayımsal dal + test-ile-kapama) **onaylandı** — davranışın kendisi hakkında ek bir karar alınmadı, TEST_SPECIFICATIONS.md (d) phase5'te kapatacak.
+
+**CB benign-exception ayrımı (review MAJOR-1a, 2026-07-15):** Eğer yukarıdaki test (d) `eventReceived`'ın no-match'te gerçek bir exception fırlattığını doğrularsa VE bu exception "downstream sağlıksız" anlamına gelmiyorsa (A2IncidentBridge'deki `NotFoundException` ile aynı mantık — bkz. `03_classes/1_nats_core_common.md` §4.2), o exception tipi `cb-failure-event-bridge-flowable`'ın `ignoreExceptions(...)` listesine eklenir; aksi halde (sessiz no-op ise) `ignoreExceptions` listesi bu bridge için boş kalabilir. Bu karar da Phase 5'te test sonucuna göre kesinleşir.
 
 ### 2.1 Geç-sonuç politikası (BR-FLW-005, US-B5)
 
@@ -139,4 +144,4 @@ private void validateSubject(String subject, String channelKey) {
 
 ## LLD-QUESTIONS (bu dosyaya özgü)
 
-- **`eventReceived` no-match davranışı belirsizliği (§2, HLD §11 kalem 6c):** Flowable Event Registry'nin `eventReceived(...)` çağrısının eşleşmeyen (geç/korelasyon-key-kayıp) bir event'te exception mi fırlattığı yoksa sessizce no-op mu döndüğü resmi dokümanda doğrulanamadı. `FailureEventBridge`'in `catch (NoMatchingSubscriptionException)` dalı **varsayımsaldır** — gerçek davranış Phase 4/5 entegrasyon testiyle (`TEST_SPECIFICATIONS.md` (d)) doğrulanana kadar kodun her iki ihtimali de ele alacak şekilde (sonuç-nesnesi kontrolü + exception yakalama) yazılması **gerekebilir**. Bu, mevcut `[phase3'te doğrulanacak]` kalemin somut kod-etkisidir — Levent onayı gerekmez (zaten devredilmiş test görevi), ama phase5 coder'ın bu belirsizliği görmezden gelmemesi için burada işaretlendi.
+- **LLD-Q2 — `eventReceived` no-match davranışı belirsizliği (§2, HLD §11 kalem 6c): onaylandı 2026-07-15, karar gerekmedi.** Flowable Event Registry'nin `eventReceived(...)` çağrısının eşleşmeyen (geç/korelasyon-key-kayıp) bir event'te exception mi fırlattığı yoksa sessizce no-op mu döndüğü resmi dokümanda doğrulanamadı. `FailureEventBridge`'in `catch (NoMatchingSubscriptionException)` dalı **varsayımsaldır** — gerçek davranış Phase 4/5 entegrasyon testiyle (`TEST_SPECIFICATIONS.md` (d)) doğrulanana kadar kodun her iki ihtimali de ele alacak şekilde (sonuç-nesnesi kontrolü + exception yakalama) yazılması **gerekebilir**. Bu, mevcut `[phase3'te doğrulanacak]` kalemin somut kod-etkisidir. **Levent 2026-07-15'te bu yaklaşımın (varsayımsal dal + test-ile-kapama) kendisini onayladı** — davranışın ne olduğu hakkında ek bir karar alınmadı; `TEST_SPECIFICATIONS.md` (d) phase5'te kapatacak.

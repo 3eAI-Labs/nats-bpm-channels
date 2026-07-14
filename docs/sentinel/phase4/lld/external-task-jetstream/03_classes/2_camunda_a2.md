@@ -53,7 +53,7 @@ public class A2ExternalTaskBehavior extends ExternalTaskActivityBehavior {
 }
 ```
 
-**Sıfır ek DB yazısı kanıtı:** `createAndInsert` entity'yi flush ETMEDEN döner (persistence-context'e `insert` operasyonu kuyruklanır, `ExternalTaskEntity.java:583` `insert()`); `lock(...)` yalnız iki alanı bellek-içi set eder (`:472-474`); flush tek seferde olduğundan tek `INSERT ... (WORKER_ID_, LOCK_EXP_TIME_, ...)` üretilir, ikinci bir `UPDATE` YOK. Bu iddia **guard entegrasyon testiyle** (ADR-0005 §2) doğrulanacak — `TEST_SPECIFICATIONS.md` (a).
+**Sıfır ek DB yazısı kanıtı:** `createAndInsert` entity'yi flush ETMEDEN döner (persistence-context'e `insert` operasyonu kuyruklanır, `ExternalTaskEntity.java:584` `insert()`); `lock(...)` yalnız iki alanı bellek-içi set eder (`:472-474`); flush tek seferde olduğundan tek `INSERT ... (WORKER_ID_, LOCK_EXP_TIME_, ...)` üretilir, ikinci bir `UPDATE` YOK. Bu iddia **guard entegrasyon testiyle** (ADR-0005 §2) doğrulanacak — `TEST_SPECIFICATIONS.md` (a).
 
 ### 1.2 `A2BpmnParseListener`
 
@@ -74,7 +74,8 @@ public class A2BpmnParseListener extends AbstractBpmnParseListener {
             return;   // ne external-task ne zaten-swap edilmiş — dokunma (idempotent re-entry guard)
         }
         // Aynı extension attribute, BpmnParse'ın kullandığı isimle: PROPERTYNAME_EXTERNAL_TASK_TOPIC="topic"
-        // (BpmnParse.java:206,2564). Yalnız LİTERAL (sabit) topic string'i eşleştirilir — bkz. §1.3 not.
+        // (BpmnParse.java:206,2558 — parseExternalServiceTask'in parseTopic(...) çağrı satırı). Yalnız
+        // LİTERAL (sabit) topic string'i eşleştirilir — bkz. §1.3 not.
         String topic = serviceTaskElement.attributeNS(CAMUNDA_BPMN_EXTENSIONS_NS, "topic");
         if (topic == null || !a2Topics.contains(topic)) {
             return;   // klasik external task — davranış DEĞİŞMEZ (BR-A2-012 migration guard, US-A8)
@@ -108,6 +109,8 @@ Camunda Spring Boot Starter, `ProcessEnginePlugin` tipindeki tüm bean'leri otom
 ### 1.3 Kapsam notu — yalnız literal topic (LLD-düzeyi netleştirme, kilitli karara aykırı DEĞİL)
 
 `BpmnParse.parseTopic(...)` (`BpmnParse.java:2468-2478`) topic attribute'unu `createParameterValueProvider(...)` ile çözer — bu, EL-expression topic'leri (`camunda:topic="${myTopicExpr}"`) destekler; expression yalnız **runtime'da** (execution context ile) çözülebilir. A2-topic üyelik testi ise **parse-time'da** (deployment anında) yapılmalı — çünkü behavior-swap kararı parse-time kararıdır. Sonuç: **A2 behavior-swap yalnız `camunda:topic` LİTERAL (sabit string) olan aktivitelerde uygulanabilir**; expression-tabanlı dinamik topic'ler A2'ye alınamaz, klasik external-task poller'da kalır. Bu, BR-A2-012/US-A8'in "A2 olmayan task etkilenmez" ilkesiyle **tutarlıdır** (expression-topic'li aktivite otomatik olarak "A2 olmayan" sınıfına düşer) — kilitli bir kararı değiştirmez, yalnız parse-time/runtime ayrımının doğal sonucudur. **Operasyonel gereksinim:** `spring.nats.camunda.a2.topics[]` listesindeki her girdi, BPMN modelinde birebir literal `camunda:topic` değeriyle eşleşmelidir (dokümantasyon: deployment runbook, `99_deployment.md`).
+
+**PO-kabul (2026-07-15):** Bu kapsam sınırı (yalnız literal topic) phase-review MINOR-2 bulgusu olarak Levent'e sunuldu ve **kabul edildi** — upstream US/SRS notu (phase1) işlendi. Bu LLD metnindeki gerekçe değişmedi, yalnız karar artık **onaylı** durumdadır.
 
 **Bağımlılık:** BR-A2-002/003/012, FR-A2/A3/A13, US-A2/A8, ADR-0005 (impl-sınıf izolasyonu — bu iki sınıf ADR-0005'in "tek adapter sınıfı" ilkesinin somutlaşmasıdır: impl-sınıf dokunuşu (`ExternalTaskEntity`, `TransactionContext`) yalnız `A2ExternalTaskBehavior`'da; `A2BpmnParseListener` yalnız `ActivityImpl`/`Element` public-plugin yüzeyini kullanır).
 
@@ -276,9 +279,32 @@ private void relockThenPublish(ExternalTaskEntity candidate) {
 
 ---
 
-## 4. `A2CompletionBridge` (HLD §2.4 · BR-A2-008/011 · FR-A7/A12 · US-A4/A7 · Matris 2)
+## 4. `A2ConsumerConfig` + `A2CompletionBridge` (HLD §2.4 · BR-A2-008/011 · FR-A7/A12 · US-A4/A7 · Matris 2)
 
-**Evrim kaynağı:** mevcut `JetStreamMessageCorrelationSubscriber` (`camunda-nats-channel/.../inbound/JetStreamMessageCorrelationSubscriber.java`) — `subscribe()`/`unsubscribe()`/backoff/DLQ iskeleti **aynen** taşınır; `handleMessage(...)`'ın gövdesi `correlateWithResult()` yerine `externalTaskService.complete(...)` çağırır.
+### 4.0 `A2ConsumerConfig` (ortak reply/DLQ consumer ayarı — review MINOR-1 düzeltmesi, 2026-07-15)
+
+**Karar:** `A2CompletionBridge` ve `A2IncidentBridge`, mevcut genel-amaçlı `SubscriptionConfig`'i (`camunda-nats-channel/.../inbound/SubscriptionConfig.java:11`, `maxDeliver` default **5**) **KULLANMAZ** — bu, review'un tespit ettiği karışma riskiydi (`08_config.md` §1.5). Bunun yerine A2'ye özgü, ADR-0001/asyncapi ile birebir hizalı yeni bir config sınıfı:
+
+```java
+package com.threeai.nats.camunda.a2;
+
+public class A2ConsumerConfig {
+    private String subject;         // jobs.<topic>.reply (completion) veya dlq.jobs.<topic> (incident)
+    private String messageName;     // metrik/log tag'i (topic adı)
+    private String durableName;
+    private long ackWaitSeconds = 30;    // W — UmbrellaLockResolver'ın topic-override'ıyla hizalı tutulmalı
+    private int maxDeliver = 4;          // M — asyncapi a2JobReply.x-jetstream.maxDeliver=4 ile BİREBİR (ADR-0001 default)
+    private String dlqSubject;           // yalnız A2CompletionBridge kullanır (A2IncidentBridge'in kendisi DLQ hedefi değil, kaynağıdır)
+
+    // getter/setter — mevcut SubscriptionConfig'in alan-adı deseniyle tutarlı (Phase 5 kolaylığı için)
+}
+```
+
+Subscribe çağrısında JetStream consumer'a **`config.getMaxDeliver() + 1`** (= 5) geçilir — mevcut in-band `maxDeliver+1` DLQ-tespit deseninin (`JetStreamMessageCorrelationSubscriber.java:58`) **aynısı**; yalnız iş-kuralı maxDeliver değeri (4) artık `SubscriptionConfig`'in ilgisiz default'undan (5) **yapısal olarak ayrıştırılmıştır**.
+
+**Wiring kuralı (08_config.md §1.1):** Bootstrap, her A2 topic'i için **tek bir** `A2ConsumerConfig` üretir; `ackWaitSeconds`/`maxDeliver` alanları `A2Properties.defaults`/`TopicLockOverride`'dan (yani `UmbrellaLockResolver`'ın L-formülünde kullandığı **aynı** W/M değerlerinden) doldurulur — asla bağımsız olarak elle girilmez. Bu, umbrella-lock formülünün varsaydığı M ile JetStream consumer'a fiilen geçen M'in **her zaman aynı** olmasını garanti eder.
+
+**Evrim kaynağı (A2CompletionBridge):** mevcut `JetStreamMessageCorrelationSubscriber` (`camunda-nats-channel/.../inbound/JetStreamMessageCorrelationSubscriber.java`) — `subscribe()`/`unsubscribe()`/backoff/DLQ iskeleti **aynen** taşınır; `handleMessage(...)`'ın gövdesi `correlateWithResult()` yerine `externalTaskService.complete(...)` çağırır.
 
 ```java
 package com.threeai.nats.camunda.a2;
@@ -287,6 +313,7 @@ public class A2CompletionBridge {
 
     private final ExternalTaskService externalTaskService;
     private final String sentinelWorkerId;
+    private final A2ConsumerConfig config;          // §4.0 — SubscriptionConfig DEĞİL
     private final DlqPublisher dlqPublisher;        // nats-core, §1
     private final NatsChannelMetrics metrics;
 
@@ -366,7 +393,10 @@ public class A2IncidentBridge {
 
     private final ExternalTaskService externalTaskService;
     private final String sentinelWorkerId;
-    private final CircuitBreaker circuitBreaker;   // DlqBridgeCircuitBreakerFactory.create("cb-incident-bridge-camunda", ...)
+    private final A2ConsumerConfig config;         // §4.0 — dlq.jobs.<topic> tüketici ayarı
+    private final CircuitBreaker circuitBreaker;   // DlqBridgeCircuitBreakerFactory.create(
+                                                    //     "cb-incident-bridge-camunda", registry,
+                                                    //     NotFoundException.class)   — MAJOR-1a, bkz. not aşağıda
     private final NatsChannelMetrics metrics;
 
     /** dlq.jobs.<topic>'i tüketen consumer'ın mesaj-işleyicisi. */
@@ -375,6 +405,8 @@ public class A2IncidentBridge {
         try {
             circuitBreaker.executeCallable(() -> {
                 // BAQ-2 kararı: retryDuration SABİT 0 — Cockpit-retry residual-lock gecikmesi olmaz.
+                // NOT (MAJOR-1a): handleFailure burada NotFoundException fırlatırsa CB'nin `ignoreExceptions`
+                // listesi sayesinde bu, CB'nin başarı/başarısızlık sayacına HİÇ yansımaz (nats-core §4.2).
                 externalTaskService.handleFailure(externalTaskId, sentinelWorkerId,
                         "Delivery budget exhausted (deliveryCount > M)", dlqReasonOf(msg),
                         /* retries */ 0, /* retryDuration */ 0L);
@@ -382,6 +414,7 @@ public class A2IncidentBridge {
             });
             msg.ack();   // incident-oluşturma-sonrası-ack
         } catch (NotFoundException alreadyResolved) {
+            // CB sayaçlarını ETKİLEMEDEN buraya düşer (ignoreExceptions) — davranış öncekiyle AYNI: yut+ack.
             log.warn("Task already resolved via another path — idempotent ack", ...);   // RES_EXTERNAL_TASK_NOT_FOUND
             msg.ack();
         } catch (CallNotPermittedException cbOpen) {
@@ -393,6 +426,8 @@ public class A2IncidentBridge {
     }
 }
 ```
+
+**CB benign-exception ayrımı (review MAJOR-1a, 2026-07-15):** `handleFailure(...)`'ın zaten-çözülmüş bir task için fırlattığı `NotFoundException` (`HandleExternalTaskCmd.java:48-50`) downstream-sağlık sinyali DEĞİLDİR (US-A7'nin idempotent-yut yolunun doğal sonucu — bkz. `03_classes/1_nats_core_common.md` §4.2). `ignoreExceptions(NotFoundException.class)` olmadan, art arda birkaç "zaten-çözülmüş" DLQ-redelivery'si downstream tamamen sağlıklıyken bile sahte CB-OPEN üretebilirdi. Bu düzeltme yalnız CB'nin **muhasebesini** değiştirir — `catch (NotFoundException alreadyResolved)` bloğunun davranışı (yut+ack) **değişmeden** kalır.
 
 **`retryDuration=0` sabitleme (BAQ-2 — bu LLD'nin somutlaştırdığı implementasyon kısıtı):** çağrı sitesinde **literal `0L`** — operatör/konfig tarafından override EDİLEMEZ (BR-A2-010'un dayandığı garanti budur: `lockExpirationTime = now + 0 = now` → Cockpit-retry ne zaman verilirse verilsin satır anında fetchable).
 
@@ -406,4 +441,4 @@ public class A2IncidentBridge {
 
 ## 6. Config sınıfları (bootstrap wiring)
 
-`A2Properties` (`spring.nats.camunda.a2.*`), `A2TopicConfig`, `UmbrellaLockResolver` — `08_config.md` §1'de tanımlı (burada TEKRARLANMAZ). `CamundaNatsAutoConfiguration` genişlemesi (yeni `@Bean` tanımları: `a2ProcessEnginePlugin`, `a2PostCommitPublisher`, `a2OrphanSweep`, `a2CompletionBridge`, `a2IncidentBridge`, `sweepLeaderLease`, `dlqPublisher`) — `99_deployment.md` §1.
+`A2Properties` (`spring.nats.camunda.a2.*`), `A2TopicConfig`, `UmbrellaLockResolver` — `08_config.md` §1'de tanımlı (burada TEKRARLANMAZ). `A2ConsumerConfig` — **bu dosyada**, §4.0 (reply/DLQ consumer'a özgü, `SubscriptionConfig`'ten bilinçli olarak ayrı — MINOR-1). `CamundaNatsAutoConfiguration` genişlemesi (yeni `@Bean` tanımları: `a2ProcessEnginePlugin`, `a2PostCommitPublisher`, `a2OrphanSweep`, `a2CompletionBridge`, `a2IncidentBridge`, `sweepLeaderLease`, `dlqPublisher`) — `99_deployment.md` §1.

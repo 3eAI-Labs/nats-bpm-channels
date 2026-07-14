@@ -101,7 +101,7 @@ flowchart TD
     L -->|Evet| N["metrics.nakCount + nakWithBackoff(2^(n-1)s, cap 30s)"]
 ```
 
-**Not:** `[BA-VERIFIED]` bütün akış `JetStreamInboundEventChannelAdapter.java:118-176` (bizzat okundu, bu fazda). `NatsRequestReplyDelegate` (in-tx blocking) bu akıştan **çıkarılır** (US-B1/E1). **BAQ-5 kararı (2026-07-14):** boş mesaj gövdesi artık **5. kontrat açığı** olarak ele alınır — sessiz `log DEBUG + ACK` davranışı kalkar; yeni davranış WARN log + DLQ'ya yönlendirme + ACK (bkz. BR-SUB-007). Aynı düzeltme cadenzaflow `JetStreamMessageCorrelationSubscriber.java:107-114`'teki özdeş desene de uygulanır (A2 tarafı da aynı açığı taşıyordu).
+**Not:** `[BA-VERIFIED]` bütün akış `JetStreamInboundEventChannelAdapter.java:118-176` (bizzat okundu, bu fazda). `NatsRequestReplyDelegate` (in-tx blocking) bu akıştan **çıkarılır** (US-B1/E1). **BAQ-5 kararı (2026-07-14):** boş mesaj gövdesi artık **5. kontrat açığı** olarak ele alınır — sessiz `log DEBUG + ACK` davranışı kalkar; yeni davranış WARN log + DLQ'ya yönlendirme + ACK (bkz. BR-SUB-007). *(LLD rafinesi 2026-07-15, phase4-review NIT-5: ACK **koşulludur** — yalnız DLQ publish başarılıysa; publish başarısızsa nak, asla ack-drop — BR-SUB-002/custody-transfer ile tutarlı.)* Aynı düzeltme cadenzaflow `JetStreamMessageCorrelationSubscriber.java:107-114`'teki özdeş desene de uygulanır (A2 tarafı da aynı açığı taşıyordu).
 
 ### 1.5 Flowable — Katmanlı escalation (US-B3, B4, B5)
 

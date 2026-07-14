@@ -2,7 +2,8 @@
 
 **Sentinel fazı:** Phase 4 — Developer (LLD). **Kaynak:** `docs/sentinel/phase3/HLD.md` §1-§2, `docs/sentinel/phase2/BUSINESS_LOGIC.md` §1 (süreç akışları — bu diyagramlar o akışların **implementasyon-düzeyi** karşılığıdır, phase2 akışlarını değiştirmez, sınıf/metot isimleriyle somutlaştırır).
 **Sınıf bağlaması:** `docs/sentinel/phase4/lld/external-task-jetstream/05_sequences.md`.
-**Doğrulama:** her diyagram `mermaid-cli` (`mmdc`) ile render edildi — 0 sözdizimi hatası (bu fazda koşuldu).
+**Doğrulama:** her diyagram `mermaid-cli` (`mmdc`) ile render edildi — 0 sözdizimi hatası (bu fazda koşuldu; diyagram 6, LLD-Q1 düzeltmesi sonrası yeniden render edildi).
+**Durum:** Onaylı (2026-07-15) — LLD-Q1…3 + review düzeltmeleri işlendi (diyagram 6: motor-başına lease anahtarı).
 
 ---
 
@@ -190,33 +191,33 @@ sequenceDiagram
 
 ---
 
-## 6. `SweepLeaderLease` — leader seçimi ve devri (ADR-0002)
+## 6. `SweepLeaderLease` — leader seçimi ve devri (ADR-0002 + LLD-Q1: motor-başına anahtar)
 
-**Kapsanan:** BR-A2-005, FR-A5, US-A3, ADR-0002.
+**Kapsanan:** BR-A2-005, FR-A5, US-A3, ADR-0002. Aşağıdaki Node 1/Node 2, **aynı motor ailesinin** (ör. Camunda) iki replikasıdır — anahtar `sweep-leader.camunda` bu motor ailesine özeldir (LLD-Q1, 2026-07-15); CadenzaFlow node'ları aynı bucket'ta `sweep-leader.cadenzaflow` anahtarıyla **bağımsız** bir leader-election yürütür (bkz. `03_classes/3_cadenzaflow_a2_mirror.md` §2).
 
 ```mermaid
 sequenceDiagram
-    participant N1 as Node 1 (A2OrphanSweep)
-    participant N2 as Node 2 (A2OrphanSweep)
+    participant N1 as Node 1 (Camunda, A2OrphanSweep)
+    participant N2 as Node 2 (Camunda, A2OrphanSweep)
     participant KV as JetStream KV a2-sweep-leader
 
-    N1->>KV: kv.create("leader","node-1")
+    N1->>KV: kv.create("sweep-leader.camunda","node-1")
     KV-->>N1: OK (rev=1) — Node 1 LİDER
-    N2->>KV: kv.create("leader","node-2")
+    N2->>KV: kv.create("sweep-leader.camunda","node-2")
     KV-->>N2: ErrorKeyExists
-    N2->>KV: kv.get("leader")
+    N2->>KV: kv.get("sweep-leader.camunda")
     KV-->>N2: value="node-1" (ben değilim)
     Note over N2: tryAcquireOrRenew()=false → sweepCycle() atlanır — DB'ye SIFIR okuma
 
     loop her S=120s
-        N1->>KV: kv.update("leader","node-1",lastRevision) [TTL=240s'nin yarısında yenile]
+        N1->>KV: kv.update("sweep-leader.camunda","node-1",lastRevision) [TTL=240s'nin yarısında yenile]
         KV-->>N1: OK — lider kalmaya devam eder
         N1->>N1: sweepCycle() çalışır
     end
 
     Note over N1: Node 1 ÇÖKER — bir sonraki S'de yenileme GELMEZ
     Note over KV: TTL=240s dolar — anahtar düşer
-    N2->>KV: kv.create("leader","node-2") [bir sonraki deneme]
+    N2->>KV: kv.create("sweep-leader.camunda","node-2") [bir sonraki deneme]
     KV-->>N2: OK (yeni rev) — Node 2 artık LİDER
     N2->>N2: sweepCycle() çalışmaya başlar
 ```

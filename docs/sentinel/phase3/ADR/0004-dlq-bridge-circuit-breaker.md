@@ -16,8 +16,11 @@ DLQ-bridge (Camunda/CadenzaFlow incident-bridge; Flowable failure-event bridge) 
 |---|---|---|
 | Ardışık başarısızlık | **5** | CLOSED → **OPEN** |
 | OPEN bekleme | **30s** | OPEN → HALF_OPEN |
-| HALF_OPEN başarı | **3 ardışık** | HALF_OPEN → CLOSED |
-| HALF_OPEN başarısızlık | — | HALF_OPEN → OPEN (30s sayaç sıfırlanır) |
+| HALF_OPEN deneme penceresi | **3 çağrı** (Resilience4j `permittedNumberOfCallsInHalfOpenState`) | pencere sonunda hepsi fail → OPEN; aksi hâlde CLOSED |
+
+> **ERRATA (2026-07-15, phase4-review MAJOR-1b — Levent kararı: kütüphaneye uyarla):** İlk yazım "3 **ardışık** başarı → CLOSED; HALF_OPEN'da herhangi fail → OPEN" idi — Resilience4j'nin doğal semantiği bu değildir ve custom transition kodu yazmak reddedildi (bakım + upgrade kırılganlığı). Kabul edilen davranış: HALF_OPEN penceresinde erken-CLOSED mümkündür; DLQ yolu düşük-riskli olduğundan (SLA yok, mesaj kaybı yok) bedel kabul edilir.
+>
+> **ERRATA-2 (2026-07-15, phase4-review MAJOR-1a):** CB **yalnız downstream-sağlık sinyallerini** sayar — iyi-huylu iş exception'ları (`NotFoundException` = task zaten çözülmüş [`HandleExternalTaskCmd:49-50`]; Flowable no-match) `ignoreExceptions(...)` ile CB-hatası sayılmaz; aksi hâlde redelivery fırtınası sağlıklı downstream'de sahte CB-OPEN üretir. Somut config LLD `1_nats_core_common.md` §4'te.
 
 **İki katman:**
 1. `nakWithDelay` üstel backoff (`2^(n-1)`s, cap 30s) — mevcut adapter deseni; her tekil hata.

@@ -72,6 +72,7 @@ Toplam: **24 user story.**
 - [ ] `SENTINEL` workerId **küme-geneli tek sabittir** (örn. `a2-jetstream-bridge`); payload'da audit için taşınır.
 - [ ] Doğuştan kilitli task, native fetchable-predicate dışındadır → legacy poller onu asla fetch edemez (`ExternalTask.xml:220-222`).
 - [ ] `L` (sentinel lockDuration) topic-başına override edilebilir; default **320s** (bkz. US-A5).
+- [ ] **Kısıt (PO-kabul 2026-07-15, phase4-review MINOR-2):** A2 yalnız **literal** `camunda:topic` değerleri için geçerlidir; `${expression}` topic'ler parse-time çözümlenemediğinden A2'ye alınamaz, **legacy poller'da kalır** (LLD `03_classes/2_camunda_a2.md` §1.3; migrasyon rehberi bu ayrımı belgeler).
 **Dayanak:** `06 §5.4` (D-C), `§9` (D-C kanca noktaları DOĞRULANDI): `ExternalTaskEntity.java:568-588` (createAndInsert kilitsiz doğurur), `:472-474` (lock), `BpmnParse.java:2564`, `ProcessEngineConfigurationImpl.java:687,2189`. REDDEDİLEN: post-commit `lock()`, complete-önü lazy kilit (`06 §5.4`) — yeniden açılmaz.
 **Bağımlılık:** yok (kanca noktası; US-A1/A3'ün temeli).
 

@@ -1,6 +1,7 @@
 # Test Specifications — Devredilen Doğrulamalar + Bench Tasarımı
 
 **Sentinel fazı:** Phase 4 — Developer (LLD). **Kaynak:** `docs/sentinel/phase3/HLD.md` §11 (4 kalem `⏭ phase4/5'te test ile doğrulanacak` olarak işaretlenmiş), ADR-0005 §2 (guard test), BR-OBS-001/002/003.
+**Durum:** Onaylı (2026-07-15) — LLD-Q1…3 + review düzeltmeleri işlendi (bu belgenin içeriği review'dan etkilenmedi; (d)'nin sonucu MAJOR-1a'nın Flowable CB `ignoreExceptions` kararını da kesinleştirecek, bkz. `03_classes/4_flowable.md`).
 Bu belge, phase3'ün devrettiği **4 test görevini** somut test-spesifikasyonuna (sınıf adı, kurulum, adım, assertion, geçme kriteri) çevirir + `nats-bpm-bench` modülünün tam test tasarımını tanımlar. **Kod YAZILMAZ** (Phase 5 kapsamı) — yalnız test **tasarımı**.
 
 ---

@@ -3,6 +3,7 @@
 **Kapsam:** Basamak-1 "External Task / Event-Driven Work Offload over JetStream" — `nats-bpm-channels`.
 **Girdi:** `docs/sentinel/phase3/HLD.md` §2 (bileşen mimarisi), §3 (modül/paket yerleşimi), §9 (izlenebilirlik), §11 (doğrulama kapanışı); `docs/sentinel/phase3/API_CONTRACTS.md` + `api/asyncapi.yaml`; `docs/sentinel/phase2/*`; `docs/sentinel/phase1/*`; 8 ADR (hepsi Kabul).
 **Rol:** Developer (Phase 4 — LLD). HLD onaylı, ADR'ler kilitli; bu belge onları **değiştirmez**, somutlaştırır.
+**Durum:** Onaylı (2026-07-15) — LLD-Q1…3 + review düzeltmeleri işlendi (phase-review KOŞULLU ONAY: 0 BLOCKER, 1 MAJOR, 2 MINOR, 5 NIT — hepsi kapatıldı; tam kayıt `manifest.md` "Open Questions / Drift Log").
 
 ---
 

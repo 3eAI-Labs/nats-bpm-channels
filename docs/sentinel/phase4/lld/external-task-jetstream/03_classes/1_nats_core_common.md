@@ -213,7 +213,9 @@ public class JetStreamKvManager {
 
 **KV bucket:** `a2-sweep-leader` (kebab-case, ADR-0002). Şema: `08_config.md` §2 + `docs/sentinel/phase4/DB_ACCESS_MAP.md` §3.
 
-### 3.2 `SweepLeaderLease`
+### 3.2 `SweepLeaderLease` (motor-başına anahtar — **LLD-Q1 kararı, 2026-07-15**)
+
+**Karar (LLD-Q1, Levent onayı 2026-07-15):** Tek KV bucket (`a2-sweep-leader`) **paylaşılır**, ama her motor ailesi (Camunda / CadenzaFlow) **kendi anahtarı** üzerinden bağımsız lider seçer: `sweep-leader.<engineId>` (ör. `sweep-leader.camunda`, `sweep-leader.cadenzaflow`). Bu, `03_classes/3_cadenzaflow_a2_mirror.md`'de tespit edilen çapraz-motor paylaşım riskini (tek motorun diğerinin orphan'larını görünmez kılması) **yapısal olarak ortadan kaldırır** — iki motor ailesi asla aynı anahtar için yarışmaz.
 
 ```java
 package com.threeai.nats.core.jetstream;
@@ -221,31 +223,40 @@ package com.threeai.nats.core.jetstream;
 public class SweepLeaderLease {
 
     private static final String BUCKET = "a2-sweep-leader";
-    private static final String KEY = "leader";
+    private final String key;      // "sweep-leader." + engineId — motor-ailesi başına AYRI anahtar (LLD-Q1)
+    private final String nodeId;   // bu motor-ailesinin BİR replikasının kimliği (pod/host) — lider-adayı
 
+    /**
+     * @param engineId "camunda" veya "cadenzaflow" (motor-ailesi kimliği — key namespace'i belirler)
+     * @param nodeId   bu replikanın kimliği (ör. pod adı) — lider OLURSA KV değeri budur
+     */
     public SweepLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
-            Connection connection, String nodeId, Duration ttl /* = 2·S, ADR-0002 */) { ... }
+            Connection connection, String engineId, String nodeId, Duration ttl /* = 2·S, ADR-0002 */) {
+        this.key = "sweep-leader." + engineId;
+        this.nodeId = nodeId;
+        // ...
+    }
 
     /** İdempotent — leader ise yeniler, değilse devralmayı dener. Her S saniyede bir çağrılır (bkz. A2OrphanSweep §3.2). */
     public boolean tryAcquireOrRenew() {
         KeyValue kv = jetStream.keyValue(BUCKET);
         try {
-            long rev = kv.create(KEY, nodeId.getBytes(UTF_8));   // hiç yoksa BEN aldım
+            long rev = kv.create(key, nodeId.getBytes(UTF_8));   // hiç yoksa BEN aldım (yalnız KENDİ motor-ailem içinde yarış)
             this.heldRevision = rev;
             return true;
         } catch (JetStreamApiException createFailed) {
-            // key zaten var — mevcut sahibi kontrol et
-            KeyValueEntry entry = kv.get(KEY);
+            // key zaten var — mevcut sahibi kontrol et (aynı motor-ailesinin başka replikası)
+            KeyValueEntry entry = kv.get(key);
             if (entry != null && nodeId.equals(new String(entry.getValue(), UTF_8))) {
                 try {
-                    long rev = kv.update(KEY, nodeId.getBytes(UTF_8), entry.getRevision());  // BEN'im, yenile
+                    long rev = kv.update(key, nodeId.getBytes(UTF_8), entry.getRevision());  // BEN'im, yenile
                     this.heldRevision = rev;
                     return true;
                 } catch (JetStreamApiException renewRace) {
                     return false;   // bir başka node arada devraldı — kaybettik
                 }
             }
-            return false;   // başka node lider
+            return false;   // başka node lider (yalnız aynı motor-ailesinden biri olabilir — key namespace izole)
         }
     }
 
@@ -253,7 +264,9 @@ public class SweepLeaderLease {
 }
 ```
 
-**Zamanlama (ADR-0002):** TTL = `2·S` (240s, S=120s default); `SweepLeaderLease.tryAcquireOrRenew()` A2OrphanSweep'in kendi zamanlayıcısından (`@Scheduled(fixedDelayString = "${a2.sweep.period:120}000")` benzeri) her **S**'de bir çağrılır — yenileme periyodu TTL'nin yarısı olduğundan tek bir kaçırılan yenileme küme genelinde sweep'i durdurmaz (bir sonraki S'de tekrar dener); iki ardışık kaçırılan yenileme (2S = TTL) sonrası lease düşer, başka node devralır.
+**Zamanlama (ADR-0002):** TTL = `2·S` (240s, S=120s default); `SweepLeaderLease.tryAcquireOrRenew()` A2OrphanSweep'in kendi zamanlayıcısından (`@Scheduled(fixedDelayString = "${a2.sweep.period:120}000")` benzeri) her **S**'de bir çağrılır — yenileme periyodu TTL'nin yarısı olduğundan tek bir kaçırılan yenileme küme genelinde sweep'i durdurmaz (bir sonraki S'de tekrar dener); iki ardışık kaçırılan yenileme (2S = TTL) sonrası lease düşer, başka node devralır (**aynı motor-ailesinden** bir node).
+
+**Wiring:** `CamundaNatsAutoConfiguration` kendi `SweepLeaderLease`'ini `engineId="camunda"` ile; `CadenzaFlowNatsAutoConfiguration` `engineId="cadenzaflow"` ile oluşturur — her ikisi de **aynı** `a2-sweep-leader` bucket'ını (`JetStreamKvManager.ensureBucket(...)`, tek çağrı yeterli, idempotent) paylaşır ama farklı anahtar okur/yazar.
 
 **Bağımlılık:** BR-A2-005, FR-A5, US-A3, ADR-0002. `DB_ACCESS_MAP.md` §3 (KV şeması).
 
@@ -268,11 +281,16 @@ package com.threeai.nats.core.resilience;
 
 public class DlqBridgeCircuitBreakerFactory {
 
-    /** ADR-0004 eşikleri: 5 ardışık hata→OPEN, 30s→HALF_OPEN, 3 ardışık başarı→CLOSED.
+    /** ADR-0004 eşikleri: 5 ardışık hata→OPEN, 30s→HALF_OPEN, 3 izinli deneme→CLOSED/OPEN (bkz. §4.2 HALF_OPEN notu).
         Resilience4j count-based sliding window (size=5, minimumNumberOfCalls=5,
         failureRateThreshold=100%) ile "5 ardışık hata" yaklaşık/pratik eşdeğeri sağlanır:
-        pencerede 5 çağrının TAMAMI başarısız olmalı (tek başarı oranı düşürür → OPEN tetiklenmez). */
-    public static CircuitBreaker create(String name, MeterRegistry registry) {
+        pencerede 5 çağrının TAMAMI başarısız olmalı (tek başarı oranı düşürür → OPEN tetiklenmez).
+        @param benignExceptions bu tipteki exception'lar CB'nin başarı/başarısızlık sayacına HİÇ
+               girmez (review MAJOR-1a — bkz. §4.1 gerekçe). Her çağıran kendi "downstream-sağlığı
+               sinyali OLMAYAN" exception tiplerini geçirir (ör. A2IncidentBridge için
+               `NotFoundException.class`). */
+    public static CircuitBreaker create(String name, MeterRegistry registry,
+            Class<? extends Throwable>... benignExceptions) {
         CircuitBreakerConfig config = CircuitBreakerConfig.custom()
                 .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
                 .slidingWindowSize(5)
@@ -281,6 +299,7 @@ public class DlqBridgeCircuitBreakerFactory {
                 .waitDurationInOpenState(Duration.ofSeconds(30))
                 .permittedNumberOfCallsInHalfOpenState(3)
                 .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                .ignoreExceptions(benignExceptions)   // MAJOR-1a — aşağıda §4.1
                 .build();
         CircuitBreakerRegistry cbRegistry = CircuitBreakerRegistry.of(config);
         CircuitBreaker cb = cbRegistry.circuitBreaker(name);
@@ -294,6 +313,22 @@ public class DlqBridgeCircuitBreakerFactory {
     }
 }
 ```
+
+### 4.2 `ignoreExceptions` — benign-exception ayrımı (review MAJOR-1a düzeltmesi, 2026-07-15)
+
+**Sorun:** `handleFailure(...)` (A2IncidentBridge) zaten-çözülmüş bir task'ta `NotFoundException` fırlatır (`HandleExternalTaskCmd.java:48-50` — task `findExternalTaskById`'de bulunamazsa). Bu, **US-A6/BR-A2-009'un idempotent-yut yolunun doğal bir sonucudur** (aynı DLQ mesajı başka bir yoldan zaten resolve edilmiş bir task için redeliver edilebilir) — **downstream'in (Cockpit DB) sağlıksız olduğuna dair bir sinyal DEĞİLDİR**. `circuitBreaker.executeCallable(...)` bu exception'ı `ignoreExceptions` OLMADAN CB'nin kendi başarı/başarısızlık sayacına dahil ederdi → art arda birkaç "zaten-çözülmüş" redelivery, downstream tamamen sağlıklıyken bile **sahte CB-OPEN** üretebilirdi (redelivery fırtınası senaryosu, review'un tespit ettiği MAJOR bulgu).
+
+**Çözüm:** `ignoreExceptions(NotFoundException.class, ...)` — Resilience4j semantiği: bu listedeki bir exception fırlarsa, çağrı CB'nin sayaçlarına (ne başarı ne başarısızlık olarak) **hiç yansımaz**; CB durumu bu çağrıdan **etkilenmeden** kalır. `A2IncidentBridge`'in kendi `catch (NotFoundException alreadyResolved)` bloğu (§`03_classes/2_camunda_a2.md` §5) davranışı **değişmeden** çalışmaya devam eder (yut+ack) — yalnız CB'nin bunu bir "başarısızlık" saymaması sağlanır.
+
+**Çağrı siteleri (güncellenmiş):**
+- `A2IncidentBridge`: `DlqBridgeCircuitBreakerFactory.create("cb-incident-bridge-camunda", registry, NotFoundException.class)`.
+- `FailureEventBridge`: `DlqBridgeCircuitBreakerFactory.create("cb-failure-event-bridge-flowable", registry, /* Flowable no-match exception türü — TEST_SPECIFICATIONS.md (d) netleşince kesinleşir, şimdilik boş */)` — `eventReceived(...)`'ın no-match'te gerçekten bir exception fırlatıp fırlatmadığı henüz doğrulanmadı (§`03_classes/4_flowable.md` §2 LLD-QUESTION); fırlatırsa ve bu da "downstream sağlıksız" anlamına gelmiyorsa (aynı NotFoundException mantığı), o tip buraya eklenir.
+
+### 4.3 HALF_OPEN semantiği — kütüphane davranışına uyarlama (review MAJOR-1b, karar 2026-07-15)
+
+Resilience4j'nin HALF_OPEN durumunda **`permittedNumberOfCallsInHalfOpenState(3)`** ile sınırlı sayıda "deneme" çağrısına izin verilir; bu 3 çağrının sonucu **aynı `failureRateThreshold` (100%)** ile değerlendirilir. Bu, ADR-0004'ün düz-metin ifadesi olan **"3 ardışık başarı → CLOSED"**'den **teknik olarak farklı** olabilir: eşik %100 olduğundan, HALF_OPEN penceresindeki 3 çağrıdan **en az biri başarılı** olursa (örn. 1 başarı + 2 başarısızlık → başarısızlık oranı %66.7 < %100) CB **CLOSED**'a döner — "3 ardışık başarı" kadar katı değildir, **erken-CLOSE mümkündür**.
+
+**Karar (2026-07-15):** Bu davranış **kütüphane semantiğine uyarlanarak kabul edilir** — özel bir "tam olarak 3 ardışık başarı say" mantığı **yazılmaz** (gereksiz karmaşıklık). Gerekçe: DLQ-bridge yolu zaten düşük-riskli/SLA-beklenmeyen bir yoldur (US-A6/B3 — "SLA beklenmez" zaten dokümante); erken-CLOSE'un bedeli, iyileşmekte olan bir downstream'e biraz daha erken normal trafiğin dönmesidir — bu, DLQ semantiğinde kabul edilebilir bir risktir. `08_config.md` §4 bu kararı yansıtır.
 
 **İzolasyon (ADR-0004 "downstream başına"):** her DLQ-bridge kendi `CircuitBreaker` instance'ını ayrı isimle yaratır — `cb-incident-bridge-camunda`, `cb-incident-bridge-cadenzaflow`, `cb-failure-event-bridge-flowable` (bkz. `03_classes/2_camunda_a2.md` §5, `03_classes/4_flowable.md` §2). Bir idiomun downstream'i (Cockpit DB) kesintiye uğrarsa diğerinin (Event Registry) CB'sini etkilemez.
 

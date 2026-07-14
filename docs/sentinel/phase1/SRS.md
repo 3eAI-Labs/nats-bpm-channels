@@ -84,7 +84,7 @@ Bu belge, basamak-1'in — external task acquisition / dispatch'in DB-transactio
 
 **FR-A1** [M] — Sistem, A2-topic'li (`camunda:type="external"`) bir external task oluşturulduğunda, worker'lara **JetStream push** ile teslimat yapmalı; happy-path'te **hiçbir `fetchAndLock` sorgusu koşmamalı**. → US-A1 → `06 §5.1/§5.5`.
 
-**FR-A2** [M] — Sistem, external task satırını **onu oluşturan transaction içinde** custom `ExternalTaskActivityBehavior` ile `createAndInsert` + `lock(SENTINEL, L)` yaparak kilitlemeli; kilit alanları aynı INSERT'e binmeli (ek DB yazısı üretmemeli). → US-A2 → `ExternalTaskEntity.java:568-588,472-474`; `BpmnParse.java:2564`; `ProcessEngineConfigurationImpl.java:687,2189`.
+**FR-A2** [M] — Sistem, external task satırını **onu oluşturan transaction içinde** custom `ExternalTaskActivityBehavior` ile `createAndInsert` + `lock(SENTINEL, L)` yaparak kilitlemeli; kilit alanları aynı INSERT'e binmeli (ek DB yazısı üretmemeli). *Kapsam kısıtı (PO-kabul 2026-07-15): yalnız **literal** `camunda:topic` — `${expression}` topic'ler A2 dışı, legacy poller'da kalır.* → US-A2 → `ExternalTaskEntity.java:568-588,472-474`; `BpmnParse.java:2564`; `ProcessEngineConfigurationImpl.java:687,2189`.
 
 **FR-A3** [M] — `SENTINEL` workerId **küme-geneli tek sabit** olmalı ve audit için payload'da taşınmalı. → US-A2 → `06 §5.4`.
 
