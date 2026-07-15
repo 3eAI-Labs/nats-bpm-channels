@@ -238,11 +238,11 @@ components:
       name: JobSuccessReply
       title: Başarılı iş sonucu
       summary: complete(extTaskId, SENTINEL, vars) tetikler.
-      contentType: application/octet-stream
+      contentType: application/json
       headers:
         $ref: '#/components/schemas/ReplyHeaders'
       payload:
-        $ref: '#/components/schemas/OpaqueBusinessPayload'
+        $ref: '#/components/schemas/JobSuccessPayload'
 
     JobBpmnErrorReply:
       name: JobBpmnErrorReply
@@ -368,10 +368,42 @@ components:
         içeriği yorumlamaz. RESTRICTED/PII varsayılır; masking/minimizasyon kiracıya
         aittir (TENANT_PII_CHECKLIST_TEMPLATE.md).
 
+    ReplyTypeDiscriminator:
+      type: string
+      description: >
+        Sentinel Phase 5.5 QA fix (reply discriminator, Levent kararı 2026-07-15) — ÜÇ reply
+        şemasının HEPSİNDE bulunan zorunlu alan. Eskiden A2ReplyPayloadDecoder Content-Type
+        header'ı + errorCode alanının varlığını sezgisel olarak kullanıyordu (implementation
+        choice, kontrat DEĞİL); bu, TRANSIENT bir reply'ın errorCode-benzeri bir alan
+        taşıması halinde sessizce yanlış sınıflandırmaya yol açabiliyordu. `type` artık tek
+        kaynak-doğruluktur: eksik veya SUCCESS|BPMN_ERROR|TRANSIENT dışında bir değer ->
+        VAL_INVALID_REPLY_TYPE -> DLQ (worker kontrata uymuyor, tahmin edilmez).
+      enum:
+        - SUCCESS
+        - BPMN_ERROR
+        - TRANSIENT
+
+    JobSuccessPayload:
+      type: object
+      description: >
+        Başarılı iş sonucu reply gövdesi. `type` DIŞINDAKİ tüm alanlar kiracı-tanımlıdır
+        (opaque, RESTRICTED/PII) — bu katman içeriği yorumlamaz
+        (A2ReplyPayloadDecoder.variablesOf, gövdenin TAMAMINI natsPayload değişkenine
+        geçirir). contentType `application/json`'a değişti (eskiden octet-stream) — `type`
+        alanını taşıyabilmek için JSON zorunlu.
+      properties:
+        type:
+          $ref: '#/components/schemas/ReplyTypeDiscriminator'
+      required:
+        - type
+      additionalProperties: true
+
     BpmnErrorPayload:
       type: object
       description: BPMN business-error reply gövdesi.
       properties:
+        type:
+          $ref: '#/components/schemas/ReplyTypeDiscriminator'
         errorCode:
           type: string
           description: BPMN error code (handleBpmnError argümanı).
@@ -381,12 +413,20 @@ components:
           type: object
           additionalProperties: true
       required:
+        - type
         - errorCode
 
     TransientFailurePayload:
       type: object
-      description: Transient-failure reply gövdesi (handleFailure).
+      description: >
+        Transient-failure reply gövdesi (handleFailure). NOT: retry-timeout/retry-duration
+        için bir WIRE alanı yoktur (kasıtlı) — motor tarafı artık bunu konfigüre edilebilir
+        yapar (varsayılan 5000ms, `A2ConsumerConfig.retryTimeoutMillis` /
+        `spring.nats.{camunda,cadenzaflow}.a2.defaults.retry-timeout-millis`, item 7a);
+        worker'ın göndereceği bir alan DEĞİLDİR.
       properties:
+        type:
+          $ref: '#/components/schemas/ReplyTypeDiscriminator'
         errorMessage:
           type: string
         errorDetails:
@@ -395,4 +435,5 @@ components:
           type: integer
           description: Kalan retry (informatif; DLQ yolunda bridge retries=0 sabitler — BAQ-2).
       required:
+        - type
         - errorMessage

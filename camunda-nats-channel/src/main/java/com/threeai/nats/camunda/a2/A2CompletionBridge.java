@@ -3,6 +3,7 @@ package com.threeai.nats.camunda.a2;
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -125,9 +126,15 @@ public class A2CompletionBridge {
             }
 
             String externalTaskId = extractExternalTaskId(msg);
-            ReplyType replyType = A2ReplyPayloadDecoder.classify(msg);
+            Optional<ReplyType> replyType = A2ReplyPayloadDecoder.classify(msg);
+            if (replyType.isEmpty()) {
+                // VAL_INVALID_REPLY_TYPE (Sentinel Phase 5.5 QA fix, reply discriminator) — the
+                // mandatory `type` field is missing or not one of SUCCESS|BPMN_ERROR|TRANSIENT.
+                routeToDlqAndDecide(msg, DlqReason.INVALID_REPLY_TYPE);
+                return;
+            }
 
-            switch (replyType) {
+            switch (replyType.get()) {
                 case SUCCESS -> externalTaskService.complete(externalTaskId, sentinelWorkerId,
                         A2ReplyPayloadDecoder.variablesOf(msg));
                 case BPMN_ERROR -> externalTaskService.handleBpmnError(externalTaskId, sentinelWorkerId,
@@ -135,7 +142,7 @@ public class A2CompletionBridge {
                         A2ReplyPayloadDecoder.variablesOf(msg));
                 case TRANSIENT -> externalTaskService.handleFailure(externalTaskId, sentinelWorkerId,
                         A2ReplyPayloadDecoder.errorMessageOf(msg), A2ReplyPayloadDecoder.errorDetailsOf(msg),
-                        A2ReplyPayloadDecoder.retriesOf(msg), A2ReplyPayloadDecoder.retryTimeoutOf(msg));
+                        A2ReplyPayloadDecoder.retriesOf(msg), config.getRetryTimeoutMillis());
             }
             if (metrics != null) {
                 metrics.ackCount(msg.getSubject(), config.getMessageName()).increment();

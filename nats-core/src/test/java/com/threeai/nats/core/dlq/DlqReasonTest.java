@@ -10,5 +10,6 @@ class DlqReasonTest {
     void headerValue_matchesExceptionCode() {
         assertThat(DlqReason.DELIVERY_BUDGET_EXCEEDED.headerValue()).isEqualTo("BUS_REPLY_DELIVERY_BUDGET_EXCEEDED");
         assertThat(DlqReason.EMPTY_MESSAGE_BODY.headerValue()).isEqualTo("VAL_EMPTY_MESSAGE_BODY");
+        assertThat(DlqReason.INVALID_REPLY_TYPE.headerValue()).isEqualTo("VAL_INVALID_REPLY_TYPE");
     }
 }

@@ -2,6 +2,7 @@ package com.threeai.nats.camunda.a2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
@@ -56,7 +57,7 @@ class A2CompletionBridgeTest {
 
     @Test
     void handleReply_success_completesTaskAndAcks() {
-        Message msg = successMessage("task-1", "{\"result\":\"ok\"}", 1);
+        Message msg = successMessage("task-1", "{\"type\":\"SUCCESS\",\"result\":\"ok\"}", 1);
 
         bridge.handleReply(msg);
 
@@ -66,7 +67,8 @@ class A2CompletionBridgeTest {
 
     @Test
     void handleReply_bpmnError_callsHandleBpmnError() {
-        Message msg = jsonMessage("task-2", "{\"errorCode\":\"INSUFFICIENT_FUNDS\",\"errorMessage\":\"no funds\"}", 1);
+        Message msg = jsonMessage("task-2",
+                "{\"type\":\"BPMN_ERROR\",\"errorCode\":\"INSUFFICIENT_FUNDS\",\"errorMessage\":\"no funds\"}", 1);
 
         bridge.handleReply(msg);
 
@@ -77,18 +79,32 @@ class A2CompletionBridgeTest {
 
     @Test
     void handleReply_transient_callsHandleFailure() {
-        Message msg = jsonMessage("task-3", "{\"errorMessage\":\"downstream timeout\",\"errorDetails\":\"stack...\"}", 1);
+        Message msg = jsonMessage("task-3",
+                "{\"type\":\"TRANSIENT\",\"errorMessage\":\"downstream timeout\",\"errorDetails\":\"stack...\"}", 1);
 
         bridge.handleReply(msg);
 
         verify(externalTaskService).handleFailure(eq("task-3"), eq("a2-jetstream-bridge"),
-                eq("downstream timeout"), eq("stack..."), eq(0), anyLong());
+                eq("downstream timeout"), eq("stack..."), eq(0), eq(5000L));
         verify(msg).ack();
+    }
+
+    /** Sentinel Phase 5.5 QA fix: TRANSIENT retry-timeout is now per-topic configurable (item 7a). */
+    @Test
+    void handleReply_transient_usesConfiguredRetryTimeoutMillis() {
+        config.setRetryTimeoutMillis(12_345L);
+        Message msg = jsonMessage("task-3b",
+                "{\"type\":\"TRANSIENT\",\"errorMessage\":\"downstream timeout\",\"errorDetails\":\"stack...\"}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).handleFailure(eq("task-3b"), eq("a2-jetstream-bridge"),
+                eq("downstream timeout"), eq("stack..."), eq(0), eq(12_345L));
     }
 
     @Test
     void handleReply_taskNotFound_idempotentAck() {
-        Message msg = successMessage("task-4", "{}", 1);
+        Message msg = successMessage("task-4", "{\"type\":\"SUCCESS\"}", 1);
         doThrow(new NotFoundException("no such task", null))
                 .when(externalTaskService).complete(any(), any(), anyMap());
 
@@ -99,7 +115,7 @@ class A2CompletionBridgeTest {
 
     @Test
     void handleReply_workerConflict_neitherAcksNorNaks_incrementsMetric() {
-        Message msg = successMessage("task-5", "{}", 1);
+        Message msg = successMessage("task-5", "{\"type\":\"SUCCESS\"}", 1);
         doThrow(new BadUserRequestException("wrong worker", null))
                 .when(externalTaskService).complete(any(), any(), anyMap());
 
@@ -112,7 +128,7 @@ class A2CompletionBridgeTest {
 
     @Test
     void handleReply_transientDbFailure_naks() {
-        Message msg = successMessage("task-6", "{}", 1);
+        Message msg = successMessage("task-6", "{\"type\":\"SUCCESS\"}", 1);
         doThrow(new RuntimeException("db timeout"))
                 .when(externalTaskService).complete(any(), any(), anyMap());
 
@@ -120,6 +136,40 @@ class A2CompletionBridgeTest {
 
         verify(msg).nakWithDelay(any(Duration.class));
         verify(msg, never()).ack();
+    }
+
+    /** Sentinel Phase 5.5 QA fix (reply discriminator, Levent karari 2026-07-15). */
+    @Test
+    void handleReply_missingTypeField_routesToDlqAndAcks() throws Exception {
+        Message msg = successMessage("task-11", "{\"result\":\"ok\"}", 1); // no "type" field
+        JetStream jetStream = mock(JetStream.class);
+        DlqPublisher testDlqPublisher = new DlqPublisher(jetStream, mock(Connection.class), metrics);
+        A2CompletionBridge freshBridge = new A2CompletionBridge(mock(Connection.class), jetStream,
+                externalTaskService, "a2-jetstream-bridge", config, testDlqPublisher, metrics);
+
+        freshBridge.handleReply(msg);
+
+        verify(jetStream).publish(any(io.nats.client.impl.NatsMessage.class));
+        verify(msg).ack();
+        verify(externalTaskService, never()).complete(any(), any(), anyMap());
+        verify(externalTaskService, never()).handleBpmnError(any(), any(), any(), any(), anyMap());
+        verify(externalTaskService, never()).handleFailure(any(), any(), any(), any(), anyInt(), anyLong());
+    }
+
+    /** Sentinel Phase 5.5 QA fix (reply discriminator, Levent karari 2026-07-15). */
+    @Test
+    void handleReply_unknownTypeValue_routesToDlqAndAcks() throws Exception {
+        Message msg = successMessage("task-12", "{\"type\":\"WHO_KNOWS\"}", 1);
+        JetStream jetStream = mock(JetStream.class);
+        DlqPublisher testDlqPublisher = new DlqPublisher(jetStream, mock(Connection.class), metrics);
+        A2CompletionBridge freshBridge = new A2CompletionBridge(mock(Connection.class), jetStream,
+                externalTaskService, "a2-jetstream-bridge", config, testDlqPublisher, metrics);
+
+        freshBridge.handleReply(msg);
+
+        verify(jetStream).publish(any(io.nats.client.impl.NatsMessage.class));
+        verify(msg).ack();
+        verify(externalTaskService, never()).complete(any(), any(), anyMap());
     }
 
     @Test

@@ -19,6 +19,14 @@ public class A2ConsumerConfig {
     private int maxDeliver = 4;
     /** Only used by {@link A2CompletionBridge} — {@link A2IncidentBridge} is the DLQ's target, not source. */
     private String dlqSubject;
+    /**
+     * Residual retry-delay (ms) passed to {@code ExternalTaskService.handleFailure(...)} for
+     * TRANSIENT replies. Sentinel Phase 5.5 QA fix (Levent karari 2026-07-15): was hardcoded
+     * 5000ms in {@code A2ReplyPayloadDecoder} (asyncapi {@code TransientFailurePayload} has no
+     * wire field for it — engine-side config, not a contract field); now configurable per topic,
+     * default unchanged (5000ms).
+     */
+    private long retryTimeoutMillis = 5000;
 
     public String getSubject() {
         return subject;
@@ -66,5 +74,13 @@ public class A2ConsumerConfig {
 
     public void setDlqSubject(String dlqSubject) {
         this.dlqSubject = dlqSubject;
+    }
+
+    public long getRetryTimeoutMillis() {
+        return retryTimeoutMillis;
+    }
+
+    public void setRetryTimeoutMillis(long retryTimeoutMillis) {
+        this.retryTimeoutMillis = retryTimeoutMillis;
     }
 }

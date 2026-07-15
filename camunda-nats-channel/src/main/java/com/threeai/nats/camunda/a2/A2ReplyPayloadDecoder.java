@@ -3,6 +3,7 @@ package com.threeai.nats.camunda.a2;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import io.nats.client.Message;
 
@@ -10,30 +11,37 @@ import io.nats.client.Message;
  * Decodes {@code jobs.<topic>.reply} messages per the asyncapi {@code JobSuccessReply} /
  * {@code JobBpmnErrorReply} / {@code JobTransientFailureReply} schemas.
  *
- * <p><b>CODER-QUESTION (see CODER-QUESTIONS list):</b> the asyncapi contract fixes
- * {@code contentType: application/octet-stream} for {@code JobSuccessReply} and
- * {@code application/json} for BOTH {@code JobBpmnErrorReply} and
- * {@code JobTransientFailureReply} — it does not name an explicit discriminator header between
- * the latter two. This decoder classifies by {@code Content-Type} first (octet-stream/absent =
- * SUCCESS), then, for JSON bodies, by the presence of the {@code errorCode} field (required by
- * {@code BpmnErrorPayload}, absent from {@code TransientFailurePayload}). This is an
- * implementation choice, not an explicitly mandated wire rule — flagged for architect review.
+ * <p><b>Reply discriminator (Sentinel Phase 5.5 QA fix, Levent karari 2026-07-15):</b> the
+ * original errorCode-presence heuristic (classify by {@code Content-Type} first, then by whether
+ * an {@code errorCode} field was present) was an implementation choice, not an explicitly
+ * mandated wire rule — and it silently misclassified any {@code TransientFailurePayload} that
+ * happened to include an {@code errorCode}-shaped field, or any reply missing a body field it
+ * expected. The wire contract now mandates a {@code type: SUCCESS|BPMN_ERROR|TRANSIENT}
+ * discriminator field on EVERY reply payload (asyncapi {@code JobSuccessPayload} /
+ * {@code BpmnErrorPayload} / {@code TransientFailurePayload}, all JSON — {@code JobSuccessReply}'s
+ * {@code contentType} changed from {@code application/octet-stream} to {@code application/json}
+ * to carry it). {@link #classify(Message)} reads ONLY this field; a missing or unrecognized value
+ * returns {@link Optional#empty()}, which {@link A2CompletionBridge} routes to the DLQ as
+ * {@code VAL_INVALID_REPLY_TYPE} ({@code DlqReason#INVALID_REPLY_TYPE}) instead of guessing.
  */
 final class A2ReplyPayloadDecoder {
 
-    private static final String CONTENT_TYPE_HEADER = "Content-Type";
-    private static final String JSON_CONTENT_TYPE = "json";
+    private static final String TYPE_FIELD = "type";
 
     private A2ReplyPayloadDecoder() {
     }
 
-    static ReplyType classify(Message msg) {
-        String contentType = headerValue(msg, CONTENT_TYPE_HEADER);
-        if (contentType == null || !contentType.toLowerCase(java.util.Locale.ROOT).contains(JSON_CONTENT_TYPE)) {
-            return ReplyType.SUCCESS;
+    /** @return the reply's declared type, or {@link Optional#empty()} if missing/unrecognized (routes to DLQ). */
+    static Optional<ReplyType> classify(Message msg) {
+        String typeValue = extractJsonField(bodyAsString(msg), TYPE_FIELD);
+        if (typeValue == null) {
+            return Optional.empty();
         }
-        String body = bodyAsString(msg);
-        return extractJsonField(body, "errorCode") != null ? ReplyType.BPMN_ERROR : ReplyType.TRANSIENT;
+        try {
+            return Optional.of(ReplyType.valueOf(typeValue.trim()));
+        } catch (IllegalArgumentException unknownType) {
+            return Optional.empty();
+        }
     }
 
     /**
@@ -67,20 +75,6 @@ final class A2ReplyPayloadDecoder {
         } catch (NumberFormatException e) {
             return 0;
         }
-    }
-
-    /**
-     * CODER-QUESTION: {@code TransientFailurePayload} (asyncapi) does not define a
-     * retry-timeout/retry-duration field — this repo has no wire signal for it. Defaults to a
-     * fixed 5s residual delay (same order of magnitude as the adapters' own backoff floor)
-     * pending an explicit contract decision.
-     */
-    static long retryTimeoutOf(Message msg) {
-        return 5000L;
-    }
-
-    private static String headerValue(Message msg, String name) {
-        return msg.getHeaders() != null ? msg.getHeaders().getLast(name) : null;
     }
 
     private static String bodyAsString(Message msg) {

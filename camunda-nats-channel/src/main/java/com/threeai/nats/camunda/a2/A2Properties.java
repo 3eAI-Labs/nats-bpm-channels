@@ -82,6 +82,12 @@ public class A2Properties {
         private long epsilonSeconds = 60;
         /** L — {@code null} means derive it (see {@link com.threeai.nats.core.config.UmbrellaLockCalculator}). */
         private Long lockDurationSeconds;
+        /**
+         * Residual retry-delay (ms) for TRANSIENT replies ({@code
+         * ExternalTaskService.handleFailure}). Sentinel Phase 5.5 QA fix (item 7a, Levent karari
+         * 2026-07-15) — was hardcoded 5000ms in {@code A2ReplyPayloadDecoder}; default unchanged.
+         */
+        private long retryTimeoutMillis = 5000;
 
         public long getAckWaitSeconds() {
             return ackWaitSeconds;
@@ -122,6 +128,14 @@ public class A2Properties {
         public void setLockDurationSeconds(Long lockDurationSeconds) {
             this.lockDurationSeconds = lockDurationSeconds;
         }
+
+        public long getRetryTimeoutMillis() {
+            return retryTimeoutMillis;
+        }
+
+        public void setRetryTimeoutMillis(long retryTimeoutMillis) {
+            this.retryTimeoutMillis = retryTimeoutMillis;
+        }
     }
 
     public static class TopicLockOverride {
@@ -131,6 +145,8 @@ public class A2Properties {
         private Integer maxDeliver;
         /** Manual L override ({@code null} = derive). */
         private Long lockDurationSeconds;
+        /** Topic-specific TRANSIENT retry-delay override ({@code null} = use default). */
+        private Long retryTimeoutMillis;
 
         public Long getAckWaitSeconds() {
             return ackWaitSeconds;
@@ -154,6 +170,14 @@ public class A2Properties {
 
         public void setLockDurationSeconds(Long lockDurationSeconds) {
             this.lockDurationSeconds = lockDurationSeconds;
+        }
+
+        public Long getRetryTimeoutMillis() {
+            return retryTimeoutMillis;
+        }
+
+        public void setRetryTimeoutMillis(Long retryTimeoutMillis) {
+            this.retryTimeoutMillis = retryTimeoutMillis;
         }
     }
 }

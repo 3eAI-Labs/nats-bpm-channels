@@ -142,6 +142,8 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
                 ? override.getAckWaitSeconds() : properties.getDefaults().getAckWaitSeconds();
         int maxDeliver = override != null && override.getMaxDeliver() != null
                 ? override.getMaxDeliver() : properties.getDefaults().getMaxDeliver();
+        long retryTimeoutMillis = override != null && override.getRetryTimeoutMillis() != null
+                ? override.getRetryTimeoutMillis() : properties.getDefaults().getRetryTimeoutMillis();
 
         A2ConsumerConfig config = new A2ConsumerConfig();
         config.setSubject(A2_RESERVED_PREFIX + topic + ".reply");
@@ -150,6 +152,7 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         config.setAckWaitSeconds(ackWait);
         config.setMaxDeliver(maxDeliver);
         config.setDlqSubject("dlq." + A2_RESERVED_PREFIX + topic);
+        config.setRetryTimeoutMillis(retryTimeoutMillis);
         return config;
     }
 
