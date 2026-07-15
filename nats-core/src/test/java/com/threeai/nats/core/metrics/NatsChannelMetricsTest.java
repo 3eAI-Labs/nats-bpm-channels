@@ -66,4 +66,49 @@ class NatsChannelMetricsTest {
         assertThat(timer.getId().getTag("subject")).isEqualTo("order.new");
         assertThat(timer.getId().getTag("channel")).isEqualTo("orderChannel");
     }
+
+    @Test
+    void a2Counters_registeredAndIncrementCorrectly() {
+        Counter sweepRepublish = metrics.sweepRepublishCount("order-fulfillment");
+        Counter dlqPublishFailure = metrics.dlqPublishFailureCount("jobs.order-fulfillment.reply", "order-fulfillment");
+        Counter correlationMiss = metrics.failureEventCorrelationMissCount("orderChannel");
+        Counter conflict = metrics.sentinelWorkerConflictCount("order-fulfillment");
+
+        sweepRepublish.increment();
+        dlqPublishFailure.increment();
+        correlationMiss.increment();
+        conflict.increment();
+
+        assertThat(sweepRepublish.count()).isEqualTo(1.0);
+        assertThat(sweepRepublish.getId().getName()).isEqualTo("nats.a2.sweep.republish");
+        assertThat(dlqPublishFailure.count()).isEqualTo(1.0);
+        assertThat(dlqPublishFailure.getId().getName()).isEqualTo("nats.jetstream.dlq.publish.failures");
+        assertThat(correlationMiss.count()).isEqualTo(1.0);
+        assertThat(correlationMiss.getId().getName()).isEqualTo("nats.flowable.failure_event.correlation_miss");
+        assertThat(conflict.count()).isEqualTo(1.0);
+        assertThat(conflict.getId().getName()).isEqualTo("nats.a2.sentinel_worker_conflict");
+    }
+
+    @Test
+    void dispatchLatencyTimer_registeredCorrectly() {
+        Timer timer = metrics.dispatchLatencyTimer("order-fulfillment");
+
+        assertThat(timer.getId().getName()).isEqualTo("nats.a2.dispatch.latency");
+        assertThat(timer.getId().getTag("topic")).isEqualTo("order-fulfillment");
+    }
+
+    @Test
+    void oldestOrphanAgeGauge_reflectsSupplierValue() {
+        java.util.concurrent.atomic.AtomicLong ageSeconds = new java.util.concurrent.atomic.AtomicLong(42);
+
+        metrics.registerOldestOrphanAgeGauge("order-fulfillment", ageSeconds::get);
+
+        io.micrometer.core.instrument.Gauge gauge = registry.find("nats.a2.sweep.oldest_orphan_age_seconds")
+                .tag("topic", "order-fulfillment").gauge();
+        assertThat(gauge).isNotNull();
+        assertThat(gauge.value()).isEqualTo(42.0);
+
+        ageSeconds.set(99);
+        assertThat(gauge.value()).isEqualTo(99.0);
+    }
 }

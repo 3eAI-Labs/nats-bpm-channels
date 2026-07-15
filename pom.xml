@@ -65,6 +65,9 @@
         <jnats.version>2.20.5</jnats.version>
         <testcontainers.version>2.0.4</testcontainers.version>
         <logstash-logback.version>8.0</logstash-logback.version>
+        <resilience4j.version>2.2.0</resilience4j.version>
+        <datasource-proxy.version>1.10</datasource-proxy.version>
+        <h2.version>2.3.232</h2.version>
     </properties>
 
     <dependencyManagement>
@@ -80,6 +83,13 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-bom</artifactId>
+                <version>${resilience4j.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -123,6 +133,17 @@
                 <groupId>com.3eai</groupId>
                 <artifactId>nats-core</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <!-- Guard-test / bench SQL introspection -->
+            <dependency>
+                <groupId>net.ttddyy</groupId>
+                <artifactId>datasource-proxy</artifactId>
+                <version>${datasource-proxy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.h2database</groupId>
+                <artifactId>h2</artifactId>
+                <version>${h2.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

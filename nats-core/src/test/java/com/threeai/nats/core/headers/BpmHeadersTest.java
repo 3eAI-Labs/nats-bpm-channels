@@ -1,7 +1,10 @@
 package com.threeai.nats.core.headers;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import io.nats.client.Message;
 import io.nats.client.impl.Headers;
 import org.junit.jupiter.api.Test;
 
@@ -48,5 +51,37 @@ class BpmHeadersTest {
         assertThat(BpmHeaders.TRACE_ID).isEqualTo("X-Cadenzaflow-Trace-Id");
         assertThat(BpmHeaders.BUSINESS_KEY).isEqualTo("X-Cadenzaflow-Business-Key");
         assertThat(BpmHeaders.IDEMPOTENCY_KEY).isEqualTo("X-Cadenzaflow-Idempotency-Key");
+        assertThat(BpmHeaders.CORRELATION_ID).isEqualTo("X-Cadenzaflow-Correlation-Id");
+        assertThat(BpmHeaders.REPLY_SUBJECT).isEqualTo("X-Cadenzaflow-Reply-Subject");
+        assertThat(BpmHeaders.LEGACY_TRACE_ID).isEqualTo("X-Trace-Id");
+    }
+
+    @Test
+    void extractTraceIdWithFallback_standardHeaderPresent_usesIt() {
+        Headers headers = new Headers();
+        headers.add(BpmHeaders.TRACE_ID, "trace-standard");
+        headers.add(BpmHeaders.LEGACY_TRACE_ID, "trace-legacy");
+        Message msg = mock(Message.class);
+        when(msg.getHeaders()).thenReturn(headers);
+
+        assertThat(BpmHeaders.extractTraceIdWithFallback(msg)).isEqualTo("trace-standard");
+    }
+
+    @Test
+    void extractTraceIdWithFallback_onlyLegacyPresent_fallsBack() {
+        Headers headers = new Headers();
+        headers.add(BpmHeaders.LEGACY_TRACE_ID, "trace-legacy");
+        Message msg = mock(Message.class);
+        when(msg.getHeaders()).thenReturn(headers);
+
+        assertThat(BpmHeaders.extractTraceIdWithFallback(msg)).isEqualTo("trace-legacy");
+    }
+
+    @Test
+    void extractTraceIdWithFallback_neitherPresent_returnsNull() {
+        Message msg = mock(Message.class);
+        when(msg.getHeaders()).thenReturn(new Headers());
+
+        assertThat(BpmHeaders.extractTraceIdWithFallback(msg)).isNull();
     }
 }
