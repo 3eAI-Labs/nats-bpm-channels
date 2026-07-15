@@ -1,8 +1,12 @@
 package org.flowable.eventregistry.spring.nats;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.threeai.nats.core.config.NamespaceValidator;
+import com.threeai.nats.core.dlq.DlqPublisher;
+import com.threeai.nats.core.exception.TopicNamespaceCollisionException;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
@@ -12,6 +16,7 @@ import org.flowable.eventregistry.api.ChannelModelProcessor;
 import org.flowable.eventregistry.api.EventRegistry;
 import org.flowable.eventregistry.api.EventRepositoryService;
 import org.flowable.eventregistry.model.ChannelModel;
+import org.flowable.eventregistry.model.InboundChannelModel;
 import org.flowable.eventregistry.spring.nats.channel.NatsInboundChannelModel;
 import org.flowable.eventregistry.spring.nats.channel.NatsOutboundChannelModel;
 import org.flowable.eventregistry.spring.nats.jetstream.JetStreamInboundEventChannelAdapter;
@@ -27,15 +32,28 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
     private final JetStream jetStream;
     private final JetStreamStreamManager streamManager;
     private final NatsChannelMetrics metrics;
+    private final DlqPublisher dlqPublisher;
     private final Map<String, NatsInboundEventChannelAdapter> coreInboundAdapters = new ConcurrentHashMap<>();
     private final Map<String, JetStreamInboundEventChannelAdapter> jetStreamInboundAdapters = new ConcurrentHashMap<>();
+    /** subject -> model lookup for {@code FailureEventBridge} (LLD 03_classes/4_flowable.md §2.2). */
+    private final Map<String, InboundChannelModel> subjectToModel = new ConcurrentHashMap<>();
 
     public NatsChannelDefinitionProcessor(Connection connection, JetStream jetStream,
-            JetStreamStreamManager streamManager, NatsChannelMetrics metrics) {
+            JetStreamStreamManager streamManager, NatsChannelMetrics metrics, DlqPublisher dlqPublisher) {
         this.connection = connection;
         this.jetStream = jetStream;
         this.streamManager = streamManager;
         this.metrics = metrics;
+        this.dlqPublisher = dlqPublisher;
+    }
+
+    /**
+     * Used by {@code FailureEventBridge} to reconstruct the original inbound channel model from
+     * the {@code X-Cadenzaflow-Dlq-Original-Subject} header of a DLQ message (contract-fix #1
+     * makes this header reliably present).
+     */
+    public Optional<InboundChannelModel> findBySubject(String subject) {
+        return Optional.ofNullable(subjectToModel.get(subject));
     }
 
     @Override
@@ -82,6 +100,9 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
         if (jsAdapter != null) {
             jsAdapter.unsubscribe();
         }
+        if (channelModel instanceof InboundChannelModel inboundChannelModel) {
+            subjectToModel.values().removeIf(m -> m == inboundChannelModel);
+        }
     }
 
     private void registerInbound(NatsInboundChannelModel model, String tenantId,
@@ -116,7 +137,7 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
 
         JetStreamInboundEventChannelAdapter adapter = new JetStreamInboundEventChannelAdapter(
                 connection, jetStream, model.getSubject(), model.getMaxDeliver(),
-                dlqSubject, metrics, model.getKey());
+                dlqSubject, metrics, model.getKey(), dlqPublisher);
 
         model.setInboundEventChannelAdapter(adapter);
         adapter.setInboundChannelModel(model);
@@ -124,6 +145,7 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
         adapter.subscribe();
 
         jetStreamInboundAdapters.put(resolveKey(model, tenantId), adapter);
+        subjectToModel.put(model.getSubject(), model);
     }
 
     private void registerOutbound(NatsOutboundChannelModel model) {
@@ -150,6 +172,13 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
         if (subject == null || subject.isBlank()) {
             throw new FlowableException(
                     "NATS channel '" + channelKey + "': subject is required");
+        }
+        try {
+            NamespaceValidator.assertNotReservedForA2(subject, channelKey);
+        } catch (TopicNamespaceCollisionException e) {
+            // nats-core is engine-neutral and cannot depend on Flowable (see CODER-NOTES);
+            // re-wrap so callers still see the FlowableException surface they expect.
+            throw new FlowableException(e.getMessage(), e);
         }
     }
 

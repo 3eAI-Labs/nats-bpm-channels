@@ -4,6 +4,8 @@ import java.io.IOException;
 
 import com.threeai.nats.core.NatsConnectionFactory;
 import com.threeai.nats.core.NatsProperties;
+import com.threeai.nats.core.config.NatsTransportSecurityGuard;
+import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -11,7 +13,6 @@ import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.flowable.eventregistry.api.EventRegistry;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
-import org.flowable.eventregistry.spring.nats.requestreply.NatsRequestReplyDelegate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -19,7 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Scope;
+import org.springframework.core.env.Environment;
 
 @AutoConfiguration
 @ConditionalOnClass({ Connection.class, EventRegistry.class })
@@ -53,19 +54,25 @@ public class FlowableNatsAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public NatsTransportSecurityGuard natsTransportSecurityGuard(NatsProperties props, Environment environment) {
+        return new NatsTransportSecurityGuard(props, environment);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public DlqPublisher dlqPublisher(JetStream jetStream, Connection connection,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new DlqPublisher(jetStream, connection, metrics);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public NatsChannelDefinitionProcessor natsChannelDefinitionProcessor(
             Connection connection,
             JetStream jetStream,
             JetStreamStreamManager streamManager,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new NatsChannelDefinitionProcessor(connection, jetStream, streamManager, metrics);
-    }
-
-    @Bean
-    @Scope("prototype")
-    public NatsRequestReplyDelegate natsRequestReply(
-            Connection connection,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new NatsRequestReplyDelegate(connection, metrics);
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            DlqPublisher dlqPublisher) {
+        return new NatsChannelDefinitionProcessor(connection, jetStream, streamManager, metrics, dlqPublisher);
     }
 }
