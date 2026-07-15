@@ -1,16 +1,16 @@
 # Release Notes — Basamak-1: External Task / Event-Driven Work Offload over JetStream
 
-**Sentinel fazı:** Phase 6 — Reviewer & DevOps.
-**Branch:** `feature/step1-a2-implementation` (22 commit — 9 Phase 5 implementasyon + 5 Phase 5.5
-QA test/karakterizasyon + 7 QA düzeltme-paketi + 1 doküman/registry düzeltmesi).
-**Tarih:** 2026-07-15.
-**Kök `pom.xml` mevcut sürüm:** `0.1.0-SNAPSHOT` (henüz hiç sürüm yayımlanmamış, 0.x geliştirme).
+**Sentinel fazı:** Phase 6 — Reviewer & DevOps (koşullu onay, koşullar bu turda kapatıldı — §6).
+**Branch:** `feature/step1-a2-implementation` (Phase 6 incelemesindeki 22 commit — 9 Phase 5
+implementasyon + 5 Phase 5.5 QA test/karakterizasyon + 7 QA düzeltme-paketi + 1 doküman/registry
+düzeltmesi — artı bu turun F-1/F-2 düzeltme + sürüm-kesinleştirme commit'leri).
+**Tarih:** 2026-07-15 (Phase 6 inceleme tarihi; sürüm bu tarihte KESİNLEŞTİ).
+**Kök `pom.xml` sürümü:** `0.2.0` (KESİNLEŞTİ — bu turdan önce `0.1.0-SNAPSHOT`, henüz hiç sürüm
+yayımlanmamıştı).
 
 ---
 
-## 1. Sürüm önerisi
-
-**Öneri: `0.2.0`** (build `0.2.0-SNAPSHOT` → merge sonrası etiketle `0.2.0`).
+## 1. Sürüm kararı — `0.2.0` (KESİNLEŞTİ, Levent karari 2026-07-15)
 
 Gerekçe:
 - SemVer §4 pre-1.0 kuralı gereği 0.x serisinde herhangi bir kırıcı değişiklik teknik olarak
@@ -18,15 +18,17 @@ Gerekçe:
   sürüm yayımlamadığından (`0.1.0-SNAPSHOT` hâlâ geliştirme aşamasında) ve bu basamak (1) hem
   büyük bir **yeni özellik seti** (A2 pipeline × 2 motor + FailureEventBridge + bench modülü) hem
   de **kırıcı bir kaldırım** (7 JavaDelegate sınıfı, aşağıya bkz.) içerdiğinden, disiplin gereği
-  **minor sürüm artışı** (`0.1.0` → `0.2.0`) önerilir — kaldırımın görünürlüğünü artırır, semver
-  okuyan tüketiciler için "bu sürümde API yüzeyi değişti" sinyalini taşır.
+  **minor sürüm artışı** (`0.1.0` → `0.2.0`) önerilip kabul edildi — kaldırımın görünürlüğünü
+  artırır, semver okuyan tüketiciler için "bu sürümde API yüzeyi değişti" sinyalini taşır. Tüm
+  6 pom (`root` + 5 modül) `versions:set` ile `0.2.0`'a yükseltildi, tam reactor yeşil.
   - **1.0.0 önerilmedi:** proje kendi yol haritasında ("kademeli strangler omurga", basamak 1-6)
     henüz basamak-1'de; 1.0.0 tipik olarak "kararlı genel kullanım API'si" sinyali taşır — bu,
     basamak-6'ya (native state-core) kadar erken olur.
 - **BREAKING olarak değerlendirme:** JavaDelegate kaldırımı gerçek bir API-yüzeyi kırılımıdır (BPMN
   modelleri `camunda:class="...Delegate"` referansı deploy/execute zamanı başarısız olur, sessiz
   bir uyumluluk katmanı yok). Bu, CHANGELOG'da "Removed — BREAKING" olarak açıkça işaretlendi;
-  migrasyon notu §5'te.
+  migrasyon notu §5'te. Doğrudan kaldırım (deprecation-window'suz) Levent tarafından onaylandı —
+  bkz. §6 Q2.
 
 ---
 
@@ -109,13 +111,15 @@ Bu şartlar karşılanmadan basamak-1 üretimde **güvenle çalışmaz** — dep
   `*AutoConfiguration`).
 - **Bench modülü yalnız nightly/manuel** (`@Tag("bench")`) — ana CI pipeline'ını bloklamaz;
   Docker/Testcontainers olmayan ortamlarda `Assumptions.abort(...)` ile atlanır (build kırılmaz).
-- **`ensureStream`'in dev/test/preflight auto-create yolu her zaman `RetentionPolicy.Limits`
-  kullanır** — asyncapi.yaml'ın `jobs.*`/event-channel subject'leri için deklare ettiği
-  `streamRetention: WorkQueue` hiçbir kod yolunda (nats-core, bench, regresyon testi) fiilen
-  uygulanmaz; bu yalnız dokümantasyonda "prod stream'leri PR'lı YAML ile ayrı provision edilir"
-  notuyla mitigie edilir (bkz. PHASE6_REVIEW.md bulgu F-3). Prod'da gerçek `nats stream add`
-  konfigürasyonunun `WorkQueue` kullandığını **elle doğrulayın** — bu repo'nun kendi kodu bunu
-  garanti etmez.
+- **[KAPANDI 2026-07-15, F-2] `ensureStream`'in `jobs.*` retention default'u artık `WorkQueue`.**
+  Önceki sınır ("her zaman `RetentionPolicy.Limits`") bu turda düzeltildi:
+  `JetStreamStreamManager.ensureStream` artık `jobs.`-prefixed subject'ler için `WorkQueue`,
+  `dlq.`-prefixed ve diğer subject'ler için `Limits` varsayılıyor (bkz. CHANGELOG "Fixed" F-2).
+  **Kalan kapsam-dışı madde (DevOps takibi, basamak-2 planlama girdisi — §6 Q4):**
+  `nats-bpm-bench`'in kendi `BenchEnvironment.ensureStreams()`'i (bu fix'in kapsamındaki
+  `ensureStream` çağrı yolunu KULLANMAZ, kendi `StreamConfiguration`'ını doğrudan `Limits` ile
+  kurar) ve gerçek prod `nats stream add` provisioning'i (PR'lı YAML, bu repo dışı) bu fix'in
+  kapsamı dışındadır — ikisinin de `WorkQueue` kullandığı ayrıca doğrulanmalıdır.
 
 ---
 
@@ -151,18 +155,27 @@ sonucudur; ADR kayıtlarında (docs/06) zaten kilitli bir karardır.
 
 ---
 
-## 6. RELEASE-QUESTIONS (Levent onayına)
+## 6. RELEASE-DECISIONS (Levent karari, 2026-07-15 — eski RELEASE-QUESTIONS'ın karar kaydı)
 
-1. **Sürüm numarası:** `0.2.0` önerisi kabul mü, yoksa farklı bir şema mi tercih edilir?
-2. **JavaDelegate kaldırımının duyuru/geçiş süresi:** hiçbir deprecation-window/uyumluluk katmanı
-   olmadan doğrudan kaldırım kabul mü, yoksa bir sonraki release'e (`0.1.x` içinde deprecated,
-   `0.2.0`'da kaldır gibi) mi ertelenmeli? (Şu anki kod zaten kaldırılmış durumda — bu soru
-   geriye dönük bir "geri al mı" sorusu değil, iletişim/duyuru stratejisi sorusudur.)
-3. **`allow-unsafe-lock-duration` prod'da kapalı default'un** operasyonel runbook'a/on-call
-   eğitimine ne zaman ekleneceği — DevOps takımına devir gerekiyor mu?
-4. **WorkQueue/Limits retention drift'i (§4 son madde):** prod NATS stream provisioning'inin
-   gerçekten `WorkQueue` kullandığının doğrulanması ayrı bir DevOps aksiyon maddesi olarak mı
-   takip edilecek, yoksa bu basamağın kapsamına mı alınacak?
+Aşağıdaki dört madde Phase 6 incelemesinde soru olarak açılmıştı; Levent'in 2026-07-15 kararıyla
+kapatıldı:
+
+1. **Sürüm numarası — KARAR: `0.2.0` kabul edildi.** Farklı bir şema tercih edilmedi. Tüm 6 pom
+   `0.2.0`'a yükseltildi, tam reactor `mvn clean test` ile doğrulandı (§1).
+2. **JavaDelegate kaldırımının duyuru/geçiş süresi — KARAR: doğrudan kaldırım + migrasyon notları
+   yeterli.** Deprecation-window/uyumluluk katmanı eklenmedi; CHANGELOG'daki "Removed — BREAKING"
+   işareti ve bu belgenin §5 migrasyon yolu, duyuru/geçiş ihtiyacını karşılar kabul edildi. Kod
+   zaten kaldırılmış durumdaydı (bu karar bir "geri al" kararı değildir).
+3. **`allow-unsafe-lock-duration` runbook/on-call devri — KARAR: basamak-2 planlama girdisi,
+   DevOps takımına devredildi.** Flag'in prod'da kapalı default'u kod-tarafında zaten zorunlu
+   (§3 madde 3); operasyonel runbook/on-call eğitimi entegrasyonu bu basamağın (1) teslim
+   kapsamında değil, basamak-2 DevOps planlamasına aktarıldı.
+4. **WorkQueue/Limits retention drift'i — KARAR: F-2 kod-tarafı bu turda kapatıldı (§4), kalan
+   DevOps doğrulaması basamak-2 planlama girdisi olarak takip edilecek.** `ensureStream`'in
+   `jobs.*` default'u `WorkQueue`'ya düzeltildi (bu repo'nun kendi auto-create yolu artık asyncapi
+   ile hizalı). Kapsam dışında kalan iki kalem — `nats-bpm-bench`'in kendi `ensureStreams()`'i ve
+   gerçek prod `nats stream add` provisioning'i — DevOps takımına devredildi, basamak-2 planlama
+   girdisi olarak izlenecek.
 
 ---
 

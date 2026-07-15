@@ -15,6 +15,12 @@ bulgu yok; build tam yeşil, 311/311 test geçiyor, mirror bütünlüğü doğru
 taraması temiz. 2 MAJOR bulgu (JSON-parser kırılganlığı, WorkQueue/Limits retention drift) merge'i
 durdurmaz ama üretim öncesi/sonrası hızlı takip gerektirir.
 
+> **[GÜNCELLEME — koşullar karşılandı (2026-07-15)]** Her iki koşul (§8 madde 1 ve 2) merge
+> öncesi bu turda kapatıldı: F-1 (Jackson tabanlı, üst-düzey-yalnız JSON parse) ve F-2
+> (`ensureStream`'in `jobs.*` default'u `WorkQueue`) düzeltildi, sürüm `0.2.0` KESİNLEŞTİ, tam
+> reactor yeşil (323/323 test — 311 taban + bu turun 12 yeni testi). Detay: CHANGELOG.md
+> "Fixed" bölümü, `RELEASE_NOTES.md` §1/§4/§6.
+
 ---
 
 ## 1. Build & Test Doğrulaması
@@ -262,7 +268,7 @@ DI kompozisyon köküdür) — hepsi REVIEWER_GUIDELINE §1/§4 ile uyumlu.
 
 ## 8. Merge Kararı
 
-### **KOŞULLU ONAY**
+### **KOŞULLU ONAY** — koşullar karşılandı (2026-07-15, bkz. §0 güncelleme notu)
 
 **Koşullar** (merge SONRASI hızlı-takip olarak kapatılabilir, merge'i BLOKLAMAZ):
 

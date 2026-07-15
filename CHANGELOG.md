@@ -4,12 +4,14 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
-## [Unreleased] — Basamak-1: External Task / Event-Driven Work Offload over JetStream
+## [0.2.0] — 2026-07-15 — Basamak-1: External Task / Event-Driven Work Offload over JetStream
 
-Sentinel-governed feature branch `feature/step1-a2-implementation` (22 commits: 9 Phase 5
-implementation + 5 Phase 5.5 QA test/characterization + 7 QA fix-package + 1 doc/registry
-correction). Full design trail: `docs/sentinel/phase3/ADR/0001…0008`,
-`docs/sentinel/phase4/lld/external-task-jetstream/`, `docs/sentinel/phase3/api/asyncapi.yaml`.
+Sentinel-governed feature branch `feature/step1-a2-implementation` (9 Phase 5 implementation +
+5 Phase 5.5 QA test/characterization + 7 QA fix-package + 1 doc/registry correction + Phase 6
+conditional-approval follow-up: F-1/F-2 fixes + this release finalization, see Fixed). Full
+design trail: `docs/sentinel/phase3/ADR/0001…0008`,
+`docs/sentinel/phase4/lld/external-task-jetstream/`, `docs/sentinel/phase3/api/asyncapi.yaml`,
+`docs/sentinel/phase6/PHASE6_REVIEW.md`, `docs/sentinel/phase6/RELEASE_NOTES.md`.
 
 ### Added
 
@@ -133,6 +135,26 @@ correction). Full design trail: `docs/sentinel/phase3/ADR/0001…0008`,
   causes the worker's reply to be silently dropped as a duplicate of its own job — masking the
   defect as a "slow worker". Now documented as a `[ZORUNLU]` deployment requirement
   (`99_deployment.md` §2.1) and covered by `JobReplySameStreamDedupRegressionTest`.
+- **F-1 (Phase 6 review, MAJOR) — depth-unaware JSON field extraction for the wire-critical
+  `type` discriminator:** `A2ReplyPayloadDecoder.extractJsonField` was a string search
+  (`json.indexOf("\"type\"")`) that could match a same-named key nested inside an object-valued
+  field (asyncapi permits nested objects via `additionalProperties: true`), letting a payload
+  like `{"data":{"type":"BPMN_ERROR"},"type":"SUCCESS"}` misclassify the reply. Field extraction
+  now parses the body with Jackson and reads only direct children of the root object, so a
+  nested same-named key can never shadow a top-level field. `jackson-databind` — already
+  transitively present via `nats-core -> logstash-logback-encoder` and version-pinned by the
+  root `spring-boot-dependencies` BOM import — is now declared directly in both engine poms.
+  Mirrored byte-for-byte in `camunda-nats-channel` / `cadenzaflow-nats-channel`. Closed 2026-07-15
+  (Phase 6 conditional-approval condition #1).
+- **F-2 (Phase 6 review, MAJOR, pre-existing) — `WorkQueue`/`Limits` retention drift:**
+  `asyncapi.yaml` declares `streamRetention: WorkQueue` for `a2JobDispatch`/`a2JobReply`, but
+  `JetStreamStreamManager.ensureStream`'s dev/test/preflight auto-create path always used
+  `RetentionPolicy.Limits` regardless of subject. `ensureStream` gains a `retentionPolicy`
+  parameter (symmetric to the existing `maxAge` parameter): `jobs.`-prefixed subjects now
+  default to `WorkQueue`, `dlq.`-prefixed subjects keep the existing `Limits`+14-day default, all
+  other subjects keep `Limits`. Production stream provisioning remains a separate ops/PR'lı-YAML
+  concern (`99_deployment.md` §5); this only aligns the repo's own auto-create default with the
+  declared contract. Closed 2026-07-15 (Phase 6 conditional-approval condition #2).
 
 ### Security
 
