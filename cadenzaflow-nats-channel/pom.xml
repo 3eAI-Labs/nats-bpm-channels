@@ -15,6 +15,14 @@
             <groupId>com.3eai</groupId>
             <artifactId>nats-core</artifactId>
         </dependency>
+        <!-- Sentinel Phase 6 follow-up fix F-1 (Levent karari 2026-07-15): A2ReplyPayloadDecoder
+             top-level-only JSON parsing. Already transitively present (via nats-core ->
+             logstash-logback-encoder) and version-pinned by the root spring-boot-dependencies BOM
+             import; declared explicitly here because the decoder now depends on it directly. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
