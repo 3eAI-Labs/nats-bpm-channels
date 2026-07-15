@@ -106,10 +106,13 @@ public class NatsMessageCorrelationSubscriber {
             if (metrics != null) {
                 metrics.consumeCount(config.getSubject(), config.getMessageName()).increment();
             }
+            // DP-1 (NFR-S1, DATA_CLASSIFICATION.md §4): businessKey may carry PII (telco MSISDN
+            // etc.) — never log its VALUE, only whether one was present (Sentinel Phase 5.5 QA
+            // finding, HIGH).
             log.debug("Message correlated successfully",
                     kv("subject", msg.getSubject()),
                     kv("message_name", config.getMessageName()),
-                    kv("business_key", businessKey));
+                    kv("has_business_key", businessKey != null));
 
         } catch (Exception e) {
             log.error("Error correlating message",
