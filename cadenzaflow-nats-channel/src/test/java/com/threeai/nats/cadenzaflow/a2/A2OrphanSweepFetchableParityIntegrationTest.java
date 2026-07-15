@@ -1,4 +1,4 @@
-package com.threeai.nats.camunda.a2;
+package com.threeai.nats.cadenzaflow.a2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -17,13 +17,13 @@ import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.JetStream;
 import io.nats.client.impl.NatsMessage;
-import org.camunda.bpm.engine.ExternalTaskService;
-import org.camunda.bpm.engine.ProcessEngine;
-import org.camunda.bpm.engine.ProcessEngineConfiguration;
-import org.camunda.bpm.engine.RepositoryService;
-import org.camunda.bpm.engine.RuntimeService;
-import org.camunda.bpm.engine.externaltask.ExternalTask;
-import org.camunda.bpm.engine.impl.cfg.ProcessEngineConfigurationImpl;
+import org.cadenzaflow.bpm.engine.ExternalTaskService;
+import org.cadenzaflow.bpm.engine.ProcessEngine;
+import org.cadenzaflow.bpm.engine.ProcessEngineConfiguration;
+import org.cadenzaflow.bpm.engine.RepositoryService;
+import org.cadenzaflow.bpm.engine.RuntimeService;
+import org.cadenzaflow.bpm.engine.externaltask.ExternalTask;
+import org.cadenzaflow.bpm.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,51 +31,21 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * DECISION_MATRIX Matrix 3 (sweep kararı), rows 2/3/4 — {@code A2OrphanSweep}'s
- * "fetchable-parity" predicate (native {@code ExternalTaskManager
- * .selectExternalTasksForTopics(...)}, the SAME query the classic {@code fetchAndLock} poller
- * uses) is a SQL {@code WHERE} clause the coder's Java code never branches on directly — the
- * existing {@code A2OrphanSweepTest} (Mockito-mocked {@code ExternalTaskManager}) can only prove
- * "given this list of candidates, the sweep re-locks and republishes them"; it CANNOT prove the
- * query itself correctly EXCLUDES retries-exhausted / suspended / still-fresh-locked rows, since
- * the mock always returns whatever list a test hands it.
+ * Mirror of {@code camunda-nats-channel}'s {@code A2OrphanSweepFetchableParityIntegrationTest}
+ * (byte-aligned per the two-module mirroring convention) — DECISION_MATRIX Matrix 3 (sweep
+ * kararı), rows 2/3/4. Proves the fetchable-parity predicate ({@code ExternalTaskManager
+ * .selectExternalTasksForTopics(...)}) correctly excludes retries-exhausted / suspended /
+ * still-fresh-locked rows using a REAL embedded cadenzaflow-engine {@code ProcessEngine} (H2),
+ * not a mock that always returns whatever list a test hands it.
  *
- * <p>This test closes that gap with a REAL embedded {@code ProcessEngine} (H2) and REAL
- * {@code ACT_RU_EXT_TASK} rows in all four DECISION_MATRIX Matrix-3 states, then runs
- * {@code A2OrphanSweep.sweepCycle()} against them for real and asserts exactly ONE republish
- * happens — for the genuinely orphaned row only.
- *
- * <p><b>[BLOCKING] Sentinel Phase 5.5 QA finding — FIXED (Sentinel Phase 5, 2026-07-15):</b>
- * running this test against the REAL engine used to reproducibly throw — {@code
- * A2OrphanSweep.fetchFetchableParity()} passed {@code instructions.values()} (a
- * {@code Map.values()} view, runtime type {@code java.util.HashMap$Values}) into Camunda's
- * {@code ExternalTaskManager.selectExternalTasksForTopics(...)}, whose MyBatis mapper
- * ({@code ExternalTask.xml}) evaluates the dynamic-SQL guard
- * {@code parameter.topics.size > 0} via OGNL reflection on the parameter's ACTUAL runtime class.
- * {@code HashMap$Values.size()} is a JDK-internal method the {@code java.base} module does not
- * open to unnamed modules by default (JPMS strong encapsulation, JDK 9+, enforced as a hard
- * denial since JDK 16) — every invocation threw
- * {@code java.lang.reflect.InaccessibleObjectException} unless the JVM is launched with
- * {@code --add-opens java.base/java.util=ALL-UNNAMED}. This project mandates Java 21
- * ({@code pom.xml} {@code java.version=21}); no {@code --add-opens} flag is set anywhere in this
- * repo's build or documented in {@code 99_deployment.md}. Reproduced independently of
- * Camunda/MyBatis (plain {@code HashMap.values()} + reflective {@code size()} call, same
- * exception) to rule out a test-artifact explanation.
- *
- * <p><b>Production impact (pre-fix):</b> {@code A2OrphanSweep.sweepCycle()}'s
- * {@code fetchFetchableParity()} call threw EVERY cycle on a standard JDK 21 launch; the
- * {@code catch (Exception e)} in {@code sweepCycle()} swallowed it as
- * {@code SYS_SWEEP_QUERY_FAILED} (plain ERROR, no CRITICAL/page per {@code ERROR_REGISTRY.md}
- * #13) and the cycle was skipped — meaning the ENTIRE orphan-sweep safety net
- * (ADR-0002/ADR-0003, the mechanism ADR-0001's umbrella-lock formula and NFR-R3's "invisible
- * orphan window &lt;= L" guarantee both depend on) silently never ran, indefinitely, in a
- * default deployment.
- *
- * <p><b>Fix applied:</b> {@code A2OrphanSweep.fetchFetchableParity()} now materializes a plain
- * {@code new java.util.ArrayList<>(instructions.values())} before crossing into the
- * MyBatis/OGNL-reflected engine API — the JPMS-restricted view type never reaches OGNL. This
- * test is re-enabled and is a real regression guard for the DECISION_MATRIX Matrix-3
- * skip-branches (retries-exhausted / suspended / still-fresh-locked rows), not a false positive.
+ * <p><b>[BLOCKING] Sentinel Phase 5.5 QA finding — FIXED (Sentinel Phase 5, 2026-07-15):</b> same
+ * JPMS/OGNL hazard as the camunda-nats-channel module (identical engine fork API,
+ * {@code A2OrphanSweep.fetchFetchableParity()} passed a {@code java.util.HashMap$Values} view
+ * into the MyBatis/OGNL-evaluated {@code selectExternalTasksForTopics} query, which threw
+ * {@code InaccessibleObjectException} on JDK17+/21 without {@code --add-opens
+ * java.base/java.util=ALL-UNNAMED}) — see the camunda-nats-channel test's Javadoc for the full
+ * bytecode-level analysis. Fixed by materializing a plain {@code ArrayList} before crossing into
+ * the engine API; this test is the cadenzaflow-side regression guard.
  */
 class A2OrphanSweepFetchableParityIntegrationTest {
 
@@ -87,7 +57,7 @@ class A2OrphanSweepFetchableParityIntegrationTest {
     @BeforeEach
     void setUp() {
         JdbcDataSource h2 = new JdbcDataSource();
-        h2.setUrl("jdbc:h2:mem:sweep-parity-test-" + System.nanoTime() + ";DB_CLOSE_DELAY=-1");
+        h2.setUrl("jdbc:h2:mem:cadenzaflow-sweep-parity-test-" + System.nanoTime() + ";DB_CLOSE_DELAY=-1");
         h2.setUser("sa");
         h2.setPassword("sa");
         dataSource = h2;

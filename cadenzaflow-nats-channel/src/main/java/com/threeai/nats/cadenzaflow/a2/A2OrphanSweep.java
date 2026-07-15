@@ -4,6 +4,7 @@ import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -87,13 +88,25 @@ public class A2OrphanSweep {
      * {@code ExternalTaskManager} (verified against the compiled 7.24.0 engine) takes only
      * {@code (Collection<TopicFetchInstruction>, int, List<QueryOrderingProperty>)} — the extra
      * argument has been dropped here to compile against the real engine API.
+     *
+     * <p><b>[BLOCKING] Sentinel Phase 5.5 QA fix (2026-07-15):</b> {@code instructions.values()} is
+     * a live {@code Map.values()} view (runtime type {@code java.util.HashMap$Values}) — MyBatis'
+     * OGNL evaluator reflects on that ACTUAL runtime class to resolve the {@code
+     * ExternalTask.xml} dynamic-SQL guard {@code parameter.topics.size > 0}, and {@code
+     * HashMap$Values.size()} is a JDK-internal method JPMS denies reflective access to on
+     * JDK16+/21 (no {@code --add-opens java.base/java.util=ALL-UNNAMED} is configured anywhere in
+     * this repo) — every {@code sweepCycle()} threw {@code InaccessibleObjectException} here,
+     * silently disabling the entire orphan-sweep safety net (ADR-0002/0003). Materializing a
+     * plain {@link ArrayList} before crossing into MyBatis/OGNL-reflected code avoids the
+     * JPMS-restricted view type entirely. Mirrors the camunda-nats-channel fix byte-for-byte
+     * (regression guard there: {@code A2OrphanSweepFetchableParityIntegrationTest}).
      */
     private List<ExternalTaskEntity> fetchFetchableParity() {
         return execute(commandContext -> {
             Map<String, TopicFetchInstruction> instructions = topicConfig.a2Topics().stream()
                     .collect(toMap(identity(), topic -> new TopicFetchInstruction(topic, Integer.MAX_VALUE)));
-            return commandContext.getExternalTaskManager()
-                    .selectExternalTasksForTopics(instructions.values(), Integer.MAX_VALUE, Collections.emptyList());
+            return commandContext.getExternalTaskManager().selectExternalTasksForTopics(
+                    new ArrayList<>(instructions.values()), Integer.MAX_VALUE, Collections.emptyList());
         });
     }
 
