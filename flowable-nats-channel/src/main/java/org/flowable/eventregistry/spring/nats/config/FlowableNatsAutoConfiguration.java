@@ -8,11 +8,14 @@ import com.threeai.nats.core.config.NatsTransportSecurityGuard;
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import com.threeai.nats.core.resilience.DlqBridgeCircuitBreakerFactory;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.flowable.eventregistry.api.EventRegistry;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
+import org.flowable.eventregistry.spring.nats.escalation.FailureEventBridge;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -74,5 +77,17 @@ public class FlowableNatsAutoConfiguration {
             @Autowired(required = false) NatsChannelMetrics metrics,
             DlqPublisher dlqPublisher) {
         return new NatsChannelDefinitionProcessor(connection, jetStream, streamManager, metrics, dlqPublisher);
+    }
+
+    @Bean(initMethod = "subscribe", destroyMethod = "unsubscribe")
+    @ConditionalOnMissingBean
+    public FailureEventBridge failureEventBridge(Connection connection, JetStream jetStream,
+            EventRegistry eventRegistry, NatsChannelDefinitionProcessor channelModelLookup,
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            @Autowired(required = false) MeterRegistry meterRegistry) {
+        CircuitBreaker circuitBreaker = DlqBridgeCircuitBreakerFactory.create(
+                "cb-failure-event-bridge-flowable", meterRegistry);
+        return new FailureEventBridge(connection, jetStream, "dlq.>", eventRegistry, channelModelLookup,
+                circuitBreaker, metrics);
     }
 }
