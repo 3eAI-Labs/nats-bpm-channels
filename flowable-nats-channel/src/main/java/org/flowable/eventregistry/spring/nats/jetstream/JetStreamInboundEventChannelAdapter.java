@@ -7,7 +7,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import com.threeai.nats.core.NatsHeaderUtils;
+import com.threeai.nats.core.dlq.DlqPublishOutcome;
+import com.threeai.nats.core.dlq.DlqPublisher;
+import com.threeai.nats.core.dlq.DlqReason;
+import com.threeai.nats.core.headers.BpmHeaders;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
 import io.nats.client.Dispatcher;
@@ -38,6 +41,7 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
     private final String dlqSubject;
     private final NatsChannelMetrics metrics;
     private final String channelKey;
+    private final DlqPublisher dlqPublisher;
 
     private EventRegistry eventRegistry;
     private InboundChannelModel inboundChannelModel;
@@ -46,7 +50,7 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
 
     public JetStreamInboundEventChannelAdapter(Connection connection, JetStream jetStream,
             String subject, int maxDeliver, String dlqSubject,
-            NatsChannelMetrics metrics, String channelKey) {
+            NatsChannelMetrics metrics, String channelKey, DlqPublisher dlqPublisher) {
         this.connection = connection;
         this.jetStream = jetStream;
         this.subject = subject;
@@ -54,6 +58,7 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
         this.dlqSubject = dlqSubject;
         this.metrics = metrics;
         this.channelKey = channelKey;
+        this.dlqPublisher = dlqPublisher;
     }
 
     @Override
@@ -116,17 +121,17 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
     }
 
     void handleMessage(Message msg) {
-        String traceId = NatsHeaderUtils.extractHeader(msg, "X-Trace-Id");
+        String traceId = BpmHeaders.extractTraceIdWithFallback(msg);
         if (traceId != null) {
             MDC.put("trace_id", traceId);
         }
         try {
             byte[] data = msg.getData();
             if (data == null || data.length == 0) {
-                log.debug("Empty message body, skipping",
+                log.warn("Empty message body — routing to DLQ",
                         kv("channel", channelKey),
                         kv("subject", msg.getSubject()));
-                msg.ack();
+                routeToDlqAndDecide(msg, DlqReason.EMPTY_MESSAGE_BODY);
                 return;
             }
 
@@ -138,11 +143,7 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
                         kv("subject", msg.getSubject()),
                         kv("delivery_count", deliveryCount),
                         kv("max_deliver", maxDeliver));
-                publishToDlq(msg);
-                if (metrics != null) {
-                    metrics.dlqCount(subject, channelKey).increment();
-                }
-                msg.ack();
+                routeToDlqAndDecide(msg, DlqReason.DELIVERY_BUDGET_EXCEEDED);
                 return;
             }
 
@@ -172,6 +173,24 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
             nakWithBackoff(msg);
         } finally {
             MDC.remove("trace_id");
+        }
+    }
+
+    /**
+     * Custody-transfer decision (contract-fix #2, BR-SUB-002): ack only on a successful DLQ
+     * publish (JetStream or core-NATS fallback); nak — never a silent ack-drop — when the DLQ
+     * subject is unconfigured or both publish paths fail.
+     */
+    private void routeToDlqAndDecide(Message msg, DlqReason reason) {
+        DlqPublishOutcome outcome = dlqPublisher.publish(msg, dlqSubject, reason, subject, channelKey);
+        switch (outcome) {
+            case PUBLISHED_JETSTREAM, PUBLISHED_CORE_FALLBACK -> msg.ack();
+            case FAILED_NO_DLQ_SUBJECT, FAILED_BOTH_PUBLISH -> {
+                if (metrics != null) {
+                    metrics.nakCount(subject, channelKey).increment();
+                }
+                msg.nakWithDelay(calculateBackoff(getDeliveryCount(msg)));
+            }
         }
     }
 
@@ -205,34 +224,5 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
         long seconds = (long) Math.pow(2, deliveryCount - 1);
         Duration backoff = Duration.ofSeconds(seconds);
         return backoff.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : backoff;
-    }
-
-    private void publishToDlq(Message msg) {
-        if (dlqSubject == null) {
-            log.warn("DLQ subject not configured, discarding message",
-                    kv("channel", channelKey));
-            return;
-        }
-        byte[] data = msg.getData();
-        try {
-            jetStream.publish(dlqSubject, data);
-            log.info("Message published to DLQ via JetStream",
-                    kv("channel", channelKey),
-                    kv("dlq_subject", dlqSubject));
-        } catch (Exception e) {
-            log.warn("JetStream DLQ publish failed, falling back to core NATS",
-                    kv("channel", channelKey),
-                    kv("dlq_subject", dlqSubject), e);
-            try {
-                connection.publish(dlqSubject, data);
-                log.info("Message published to DLQ via core NATS",
-                        kv("channel", channelKey),
-                        kv("dlq_subject", dlqSubject));
-            } catch (Exception ex) {
-                log.error("DLQ publish failed on both JetStream and core NATS",
-                        kv("channel", channelKey),
-                        kv("dlq_subject", dlqSubject), ex);
-            }
-        }
     }
 }

@@ -62,5 +62,10 @@ class NatsChannelAutoConfigurationTest {
         JetStream natsJetStream() {
             return org.mockito.Mockito.mock(JetStream.class);
         }
+
+        @Bean
+        EventRegistry eventRegistry() {
+            return org.mockito.Mockito.mock(EventRegistry.class);
+        }
     }
 }

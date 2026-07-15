@@ -28,6 +28,7 @@ import io.nats.client.api.StreamConfiguration;
 import org.camunda.bpm.engine.RuntimeService;
 import org.camunda.bpm.engine.runtime.MessageCorrelationBuilder;
 import org.camunda.bpm.engine.runtime.MessageCorrelationResult;
+import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,6 +49,7 @@ class CamundaInboundIntegrationTest {
     private JetStream jetStream;
     private JetStreamManagement jsm;
     private NatsChannelMetrics metrics;
+    private DlqPublisher dlqPublisher;
     private RuntimeService runtimeService;
     private MessageCorrelationBuilder correlationBuilder;
 
@@ -58,6 +60,7 @@ class CamundaInboundIntegrationTest {
         jetStream = connection.jetStream();
         jsm = connection.jetStreamManagement();
         metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        dlqPublisher = new DlqPublisher(jetStream, connection, metrics);
 
         runtimeService = mock(RuntimeService.class);
         correlationBuilder = mock(MessageCorrelationBuilder.class);
@@ -112,7 +115,7 @@ class CamundaInboundIntegrationTest {
 
         JetStreamMessageCorrelationSubscriber subscriber =
                 new JetStreamMessageCorrelationSubscriber(
-                        connection, jetStream, runtimeService, config, metrics);
+                        connection, jetStream, runtimeService, config, metrics, dlqPublisher);
         subscriber.subscribe();
 
         try {
@@ -158,7 +161,7 @@ class CamundaInboundIntegrationTest {
 
         JetStreamMessageCorrelationSubscriber subscriber =
                 new JetStreamMessageCorrelationSubscriber(
-                        connection, jetStream, failingRuntimeService, config, metrics);
+                        connection, jetStream, failingRuntimeService, config, metrics, dlqPublisher);
         subscriber.subscribe();
 
         try {

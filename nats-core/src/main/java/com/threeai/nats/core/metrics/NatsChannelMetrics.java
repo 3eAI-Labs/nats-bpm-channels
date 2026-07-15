@@ -1,6 +1,9 @@
 package com.threeai.nats.core.metrics;
 
+import java.util.function.Supplier;
+
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
@@ -79,5 +82,39 @@ public class NatsChannelMetrics {
     public Counter requestReplyErrorCount(String subject) {
         return Counter.builder("nats.requestreply.errors")
                 .tag("subject", subject).register(registry);
+    }
+
+    // A2 / DLQ-bridge metrics (10_metrics.md §1)
+
+    public Counter sweepRepublishCount(String topic) {
+        return Counter.builder("nats.a2.sweep.republish")
+                .tag("topic", topic).register(registry);
+    }
+
+    public Counter dlqPublishFailureCount(String subject, String channel) {
+        return Counter.builder("nats.jetstream.dlq.publish.failures")
+                .tag("subject", subject).tag("channel", channel).register(registry);
+    }
+
+    public Counter failureEventCorrelationMissCount(String channel) {
+        return Counter.builder("nats.flowable.failure_event.correlation_miss")
+                .tag("channel", channel).register(registry);
+    }
+
+    /** SYS_SENTINEL_WORKER_CONFLICT — metric side of the CRITICAL+page channel (ERROR_REGISTRY.md §4.1). */
+    public Counter sentinelWorkerConflictCount(String topic) {
+        return Counter.builder("nats.a2.sentinel_worker_conflict")
+                .tag("topic", topic).register(registry);
+    }
+
+    public Timer dispatchLatencyTimer(String topic) {
+        return Timer.builder("nats.a2.dispatch.latency")
+                .tag("topic", topic).register(registry);
+    }
+
+    /** Oldest-orphan age gauge, updated by A2OrphanSweep every cycle. */
+    public void registerOldestOrphanAgeGauge(String topic, Supplier<Number> ageSecondsSupplier) {
+        Gauge.builder("nats.a2.sweep.oldest_orphan_age_seconds", ageSecondsSupplier)
+                .tag("topic", topic).register(registry);
     }
 }

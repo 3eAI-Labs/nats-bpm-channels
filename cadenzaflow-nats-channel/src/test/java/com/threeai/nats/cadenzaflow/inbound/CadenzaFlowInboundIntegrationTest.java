@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 
+import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.Connection;
@@ -45,6 +46,7 @@ class CadenzaFlowInboundIntegrationTest {
     private JetStream jetStream;
     private JetStreamManagement jsm;
     private NatsChannelMetrics metrics;
+    private DlqPublisher dlqPublisher;
     private RuntimeService runtimeService;
     private MessageCorrelationBuilder correlationBuilder;
 
@@ -55,6 +57,7 @@ class CadenzaFlowInboundIntegrationTest {
         jetStream = connection.jetStream();
         jsm = connection.jetStreamManagement();
         metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        dlqPublisher = new DlqPublisher(jetStream, connection, metrics);
 
         runtimeService = mock(RuntimeService.class);
         correlationBuilder = mock(MessageCorrelationBuilder.class);
@@ -109,7 +112,7 @@ class CadenzaFlowInboundIntegrationTest {
 
         JetStreamMessageCorrelationSubscriber subscriber =
                 new JetStreamMessageCorrelationSubscriber(
-                        connection, jetStream, runtimeService, config, metrics);
+                        connection, jetStream, runtimeService, config, metrics, dlqPublisher);
         subscriber.subscribe();
 
         try {
@@ -154,7 +157,7 @@ class CadenzaFlowInboundIntegrationTest {
 
         JetStreamMessageCorrelationSubscriber subscriber =
                 new JetStreamMessageCorrelationSubscriber(
-                        connection, jetStream, failingRuntimeService, config, metrics);
+                        connection, jetStream, failingRuntimeService, config, metrics, dlqPublisher);
         subscriber.subscribe();
 
         try {

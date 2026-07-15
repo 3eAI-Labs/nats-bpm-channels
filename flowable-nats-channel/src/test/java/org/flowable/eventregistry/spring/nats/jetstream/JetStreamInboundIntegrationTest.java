@@ -30,6 +30,7 @@ import org.flowable.eventregistry.api.runtime.EventInstance;
 import org.flowable.eventregistry.model.ChannelModel;
 import org.flowable.eventregistry.model.InboundChannelModel;
 import org.flowable.eventregistry.spring.nats.channel.NatsInboundChannelModel;
+import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +51,7 @@ class JetStreamInboundIntegrationTest {
     private JetStream jetStream;
     private JetStreamManagement jsm;
     private NatsChannelMetrics metrics;
+    private DlqPublisher dlqPublisher;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -58,6 +60,7 @@ class JetStreamInboundIntegrationTest {
         jetStream = connection.jetStream();
         jsm = connection.jetStreamManagement();
         metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        dlqPublisher = new DlqPublisher(jetStream, connection, metrics);
     }
 
     @AfterEach
@@ -89,7 +92,7 @@ class JetStreamInboundIntegrationTest {
         };
 
         JetStreamInboundEventChannelAdapter adapter = new JetStreamInboundEventChannelAdapter(
-                connection, jetStream, "test.inbound", 5, "dlq.test.inbound", metrics, "test-inbound");
+                connection, jetStream, "test.inbound", 5, "dlq.test.inbound", metrics, "test-inbound", dlqPublisher);
         adapter.setEventRegistry(registry);
         adapter.setInboundChannelModel(channelModel);
         adapter.subscribe();
@@ -137,7 +140,7 @@ class JetStreamInboundIntegrationTest {
         };
 
         JetStreamInboundEventChannelAdapter adapter = new JetStreamInboundEventChannelAdapter(
-                connection, jetStream, "test.redeliver", 5, null, metrics, "test-redeliver");
+                connection, jetStream, "test.redeliver", 5, null, metrics, "test-redeliver", dlqPublisher);
         adapter.setEventRegistry(registry);
         adapter.setInboundChannelModel(channelModel);
         adapter.subscribe();
@@ -189,7 +192,7 @@ class JetStreamInboundIntegrationTest {
         // Delivery 2: deliveryCount=2, 2>2 false → process → fail → nakWithDelay(2s)
         // Delivery 3: deliveryCount=3, 3>2 true → message routed to DLQ subject
         JetStreamInboundEventChannelAdapter adapter = new JetStreamInboundEventChannelAdapter(
-                connection, jetStream, "test.dlq", 2, "dlq.test.dlq", metrics, "test-dlq");
+                connection, jetStream, "test.dlq", 2, "dlq.test.dlq", metrics, "test-dlq", dlqPublisher);
         adapter.setEventRegistry(registry);
         adapter.setInboundChannelModel(channelModel);
         adapter.subscribe();
