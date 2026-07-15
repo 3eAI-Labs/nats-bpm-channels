@@ -49,5 +49,13 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Sentinel Phase 5.5 (QA), TEST_SPECIFICATIONS.md (d): embedded Flowable ProcessEngine
+             (H2 in-memory) needed to characterize EventRegistry.eventReceived(...) no-match
+             behavior with the REAL BpmnEventRegistryEventConsumer, test-scope only. -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
