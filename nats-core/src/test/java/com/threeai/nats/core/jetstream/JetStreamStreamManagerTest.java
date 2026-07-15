@@ -15,6 +15,7 @@ import java.time.Duration;
 import io.nats.client.Connection;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.JetStreamManagement;
+import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StreamConfiguration;
 import io.nats.client.api.StreamInfo;
 import org.junit.jupiter.api.BeforeEach;
@@ -135,6 +136,93 @@ class JetStreamStreamManagerTest {
 
         assertThatCode(() -> manager.ensureStream("ORDERS", "order.>", connection, Duration.ofDays(7)))
                 .doesNotThrowAnyException();
+
+        verify(jsm, never()).addStream(any(StreamConfiguration.class));
+    }
+
+    /**
+     * Sentinel Phase 6 follow-up fix F-2 (Levent karari 2026-07-15) — {@code jobs.}-prefixed
+     * subjects (asyncapi {@code a2JobDispatch}/{@code a2JobReply}, {@code streamRetention:
+     * WorkQueue}) auto-create with {@link RetentionPolicy#WorkQueue} via the 3-arg convenience
+     * overload, closing the drift between the declared wire contract and this dev/test
+     * auto-create path.
+     */
+    @Test
+    void ensureStream_jobsPrefixedSubject_notFound_createsWithWorkQueueRetention() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("JOBS")).thenThrow(notFound);
+
+        manager.ensureStream("JOBS", "jobs.order-fulfillment", connection);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.WorkQueue);
+    }
+
+    /** {@code jobs.<topic>.reply} is also {@code jobs.}-prefixed and gets the same WorkQueue default. */
+    @Test
+    void ensureStream_jobsReplySubject_notFound_createsWithWorkQueueRetention() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("JOBS-REPLY")).thenThrow(notFound);
+
+        manager.ensureStream("JOBS-REPLY", "jobs.order-fulfillment.reply", connection);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.WorkQueue);
+    }
+
+    /** {@code dlq.}-prefixed subjects keep the pre-existing {@link RetentionPolicy#Limits} default. */
+    @Test
+    void ensureStream_dlqPrefixedSubject_notFound_createsWithLimitsRetention() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("DLQ")).thenThrow(notFound);
+
+        manager.ensureStream("DLQ", "dlq.>", connection);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.Limits);
+    }
+
+    /** Subjects outside both the {@code jobs.} and {@code dlq.} namespaces default to {@link RetentionPolicy#Limits}. */
+    @Test
+    void ensureStream_nonJobsNonDlqSubject_notFound_createsWithLimitsRetention() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("ORDERS")).thenThrow(notFound);
+
+        manager.ensureStream("ORDERS", "order.>", connection);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.Limits);
+    }
+
+    /** Explicit {@code retentionPolicy} argument (5-arg overload) always wins over the subject-based default. */
+    @Test
+    void ensureStream_explicitRetentionPolicy_overridesJobsDefault() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("JOBS")).thenThrow(notFound);
+
+        manager.ensureStream("JOBS", "jobs.order-fulfillment", connection, null, RetentionPolicy.Limits);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.Limits);
+    }
+
+    @Test
+    void ensureStream_fiveArgOverload_alreadyExists_noAction() throws Exception {
+        when(jsm.getStreamInfo("JOBS")).thenReturn(mock(StreamInfo.class));
+
+        assertThatCode(() -> manager.ensureStream("JOBS", "jobs.order-fulfillment", connection,
+                Duration.ofDays(7), RetentionPolicy.WorkQueue))
+                        .doesNotThrowAnyException();
 
         verify(jsm, never()).addStream(any(StreamConfiguration.class));
     }
