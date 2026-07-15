@@ -5,6 +5,8 @@ import static org.mockito.Mockito.mock;
 
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
+import org.camunda.bpm.engine.ExternalTaskService;
+import org.camunda.bpm.engine.ProcessEngine;
 import org.camunda.bpm.engine.RuntimeService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -16,7 +18,9 @@ class CamundaNatsAutoConfigurationTest {
             .withConfiguration(AutoConfigurations.of(CamundaNatsAutoConfiguration.class))
             .withBean(Connection.class, () -> mock(Connection.class))
             .withBean(JetStream.class, () -> mock(JetStream.class))
-            .withBean(RuntimeService.class, () -> mock(RuntimeService.class));
+            .withBean(RuntimeService.class, () -> mock(RuntimeService.class))
+            .withBean(ExternalTaskService.class, () -> mock(ExternalTaskService.class))
+            .withBean(ProcessEngine.class, () -> mock(ProcessEngine.class));
 
     @Test
     void autoConfiguration_registersSubscriptionRegistrar() {
