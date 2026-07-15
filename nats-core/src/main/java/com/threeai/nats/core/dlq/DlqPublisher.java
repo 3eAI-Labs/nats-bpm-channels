@@ -25,6 +25,12 @@ import org.slf4j.LoggerFactory;
  * verbatim, appends DLQ meta-headers, and derives a dedup-safe {@code Nats-Msg-Id} for the DLQ
  * copy — but never acks/naks the original message itself; that custody-transfer decision is
  * returned as a {@link DlqPublishOutcome} for the caller to apply.
+ *
+ * <p><b>Core-NATS fallback dedup (resolved, TEST_SPECIFICATIONS.md (b)):</b>
+ * {@link CoreNatsFallbackDedupTest} empirically confirmed that the JetStream
+ * {@code duplicate_window} also dedups messages published through the {@code connection.publish}
+ * fallback path (not just the JetStream {@code publish} API) — HLD §11 finding #4b is resolved:
+ * no additional safety note is required for {@link DlqPublishOutcome#PUBLISHED_CORE_FALLBACK}.
  */
 public class DlqPublisher {
 
