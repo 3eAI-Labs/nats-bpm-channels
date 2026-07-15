@@ -152,6 +152,55 @@ class A2CompletionBridgeTest {
         verify(externalTaskService, never()).complete(any(), any(), anyMap());
     }
 
+    /**
+     * DECISION_MATRIX Matrix 1.B row 6 (dlqSubject == null -&gt; nak, custody NOT transferred) —
+     * exercised here through {@link A2CompletionBridge#routeToDlqAndDecide}, not just at the
+     * {@code DlqPublisher} unit level (existing {@code DlqPublisherTest} coverage), to prove the
+     * bridge itself correctly turns a {@code FAILED_NO_DLQ_SUBJECT} outcome into a NAK rather than
+     * an ACK.
+     */
+    @Test
+    void handleReply_emptyBody_dlqSubjectMissing_naksInsteadOfAck() {
+        Message msg = successMessage("task-9", "", 1);
+        A2ConsumerConfig noDlqConfig = new A2ConsumerConfig();
+        noDlqConfig.setSubject("jobs.order-fulfillment.reply");
+        noDlqConfig.setMessageName("order-fulfillment");
+        noDlqConfig.setMaxDeliver(4);
+        noDlqConfig.setDlqSubject(null); // misconfiguration under test
+        A2CompletionBridge freshBridge = new A2CompletionBridge(mock(Connection.class), mock(JetStream.class),
+                externalTaskService, "a2-jetstream-bridge", noDlqConfig, dlqPublisher, metrics);
+
+        freshBridge.handleReply(msg);
+
+        verify(msg).nakWithDelay(any(Duration.class));
+        verify(msg, never()).ack();
+    }
+
+    /**
+     * DECISION_MATRIX Matrix 1.B row 7 (DLQ publish fails on BOTH JetStream and core-NATS -&gt;
+     * nak, custody NOT transferred — "dlq-of-dlq YOK"). Same rationale as the test above: proves
+     * the bridge, not just {@code DlqPublisher} in isolation, reacts correctly to
+     * {@code FAILED_BOTH_PUBLISH}.
+     */
+    @Test
+    void handleReply_deliveryBudgetExceeded_dlqPublishFailsOnBothPaths_naksInsteadOfAck() throws Exception {
+        Message msg = successMessage("task-10", "{}", 10); // 10 > maxDeliver(4)
+        JetStream failingJetStream = mock(JetStream.class);
+        Connection failingConnection = mock(Connection.class);
+        when(failingJetStream.publish(any(io.nats.client.impl.NatsMessage.class)))
+                .thenThrow(new java.io.IOException("JS down"));
+        org.mockito.Mockito.doThrow(new RuntimeException("core down"))
+                .when(failingConnection).publish(any(String.class), any(io.nats.client.impl.Headers.class), any(byte[].class));
+        DlqPublisher bothFailDlqPublisher = new DlqPublisher(failingJetStream, failingConnection, metrics);
+        A2CompletionBridge freshBridge = new A2CompletionBridge(mock(Connection.class), failingJetStream,
+                externalTaskService, "a2-jetstream-bridge", config, bothFailDlqPublisher, metrics);
+
+        freshBridge.handleReply(msg);
+
+        verify(msg).nakWithDelay(any(Duration.class));
+        verify(msg, never()).ack();
+    }
+
     private Message successMessage(String externalTaskId, String body, long deliveryCount) {
         Headers headers = new Headers();
         headers.add("Nats-Msg-Id", externalTaskId);
