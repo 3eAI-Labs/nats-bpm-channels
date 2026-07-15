@@ -26,11 +26,16 @@ class CamundaNatsAutoConfigurationTest {
     }
 
     @Test
-    void autoConfiguration_registersPrototypeDelegates() {
+    void autoConfiguration_registersDlqPublisher() {
         runner.run(context -> {
-            assertThat(context).hasSingleBean(com.threeai.nats.camunda.outbound.NatsPublishDelegate.class);
-            assertThat(context).hasSingleBean(com.threeai.nats.camunda.outbound.JetStreamPublishDelegate.class);
-            assertThat(context).hasSingleBean(com.threeai.nats.camunda.outbound.NatsRequestReplyDelegate.class);
+            assertThat(context).hasSingleBean(com.threeai.nats.core.dlq.DlqPublisher.class);
+        });
+    }
+
+    @Test
+    void autoConfiguration_registersTransportSecurityGuard() {
+        runner.run(context -> {
+            assertThat(context).hasSingleBean(com.threeai.nats.core.config.NatsTransportSecurityGuard.class);
         });
     }
 

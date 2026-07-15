@@ -2,11 +2,10 @@ package com.threeai.nats.cadenzaflow.config;
 
 import java.io.IOException;
 
-import com.threeai.nats.cadenzaflow.outbound.JetStreamPublishDelegate;
-import com.threeai.nats.cadenzaflow.outbound.NatsPublishDelegate;
-import com.threeai.nats.cadenzaflow.outbound.NatsRequestReplyDelegate;
 import com.threeai.nats.core.NatsConnectionFactory;
 import com.threeai.nats.core.NatsProperties;
+import com.threeai.nats.core.config.NatsTransportSecurityGuard;
+import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -20,7 +19,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Scope;
+import org.springframework.core.env.Environment;
 
 @AutoConfiguration
 @ConditionalOnClass(org.cadenzaflow.bpm.engine.ProcessEngine.class)
@@ -53,38 +52,28 @@ public class CadenzaFlowNatsAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    public NatsTransportSecurityGuard natsTransportSecurityGuard(NatsProperties props, Environment environment) {
+        return new NatsTransportSecurityGuard(props, environment);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public DlqPublisher dlqPublisher(JetStream jetStream, Connection connection,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new DlqPublisher(jetStream, connection, metrics);
+    }
+
+    @Bean
     public NatsSubscriptionRegistrar natsSubscriptionRegistrar(
             CadenzaFlowNatsProperties properties,
             Connection connection,
             JetStream jetStream,
             JetStreamStreamManager streamManager,
             RuntimeService runtimeService,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            DlqPublisher dlqPublisher) {
         return new NatsSubscriptionRegistrar(
-                properties, connection, jetStream, streamManager, runtimeService, metrics);
-    }
-
-    @Bean
-    @Scope("prototype")
-    public NatsPublishDelegate natsPublishDelegate(
-            Connection connection,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new NatsPublishDelegate(connection, metrics);
-    }
-
-    @Bean
-    @Scope("prototype")
-    public JetStreamPublishDelegate jetStreamPublishDelegate(
-            JetStream jetStream,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new JetStreamPublishDelegate(jetStream, metrics);
-    }
-
-    @Bean
-    @Scope("prototype")
-    public NatsRequestReplyDelegate natsRequestReply(
-            Connection connection,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new NatsRequestReplyDelegate(connection, metrics);
+                properties, connection, jetStream, streamManager, runtimeService, metrics, dlqPublisher);
     }
 }

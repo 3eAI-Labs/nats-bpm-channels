@@ -11,6 +11,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import com.threeai.nats.core.NatsHeaderUtils;
+import com.threeai.nats.core.dlq.DlqPublishOutcome;
+import com.threeai.nats.core.dlq.DlqPublisher;
+import com.threeai.nats.core.dlq.DlqReason;
+import com.threeai.nats.core.headers.BpmHeaders;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
 import io.nats.client.Dispatcher;
@@ -36,17 +40,20 @@ public class JetStreamMessageCorrelationSubscriber {
     private final RuntimeService runtimeService;
     private final SubscriptionConfig config;
     private final NatsChannelMetrics metrics;
+    private final DlqPublisher dlqPublisher;
 
     private Dispatcher dispatcher;
     private ExecutorService executor;
 
     public JetStreamMessageCorrelationSubscriber(Connection connection, JetStream jetStream,
-            RuntimeService runtimeService, SubscriptionConfig config, NatsChannelMetrics metrics) {
+            RuntimeService runtimeService, SubscriptionConfig config, NatsChannelMetrics metrics,
+            DlqPublisher dlqPublisher) {
         this.connection = connection;
         this.jetStream = jetStream;
         this.runtimeService = runtimeService;
         this.config = config;
         this.metrics = metrics;
+        this.dlqPublisher = dlqPublisher;
     }
 
     public void subscribe() {
@@ -99,17 +106,17 @@ public class JetStreamMessageCorrelationSubscriber {
     }
 
     void handleMessage(Message msg) {
-        String traceId = NatsHeaderUtils.extractHeader(msg, "X-Trace-Id");
+        String traceId = BpmHeaders.extractTraceIdWithFallback(msg);
         if (traceId != null) {
             MDC.put("trace_id", traceId);
         }
         try {
             byte[] data = msg.getData();
             if (data == null || data.length == 0) {
-                log.debug("Empty message body, skipping",
+                log.warn("Empty message body — routing to DLQ",
                         kv("subject", msg.getSubject()),
                         kv("message_name", config.getMessageName()));
-                msg.ack();
+                routeToDlqAndDecide(msg, DlqReason.EMPTY_MESSAGE_BODY);
                 return;
             }
 
@@ -120,11 +127,7 @@ public class JetStreamMessageCorrelationSubscriber {
                         kv("message_name", config.getMessageName()),
                         kv("delivery_count", deliveryCount),
                         kv("max_deliver", config.getMaxDeliver()));
-                publishToDlq(msg);
-                if (metrics != null) {
-                    metrics.dlqCount(config.getSubject(), config.getMessageName()).increment();
-                }
-                msg.ack();
+                routeToDlqAndDecide(msg, DlqReason.DELIVERY_BUDGET_EXCEEDED);
                 return;
             }
 
@@ -167,6 +170,25 @@ public class JetStreamMessageCorrelationSubscriber {
         }
     }
 
+    /**
+     * Custody-transfer decision (contract-fix #2, BR-SUB-002): ack only on a successful DLQ
+     * publish; nak — never a silent ack-drop — when the DLQ subject is unconfigured or both
+     * publish paths fail.
+     */
+    private void routeToDlqAndDecide(Message msg, DlqReason reason) {
+        DlqPublishOutcome outcome = dlqPublisher.publish(msg, config.getDlqSubject(), reason,
+                config.getSubject(), config.getMessageName());
+        switch (outcome) {
+            case PUBLISHED_JETSTREAM, PUBLISHED_CORE_FALLBACK -> msg.ack();
+            case FAILED_NO_DLQ_SUBJECT, FAILED_BOTH_PUBLISH -> {
+                if (metrics != null) {
+                    metrics.nakCount(config.getSubject(), config.getMessageName()).increment();
+                }
+                msg.nakWithDelay(calculateBackoff(getDeliveryCount(msg)));
+            }
+        }
+    }
+
     private long getDeliveryCount(Message msg) {
         try {
             NatsJetStreamMetaData metaData = msg.metaData();
@@ -197,35 +219,6 @@ public class JetStreamMessageCorrelationSubscriber {
         long seconds = (long) Math.pow(2, deliveryCount - 1);
         Duration backoff = Duration.ofSeconds(seconds);
         return backoff.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : backoff;
-    }
-
-    private void publishToDlq(Message msg) {
-        if (config.getDlqSubject() == null) {
-            log.warn("DLQ subject not configured, discarding message",
-                    kv("subject", config.getSubject()));
-            return;
-        }
-        byte[] data = msg.getData();
-        try {
-            jetStream.publish(config.getDlqSubject(), data);
-            log.info("Message published to DLQ via JetStream",
-                    kv("subject", config.getSubject()),
-                    kv("dlq_subject", config.getDlqSubject()));
-        } catch (Exception e) {
-            log.warn("JetStream DLQ publish failed, falling back to core NATS",
-                    kv("subject", config.getSubject()),
-                    kv("dlq_subject", config.getDlqSubject()), e);
-            try {
-                connection.publish(config.getDlqSubject(), data);
-                log.info("Message published to DLQ via core NATS",
-                        kv("subject", config.getSubject()),
-                        kv("dlq_subject", config.getDlqSubject()));
-            } catch (Exception ex) {
-                log.error("DLQ publish failed on both JetStream and core NATS",
-                        kv("subject", config.getSubject()),
-                        kv("dlq_subject", config.getDlqSubject()), ex);
-            }
-        }
     }
 
     private String resolveBusinessKey(Message msg, String payload) {

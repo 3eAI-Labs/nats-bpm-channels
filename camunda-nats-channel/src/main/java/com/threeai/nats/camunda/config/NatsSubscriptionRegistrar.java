@@ -8,6 +8,7 @@ import java.util.List;
 import com.threeai.nats.camunda.inbound.JetStreamMessageCorrelationSubscriber;
 import com.threeai.nats.camunda.inbound.NatsMessageCorrelationSubscriber;
 import com.threeai.nats.camunda.inbound.SubscriptionConfig;
+import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
@@ -28,6 +29,7 @@ public class NatsSubscriptionRegistrar implements
     private final JetStreamStreamManager streamManager;
     private final RuntimeService runtimeService;
     private final NatsChannelMetrics metrics;
+    private final DlqPublisher dlqPublisher;
 
     private final List<NatsMessageCorrelationSubscriber> coreSubscribers = new ArrayList<>();
     private final List<JetStreamMessageCorrelationSubscriber> jsSubscribers = new ArrayList<>();
@@ -35,13 +37,14 @@ public class NatsSubscriptionRegistrar implements
     public NatsSubscriptionRegistrar(CamundaNatsProperties properties,
             Connection connection, JetStream jetStream,
             JetStreamStreamManager streamManager,
-            RuntimeService runtimeService, NatsChannelMetrics metrics) {
+            RuntimeService runtimeService, NatsChannelMetrics metrics, DlqPublisher dlqPublisher) {
         this.properties = properties;
         this.connection = connection;
         this.jetStream = jetStream;
         this.streamManager = streamManager;
         this.runtimeService = runtimeService;
         this.metrics = metrics;
+        this.dlqPublisher = dlqPublisher;
     }
 
     @Override
@@ -53,7 +56,7 @@ public class NatsSubscriptionRegistrar implements
                 }
                 JetStreamMessageCorrelationSubscriber subscriber =
                         new JetStreamMessageCorrelationSubscriber(
-                                connection, jetStream, runtimeService, config, metrics);
+                                connection, jetStream, runtimeService, config, metrics, dlqPublisher);
                 subscriber.subscribe();
                 jsSubscribers.add(subscriber);
                 log.info("Registered JetStream Camunda subscription",
