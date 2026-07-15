@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.flowable.eventregistry.api.EventRegistry;
+import org.flowable.eventregistry.impl.EventRegistryEngineConfiguration;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
 import org.flowable.eventregistry.spring.nats.escalation.FailureEventBridge;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -84,10 +85,17 @@ public class FlowableNatsAutoConfiguration {
     public FailureEventBridge failureEventBridge(Connection connection, JetStream jetStream,
             EventRegistry eventRegistry, NatsChannelDefinitionProcessor channelModelLookup,
             @Autowired(required = false) NatsChannelMetrics metrics,
-            @Autowired(required = false) MeterRegistry meterRegistry) {
+            @Autowired(required = false) MeterRegistry meterRegistry,
+            @Autowired(required = false) EventRegistryEngineConfiguration eventRegistryEngineConfiguration) {
+        // CB benign-exception clarification (review MAJOR-1a placeholder, resolved 2026-07-15 by
+        // Sentinel Phase 5.5 QA test (d) / EventReceivedNoMatchBehaviorTest): eventReceived(...)
+        // does NOT throw on "no waiting subscription" — it returns silently, so there is no
+        // benign-but-not-downstream-health exception type analogous to A2IncidentBridge's
+        // NotFoundException (03_classes/1_nats_core_common.md §4.2) for THIS bridge.
+        // ignoreExceptions(...) intentionally stays empty — not an oversight.
         CircuitBreaker circuitBreaker = DlqBridgeCircuitBreakerFactory.create(
                 "cb-failure-event-bridge-flowable", meterRegistry);
         return new FailureEventBridge(connection, jetStream, "dlq.>", eventRegistry, channelModelLookup,
-                circuitBreaker, metrics);
+                circuitBreaker, metrics, eventRegistryEngineConfiguration);
     }
 }

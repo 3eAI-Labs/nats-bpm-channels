@@ -22,6 +22,7 @@ import io.nats.client.api.ConsumerConfiguration;
 import io.nats.client.impl.NatsJetStreamMetaData;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.eventregistry.api.EventRegistry;
+import org.flowable.eventregistry.impl.EventRegistryEngineConfiguration;
 import org.flowable.eventregistry.model.InboundChannelModel;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
 import org.flowable.eventregistry.spring.nats.NatsInboundEvent;
@@ -40,6 +41,16 @@ import org.slf4j.LoggerFactory;
  * routing itself: it subscribes to the whole {@code dlq.>} wildcard and skips (acks without
  * processing) any message whose {@code X-Cadenzaflow-Dlq-Original-Subject} starts with
  * {@code jobs.} — those belong to {@code A2IncidentBridge} in the Camunda/CadenzaFlow modules.
+ *
+ * <p><b>Sentinel Phase 5.5 QA fix (HIGH, 2026-07-15):</b> {@code
+ * EventReceivedNoMatchBehaviorTest} proved {@code eventRegistry.eventReceived(...)} does NOT
+ * throw {@link FlowableException} on "no waiting subscription" — it returns silently. The real
+ * trigger for {@code RES_FAILURE_EVENT_CORRELATION_MISS} is now {@link
+ * FailureEventCorrelationMissConsumer}, registered onto the host's {@link
+ * EventRegistryEngineConfiguration} in {@link #subscribe()} via the {@code
+ * EventRegistryNonMatchingEventConsumer} SPI. The {@code catch (FlowableException noMatch)}
+ * branch below is kept purely as defensive fallback (e.g. a future Flowable version, or a
+ * pipeline component that legitimately throws it) — it is not expected to fire in practice.
  */
 public class FailureEventBridge {
 
@@ -54,13 +65,16 @@ public class FailureEventBridge {
     private final NatsChannelDefinitionProcessor channelModelLookup;
     private final CircuitBreaker circuitBreaker;
     private final NatsChannelMetrics metrics;
+    private final EventRegistryEngineConfiguration eventRegistryEngineConfiguration;
+    private final FailureEventCorrelationMissConsumer correlationMissConsumer;
 
     private Dispatcher dispatcher;
     private ExecutorService executor;
 
     public FailureEventBridge(Connection connection, JetStream jetStream, String dlqWildcardSubject,
             EventRegistry eventRegistry, NatsChannelDefinitionProcessor channelModelLookup,
-            CircuitBreaker circuitBreaker, NatsChannelMetrics metrics) {
+            CircuitBreaker circuitBreaker, NatsChannelMetrics metrics,
+            EventRegistryEngineConfiguration eventRegistryEngineConfiguration) {
         this.connection = connection;
         this.jetStream = jetStream;
         this.dlqWildcardSubject = dlqWildcardSubject;
@@ -68,11 +82,14 @@ public class FailureEventBridge {
         this.channelModelLookup = channelModelLookup;
         this.circuitBreaker = circuitBreaker;
         this.metrics = metrics;
+        this.eventRegistryEngineConfiguration = eventRegistryEngineConfiguration;
+        this.correlationMissConsumer = new FailureEventCorrelationMissConsumer(metrics);
     }
 
     public void subscribe() {
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.dispatcher = connection.createDispatcher();
+        registerCorrelationMissConsumer();
         try {
             ConsumerConfiguration cc = ConsumerConfiguration.builder()
                     .ackWait(Duration.ofSeconds(30))
@@ -85,6 +102,23 @@ public class FailureEventBridge {
             log.error("Failed to subscribe to FailureEventBridge DLQ subject", kv("subject", dlqWildcardSubject), e);
             throw new FlowableException("Failed to subscribe to JetStream subject '" + dlqWildcardSubject + "'", e);
         }
+    }
+
+    /**
+     * Registers {@link #correlationMissConsumer} as the engine-wide {@code
+     * EventRegistryNonMatchingEventConsumer} — this IS the RES_FAILURE_EVENT_CORRELATION_MISS
+     * trigger point (see class Javadoc). {@code eventRegistryEngineConfiguration} may be absent
+     * if the host application does not expose it as a Spring bean; degrade with a startup WARN
+     * rather than failing bootstrap (the bridge still functions, it simply cannot observe misses).
+     */
+    private void registerCorrelationMissConsumer() {
+        if (eventRegistryEngineConfiguration == null) {
+            log.warn("EventRegistryEngineConfiguration bean not available — "
+                    + "RES_FAILURE_EVENT_CORRELATION_MISS will not be triggered by real no-match "
+                    + "events (EventRegistryNonMatchingEventConsumer SPI not registered)");
+            return;
+        }
+        eventRegistryEngineConfiguration.setNonMatchingEventConsumer(correlationMissConsumer);
     }
 
     public void unsubscribe() {
@@ -128,7 +162,14 @@ public class FailureEventBridge {
             circuitBreaker.executeCallable(() -> {
                 // BR-FLW-003: same correlation keys (BpmHeaders already verbatim on the DLQ copy, Fix#1).
                 NatsInboundEvent failureEvent = new NatsInboundEvent(dlqMsg);
-                eventRegistry.eventReceived(model.get(), failureEvent);
+                // Thread-hand-off for FailureEventCorrelationMissConsumer (see class Javadoc) —
+                // eventReceived(...) dispatches to the SPI synchronously on this same thread.
+                correlationMissConsumer.bindChannelKeyForCurrentThread(model.get().getKey());
+                try {
+                    eventRegistry.eventReceived(model.get(), failureEvent);
+                } finally {
+                    correlationMissConsumer.clearChannelKeyForCurrentThread();
+                }
                 return null;
             });
             if (metrics != null) {
@@ -140,10 +181,13 @@ public class FailureEventBridge {
             dlqMsg.nakWithDelay(calculateBackoff(deliveryCountOf(dlqMsg))); // CB OPEN — fail-fast
 
         } catch (FlowableException noMatch) {
-            // CODER-QUESTION: whether eventReceived actually throws FlowableException (or a
-            // subtype) on no-match, or instead returns silently, is unresolved pending
-            // TEST_SPECIFICATIONS.md (d) — see class Javadoc. BAQ-8: treat as benign single-event
-            // race — WARN + metric, not ERROR; ack (the message itself was handled).
+            // RESOLVED (TEST_SPECIFICATIONS.md (d) / EventReceivedNoMatchBehaviorTest, Sentinel
+            // Phase 5.5): eventReceived(...) does NOT throw FlowableException on no-match — it
+            // returns silently. This branch is DEFENSIVE ONLY (kept for a hypothetical future
+            // Flowable version, or a pipeline component that legitimately throws it); the real
+            // no-match trigger is FailureEventCorrelationMissConsumer (registered in subscribe()).
+            // BAQ-8: if this branch ever does fire, treat it the same way — benign single-event
+            // race, WARN + metric, not ERROR; ack (the message itself was handled).
             log.warn("FailureEventBridge: no waiting subscription for failure-event — "
                             + "instance likely already resolved via another path",
                     kv("original_subject", originalSubject));

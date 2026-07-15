@@ -1,6 +1,7 @@
 package org.flowable.eventregistry.spring.nats.escalation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -23,6 +24,7 @@ import io.nats.client.impl.Headers;
 import io.nats.client.impl.NatsJetStreamMetaData;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.eventregistry.api.EventRegistry;
+import org.flowable.eventregistry.impl.EventRegistryEngineConfiguration;
 import org.flowable.eventregistry.model.InboundChannelModel;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
 import org.flowable.eventregistry.spring.nats.NatsInboundEvent;
@@ -35,6 +37,7 @@ class FailureEventBridgeTest {
     private NatsChannelDefinitionProcessor channelModelLookup;
     private NatsChannelMetrics metrics;
     private CircuitBreaker circuitBreaker;
+    private EventRegistryEngineConfiguration eventRegistryEngineConfiguration;
     private FailureEventBridge bridge;
     private InboundChannelModel channelModel;
 
@@ -44,13 +47,39 @@ class FailureEventBridgeTest {
         channelModelLookup = mock(NatsChannelDefinitionProcessor.class);
         metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
         circuitBreaker = DlqBridgeCircuitBreakerFactory.create("cb-failure-event-bridge-flowable-test", null);
+        eventRegistryEngineConfiguration = mock(EventRegistryEngineConfiguration.class);
 
         channelModel = new InboundChannelModel();
         channelModel.setKey("orderChannel");
         when(channelModelLookup.findBySubject("order.new")).thenReturn(Optional.of(channelModel));
 
         bridge = new FailureEventBridge(mock(Connection.class), mock(JetStream.class), "dlq.>",
-                eventRegistry, channelModelLookup, circuitBreaker, metrics);
+                eventRegistry, channelModelLookup, circuitBreaker, metrics, eventRegistryEngineConfiguration);
+    }
+
+    @Test
+    void subscribe_registersCorrelationMissConsumerOnEngineConfiguration() {
+        Connection connection = mock(Connection.class);
+        when(connection.createDispatcher()).thenReturn(mock(io.nats.client.Dispatcher.class));
+        JetStream jetStream = mock(JetStream.class);
+        FailureEventBridge subscribingBridge = new FailureEventBridge(connection, jetStream, "dlq.>",
+                eventRegistry, channelModelLookup, circuitBreaker, metrics, eventRegistryEngineConfiguration);
+
+        subscribingBridge.subscribe();
+
+        verify(eventRegistryEngineConfiguration).setNonMatchingEventConsumer(
+                any(FailureEventCorrelationMissConsumer.class));
+    }
+
+    @Test
+    void subscribe_engineConfigurationAbsent_doesNotThrow() {
+        Connection connection = mock(Connection.class);
+        when(connection.createDispatcher()).thenReturn(mock(io.nats.client.Dispatcher.class));
+        JetStream jetStream = mock(JetStream.class);
+        FailureEventBridge subscribingBridge = new FailureEventBridge(connection, jetStream, "dlq.>",
+                eventRegistry, channelModelLookup, circuitBreaker, metrics, null);
+
+        assertThatCode(subscribingBridge::subscribe).doesNotThrowAnyException();
     }
 
     @Test
