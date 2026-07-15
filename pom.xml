@@ -18,6 +18,7 @@
         <module>flowable-nats-channel</module>
         <module>camunda-nats-channel</module>
         <module>cadenzaflow-nats-channel</module>
+        <module>nats-bpm-bench</module>
     </modules>
 
     <licenses>
