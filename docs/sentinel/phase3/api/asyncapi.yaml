@@ -231,7 +231,7 @@ components:
       headers:
         $ref: '#/components/schemas/BpmHeadersWithDedup'
       payload:
-        $ref: '#/components/schemas/OpaqueBusinessPayload'
+        $ref: '#/components/schemas/A2JobRequestPayload'
       x-data-classification: RESTRICTED/PII (kiracı-tanımlı process değişkenleri)
 
     JobSuccessReply:
@@ -367,6 +367,37 @@ components:
         Kiracı-tanımlı iş verisi (process değişkenleri) — keyfi bytes/JSON. Bu katman
         içeriği yorumlamaz. RESTRICTED/PII varsayılır; masking/minimizasyon kiracıya
         aittir (TENANT_PII_CHECKLIST_TEMPLATE.md).
+
+    A2JobRequestPayload:
+      type: object
+      description: >
+        jobs.<topic> gövdesinin somut şekli (A2JobMessageFactory.build) — sabit kimlik
+        alanları + opsiyonel `variables`. `variables` YALNIZ topic için variableAllowlist
+        konfigüre edilmişse VE en az bir izinli değişken execution'da mevcutsa eklenir
+        (default: alan hiç YOK — mevcut identity-envelope korunur, PII opt-in). Allowlist'te
+        adı geçip execution'da bulunmayan değişkenler atlanır (hata değil). Sentinel Phase
+        5.5 QA fix (item 5, Levent kararı 2026-07-15) — değişken yakalama execute() sırasında
+        (tx içi, DB okuma serbest) olur; post-commit publish yolu DB-sorgusuz kalır (BR-A2-004).
+      properties:
+        externalTaskId:
+          type: string
+          description: Motor surrogate id (INTERNAL, dedup anahtarı ile aynı — Nats-Msg-Id).
+        topic:
+          type: string
+          description: A2 external-task topic adı (PUBLIC).
+        businessKey:
+          type: string
+          description: İş kimliği (CONFIDENTIAL/koşullu PII — DP-1/DP-8; boş string = yok).
+        variables:
+          type: object
+          additionalProperties: true
+          description: >
+            topic-başına variableAllowlist'teki process değişkenleri (RESTRICTED/PII,
+            kiracı opt-in, default BOŞ/alan-yok).
+      required:
+        - externalTaskId
+        - topic
+        - businessKey
 
     ReplyTypeDiscriminator:
       type: string

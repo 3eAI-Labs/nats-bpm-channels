@@ -23,6 +23,15 @@ public class A2Properties {
     private Map<String, TopicLockOverride> topicOverrides = new HashMap<>();
     /** BAQ-3 escape-flag. */
     private boolean allowUnsafeLockDuration = false;
+    /**
+     * Sentinel Phase 5.5 QA fix (item 5, Levent karari 2026-07-15) — per-topic allowlist of
+     * process-variable names captured IN-TX at {@code A2ExternalTaskBehavior.execute()} time
+     * (DB read is allowed there; the post-commit publish path itself stays DB-query-free per
+     * BR-A2-004) and added to the job payload's {@code variables} object. Default is EMPTY for
+     * every topic — the existing identity-only envelope (externalTaskId/topic/businessKey) is
+     * preserved unless a topic explicitly opts in (PII minimization by default).
+     */
+    private Map<String, List<String>> variableAllowlist = new HashMap<>();
 
     public String getSentinelWorkerId() {
         return sentinelWorkerId;
@@ -62,6 +71,14 @@ public class A2Properties {
 
     public void setAllowUnsafeLockDuration(boolean allowUnsafeLockDuration) {
         this.allowUnsafeLockDuration = allowUnsafeLockDuration;
+    }
+
+    public Map<String, List<String>> getVariableAllowlist() {
+        return variableAllowlist;
+    }
+
+    public void setVariableAllowlist(Map<String, List<String>> variableAllowlist) {
+        this.variableAllowlist = variableAllowlist;
     }
 
     public static class UmbrellaLockDefaults {

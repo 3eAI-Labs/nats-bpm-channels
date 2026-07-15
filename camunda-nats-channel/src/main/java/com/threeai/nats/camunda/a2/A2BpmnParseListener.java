@@ -55,6 +55,7 @@ public class A2BpmnParseListener extends AbstractBpmnParseListener {
         activity.setActivityBehavior(new A2ExternalTaskBehavior(
                 new ConstantValueProvider(topic),
                 nativeBehavior.getPriorityValueProvider(),
-                sentinelWorkerId, lockDurationMillis, publisher));
+                sentinelWorkerId, lockDurationMillis, publisher,
+                topicConfig.variableAllowlistFor(topic)));
     }
 }

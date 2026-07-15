@@ -2,6 +2,8 @@ package com.threeai.nats.cadenzaflow.a2;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
+import java.util.Map;
+
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.Timer;
 import io.nats.client.JetStream;
@@ -17,7 +19,10 @@ import org.slf4j.LoggerFactory;
  * a slow/unavailable JetStream broker can never hold the engine DB transaction open.
  *
  * <p><b>DB-query-free guarantee:</b> takes the entity the creating node already holds in memory
- * — no {@code findExternalTaskById}/query call (BR-A2-004 condition 1).
+ * — no {@code findExternalTaskById}/query call (BR-A2-004 condition 1). The optional {@code
+ * capturedVariables} map (Sentinel Phase 5.5 QA fix, item 5) is likewise already-resolved — it
+ * was captured IN-TX by {@link A2ExternalTaskBehavior#execute}, so accepting it here adds no DB
+ * access of its own.
  */
 public class A2PostCommitPublisher {
 
@@ -33,7 +38,17 @@ public class A2PostCommitPublisher {
         this.lockValidator = lockValidator;
     }
 
+    /**
+     * Convenience overload — no captured variables (identity-only envelope). {@link
+     * A2OrphanSweep}'s cold re-publish path calls {@link A2JobMessageFactory} directly, not this
+     * publisher, so it is unaffected either way (documented gap: sweep re-publish does not carry
+     * captured variables — see {@link A2JobMessageFactory} class Javadoc).
+     */
     public void publish(ExternalTaskEntity task) {
+        publish(task, Map.of());
+    }
+
+    public void publish(ExternalTaskEntity task, Map<String, Object> capturedVariables) {
         if (lockValidator.isUnsafe(task.getTopicName())) {
             // BAQ-3 "warn every cycle, never silently once" (08_config.md §1.4.1).
             log.warn("Topic running with unsafe umbrella-lock duration (L < floor) — "
@@ -43,7 +58,7 @@ public class A2PostCommitPublisher {
         String subject = "jobs." + task.getTopicName();
         Timer.Sample dispatchSample = metrics != null ? Timer.start() : null;
         try {
-            NatsMessage msg = A2JobMessageFactory.build(task);
+            NatsMessage msg = A2JobMessageFactory.build(task, capturedVariables);
             jetStream.publish(msg); // Nats-Msg-Id dedup (BR-SUB-005)
             if (metrics != null) {
                 metrics.jsPublishCount(subject, task.getTopicName()).increment();

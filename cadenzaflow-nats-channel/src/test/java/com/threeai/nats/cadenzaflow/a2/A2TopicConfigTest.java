@@ -36,4 +36,26 @@ class A2TopicConfigTest {
 
         assertThat(config.a2Topics()).isEmpty();
     }
+
+    /** Sentinel Phase 5.5 QA fix (item 5) — default variableAllowlist is empty for any topic. */
+    @Test
+    void variableAllowlistFor_unconfiguredTopic_returnsEmptyList() {
+        A2Properties properties = new A2Properties();
+        properties.setTopics(List.of("order-fulfillment"));
+        A2TopicConfig config = new A2TopicConfig(properties);
+
+        assertThat(config.variableAllowlistFor("order-fulfillment")).isEmpty();
+        assertThat(config.variableAllowlistFor("never-configured")).isEmpty();
+    }
+
+    @Test
+    void variableAllowlistFor_configuredTopic_returnsConfiguredNames() {
+        A2Properties properties = new A2Properties();
+        properties.setTopics(List.of("payment-capture"));
+        properties.setVariableAllowlist(java.util.Map.of(
+                "payment-capture", List.of("amount", "currency")));
+        A2TopicConfig config = new A2TopicConfig(properties);
+
+        assertThat(config.variableAllowlistFor("payment-capture")).containsExactly("amount", "currency");
+    }
 }
