@@ -1,0 +1,62 @@
+# Sentinel guideline manifest — nats-bpm-channels, basamak-2 (History Offload)
+# Oluşturulma: 2026-07-16 (basamak-2 Sentinel phase1 açılışı).
+# Taban: docs/sentinel/phase1/GUIDELINES_MANIFEST.yaml (basamak-1) — BESPOKE şema aynen devralındı.
+# Sonraki tüm basamak-2 faz-review'ları bu manifest'i yükler.
+project: nats-bpm-channels
+scope: basamak-2-history-offload
+system_tier: carrier-grade-backend   # telco BPM messaging + history projeksiyon katmanı; UI'sız (headless)
+                                     # NOT: basamak-2 minimal history sorgu-API'si getirir (read-only),
+                                     #      ama merkezi Admin-UI değildir (bkz. SRS §4.7 platform-compliance notu).
+
+layout_deviation: >
+  Basamak-2 teslimatları docs/sentinel/step2/phase1/ altına yazılır (PO-Q1, 2026-07-16 —
+  Levent onayına sunuldu). Gerekçe: basamak-1'in faz klasörleriyle (docs/sentinel/phase1..6/)
+  KARIŞMAMASI. Basamak-1 zaten Sentinel standart yerleşiminden (docs/01_product/) sapmıştı
+  (basamak-1 PO-Q1, tek-klasör faz-bazlı); basamak-2 bu sapmanın ALTINA bir step2/ katmanı ekler.
+  Manifest bu dizinde tutulur.
+  Bu manifest BESPOKE şemadır (basamak-1 ile birebir): standart loader'a (load_phase_context.sh)
+  beslenmez — loader docs/01_product/ bekler ve exit 3 verir; system_tier T1-T4 şeması dışıdır;
+  guideline adları plugin guidelines/*/ dosyalarına çözülmez. Faz-review agent'ları manifest'i bu
+  yoldan DOĞRUDAN okur ve disiplinleri manuel denetler. Standart araç entegrasyonu istenirse
+  MANIFEST_SCHEMA'ya taşınması gerekir — basamak-1'de olduğu gibi bilinçli yapılmadı.
+
+guidelines:
+  enabled:
+    - evidence-based-analysis        # her motor/adapter/history-SPI iddiası file:line kanıtlı (docs/07 §3/§7 deseni)
+    - no-effort-estimates            # workspace kuralı: süre/kişi-gün/story-point tahmini yasak
+    - turkish-docs-english-code      # doküman dili TR; kod/tanımlayıcılar EN
+    - traceability-chain             # US <-> FR <-> tasarım kararı (docs/07 D-A…D-G) zinciri zorunlu
+    - rejected-alternatives-locked   # reddedilen/ertelenen kararlar yeniden AÇILAMAZ:
+                                     #   handler-içi senkron publish, tam-outbox, tam-post-commit (D-A);
+                                     #   JetStream-only store, ClickHouse-şimdi (D-B);
+                                     #   big-bang cutover, kalıcı dual-run (D-C);
+                                     #   sırasız+salt-upsert, global tek-consumer (D-E);
+                                     #   üç-motor-birlikte, Flowable-süresiz-dışarıda, Flowable/basamak-2b-şimdi (D-G);
+                                     #   token-move tx kaldırılması (basamak-6), büyük değişken (basamak-3), sharding (basamak-5)
+    - unverified-claims-tagged       # doğrulanmamış varsayımlar "phase3'te doğrulanacak" etiketli
+                                     #   (örn. Cockpit history ACT_HI bağımlılık yüzeyi; handleEvents(List) batch sıklığı;
+                                     #    pg_stat_statements history-write fingerprint izolasyonu)
+    - locked-decisions-immutable     # D-A…D-G KİLİTLİ (2026-07-15/16); PO-QUESTIONS yalnız AÇIK parametreleri sorar
+                                     #   (audit-kritik sınıf listesi kesinleştirme, N-gün-temiz değeri, sorgu-API kapsam
+                                     #    sınırı, KVKK erasure politikası, retention değeri) — kilitli kararı DEĞİŞTİRMEZ
+  disabled:
+    - ui-ux-guidelines               # headless katman — merkezi Admin-UI yok (sorgu-API read-only servistir)
+    - frontend-security              # kapsam dışı (UI/istemci yok)
+
+compliance:
+  enabled:
+    - KVKK                           # history verisi PII yüzeyinin TA KENDİSİDİR: değişken payload'ları (VARINST/DETAIL),
+                                     #   business-key'ler (PROCINST), operatör kimlikleri (OP_LOG userId, TASKINST assignee),
+                                     #   incident mesajları. Ayrıntı: DATA_CLASSIFICATION.md (basamak-1 DP-1…8 devralınır,
+                                     #   basamak-2 DP-9…15 eklenir). KVKK silme-hakki <-> denetim-izi saklama gerilimi = PO-Q2.
+    - GDPR                           # AB kiracıları (aynı gerekçe; projeksiyon DB retention/erasure SQL ile — D-B)
+  disabled:
+    - PCI-DSS                        # kart verisi işlenmez
+    - HIPAA                          # sağlık verisi işlenmez
+
+review:
+  spot_check_minimum: 5              # faz-review başına en az 5 file:line doğrulaması (docs/07 §3 kanıt haritası taban)
+  phase_gate: >
+    MAJOR bulgular çözülmeden (veya yazılı gerekçeli kabul verilmeden) bir sonraki faza geçilmez;
+    KOŞULLU ONAY'da MINOR'lar bir sonraki fazla paralel kapatılabilir. Basamak-2'ye özgü ek kapı:
+    kilitli D-A…D-G kararlarına aykırı bir teslimat MAJOR sayılır (rejected-alternatives-locked ihlali).
