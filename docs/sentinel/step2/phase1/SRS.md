@@ -6,9 +6,9 @@
 **Yerleşim:** `docs/sentinel/step2/phase1/` (PO-Q1)
 **Kapsam:** `05-db-offload-strategy.md` §6.7 **basamak-2** (`07-history-offload.md`'in gereksinimleştirilmesi)
 **Girdi:** `docs/07-history-offload.md` (D-A…D-G KİLİTLİ, 2026-07-15/16)
-**Tarih:** 2026-07-16
-**Durum:** TASLAK — PO-QUESTIONS onayı bekliyor (`USER_STORIES.md §4`)
-**Sürüm:** 0.1 (basamak-2)
+**Tarih:** 2026-07-16 (açılış) / 2026-07-17 (PO kararları işlendi)
+**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı (bkz. §8 PO Karar Kaydı)
+**Sürüm:** 1.0 (basamak-2)
 
 > Bu SRS, LLD değildir; **ne** yapılacağını (gereksinim) sabitler, **nasıl** yapılacağını (tasarım) `07`'ye + phase3/phase4'e bırakır. History-SPI/motor davranış iddiaları `07 §3/§7`'de **DOĞRULANMIŞ** `file:line` kanıtına dayanır. Doğrulanmamış varsayımlar "phase3'te doğrulanacak" etiketlidir. **Effort tahmini içermez.** Kilitli D-A…D-G kararları değiştirilmez.
 
@@ -20,7 +20,7 @@
 Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID transaction'ından NATS'a ve oradan **ayrı bir async query-store'a** taşınmasının — yazılım gereksinimlerini tanımlar. `ACT_HI_*`, engine DB'sinin **en büyük yazım hacmidir** (`05 §6.7` satır 2; `07 §2`): her process-adımı/task/variable güncellemesi/job-log satırı, runtime state ile **aynı transaction'da** yazılır. Basamak-2 bu yazımı **SPI katmanında** kaldırır; **fork core'a dokunmaz**. Kapsam = **Camunda 7 + CadenzaFlow** (Flowable = basamak-2b, D-G).
 
 ### 1.2 Kapsam
-**Kapsam içi:** custom composite `HistoryEventHandler` (sınıf-bazlı hibrit yol: audit-kritik → tx-içi kompakt outbox + relay/delete at-least-once; bulk → post-commit at-most-once) [D-A]; ayrı Postgres projeksiyon servisi (asyncapi-kontratlı, instance-anahtarlı partition + merge-upsert, denormalize sorgu-şeması) [D-B/D-E]; minimal history sorgu-API'si + Cockpit-körleşme telafisi [D-C]; sınıf-başına reconciliation + kademeli sınıf-bazlı cutover (hacim-öncelikli, reconciliation-kapılı) + geri-dönüş [D-C/D-D]; history wire-contract (subject `history.<engineId>.<class>.<processInstanceId>`, dedup `Nats-Msg-Id=<eventId>:<type>`, DLQ basamak-1 D-E kontratı aynen + CQ-6) [D-E]; metrik/bench history modu [D-F]; basamak-1 devreden borçlar (`07 §5`, özellikle bench İLK GERÇEK KOŞU baseline).
+**Kapsam içi:** custom composite `HistoryEventHandler` (sınıf-bazlı hibrit yol: audit-kritik → tx-içi kompakt outbox + relay/delete at-least-once; bulk → post-commit at-most-once) [D-A]; ayrı Postgres projeksiyon servisi (asyncapi-kontratlı, instance-anahtarlı partition + merge-upsert, denormalize sorgu-şeması) [D-B/D-E]; minimal history sorgu-API'si (çekirdek-4 okuma deseni, REST+JSON, PO-Q3) + Cockpit-körleşme telafisi [D-C]; sınıf-başına reconciliation (N=7g default, PO-Q4) + kademeli sınıf-bazlı cutover (hacim-öncelikli, reconciliation-kapılı) + geri-dönüş [D-C/D-D]; history wire-contract (subject `history.<engineId>.<class>.<processInstanceId>`, dedup `Nats-Msg-Id=<eventId>:<type>`, DLQ basamak-1 D-E kontratı aynen + CQ-6) [D-E]; metrik/bench history modu [D-F]; **projeksiyon retention (sınıf-bazlı) + KVKK erasure pipeline + pseudonymization** (PO-Q2/Q7 katmanlı politikası); basamak-1 devreden borçlar (`07 §5`, özellikle bench İLK GERÇEK KOŞU baseline).
 
 **Kapsam dışı (bkz. §7):** handler-içi senkron publish, tam-outbox, tam-post-commit (D-A REDDEDİLDİ); JetStream-only store, ClickHouse-şimdi (D-B); big-bang cutover, kalıcı dual-run (D-C); sırasız+salt-upsert, global tek-consumer (D-E); Flowable history/basamak-2b, üç-motor-birlikte (D-G); token-move tx kaldırılması (basamak-6), büyük değişken externalization (basamak-3), DB sharding (basamak-5).
 
@@ -91,7 +91,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 
 **FR-A2** [M] — Handler yalnız konfigüre `HistoryLevel`'in ürettiği event'leri almalı (NONE → hiç; default AUDIT); Camunda 7 ve CadenzaFlow **tek adapter'ı** paylaşmalı (byte-ayna). → US-A1/US-A5 → `HistoryLevel.java:56-82`, `HistoryLevelNone.java:27-39`; D-G.
 
-**FR-A3** [M] — Sistem, her `ACT_HI` event-sınıfını **audit-kritik ↔ bulk** olarak sınıflandırmalı (**konfigürable**, fork rebuild gerektirmeden); default audit-kritik = {OP_LOG, INCIDENT, EXT_TASK_LOG}. *Nihai audit-kritik liste = PO-Q5.* → US-A2 → `07 §1` madde 1 (D-A).
+**FR-A3** [M] — Sistem, her `ACT_HI` event-sınıfını **audit-kritik ↔ bulk** olarak sınıflandırmalı (**konfigürable**, fork rebuild gerektirmeden). **Nihai default audit-kritik küme (PO-Q5 2026-07-17) = {OP_LOG, INCIDENT, EXT_TASK_LOG}**; IDENTITYLINK/COMMENT/ATTACHMENT **bulk yolda** (PII koruması EPIC-G retention/erasure'dan gelir), konfigle audit-kritik'e taşınabilir. → US-A2 → `07 §1` madde 1 (D-A); PO-Q5.
 
 **FR-A4** [M] — Audit-kritik event, oluşturulduğu transaction içinde **≤1 kompakt outbox satırına** yazılmalı; NATS publish tx-dışı relay'e bırakılmalı (handler-içi senkron publish **yasak**). Publish öncesi çökmede outbox satırı hayatta kalmalı (kalıcı audit kaybı YOK). → US-A3 → `07 §4` (outbox yok-olma), `07 §1` madde 7 (D-F ≤1 satır); D-A.
 
@@ -115,13 +115,13 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 
 ### 3.3 Sorgu-API + Cockpit-körleşme telafisi (EPIC-C)
 
-**FR-C1** [M] — Sistem, **projeksiyon store** üstünde **read-only minimal history sorgu-API'si** sunmalı (cutover'lanan sınıflar için); yanıtlarda erişim kontrolü + PII maskeleme (`DATA_CLASSIFICATION.md` DP-15), loglara PII değeri yazılmamalı. *Kapsam sınırı = PO-Q3.* → US-C1 → `07 §1` madde 3 (D-C).
+**FR-C1** [M] — Sistem, **projeksiyon store** üstünde **read-only minimal history sorgu-API'si** sunmalı (cutover'lanan sınıflar için). **Kapsam (PO-Q3 2026-07-17) = çekirdek-4 okuma deseni:** (1) `processInstanceId`→tam geçmiş, (2) `businessKey`→instance listesi, (3) zaman-aralığı+`processDefinition`→instance listesi, (4) instance→task/activity/variable geçmişi; **REST+JSON, sayfalamalı, read-only**. Agregasyon/analitik **kapsam dışı** (§7). Yanıtlarda erişim kontrolü + PII maskeleme (`DATA_CLASSIFICATION.md` DP-15), loglara PII değeri yazılmamalı. → US-C1 → `07 §1` madde 3 (D-C); PO-Q3.
 
 **FR-C2** [S] — Sistem dokümantasyonu, sınıf-başına hangi Cockpit-history görünümünün cutover'da körleştiğini belirtmeli; **runtime Cockpit (`ACT_RU_*`) etkilenmemeli**; Cockpit `ACT_HI` bağımlılık yüzeyi **phase3'te doğrulanacak** (D-C öncesi). → US-C2 → `07 §7` (Cockpit bağımlılığı doğrulanacak); D-C.
 
 ### 3.4 Reconciliation + kademeli cutover (EPIC-D)
 
-**FR-D1** [M] — Sistem, dual-run boyunca **sınıf-başına** projeksiyon ↔ `ACT_HI` reconciliation raporu ve **fark sayacı** SLI üretmeli; hangi sınıfların **N gün temiz** olduğunu göstermeli (**reconciliation-temizliği cutover kapısıdır**); rapor **PII değeri sızdırmamalı** (`DATA_CLASSIFICATION.md` DP-14). *N değeri = PO-Q4.* → US-D1 → `07 §1` madde 3/7 (D-C/D-F).
+**FR-D1** [M] — Sistem, dual-run boyunca **sınıf-başına** projeksiyon ↔ `ACT_HI` reconciliation raporu ve **fark sayacı** SLI üretmeli; hangi sınıfların **N gün temiz** olduğunu göstermeli (**reconciliation-temizliği cutover kapısıdır**); rapor **PII değeri sızdırmamalı** (`DATA_CLASSIFICATION.md` DP-14). **N = sınıf-başına konfig, default 7 gün** (PO-Q4 2026-07-17; "kalibre edilebilir başlangıç"). → US-D1 → `07 §1` madde 3/7 (D-C/D-F); PO-Q4.
 
 **FR-D2** [M] — Sistem, sınıf-başına DB history yazımını (default DB handler) **konfigle** kapatabilmeli; kapı = sınıf N gün temiz; sıra **hacim-öncelikli**; cutover sonrası o sınıfın `ACT_HI` yazım bileşeni = **0**. **Big-bang / kalıcı dual-run REDDEDİLDİ.** → US-D2 → `07 §1` madde 3/4/7 (D-C/D-D/D-F).
 
@@ -142,6 +142,14 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 **FR-F2** [S] — `BenchEnvironment.ensureStreams()` + prod stream provisioning history stream'i + `dlq.history.>`'i (ayrı-stream [CQ-6]) kapsayacak şekilde genişletilmeli. → US-F2 → `07 §5` borç #2.
 
 **FR-F3** [C] — Basamak-1 kalan borçları (#1 unsafe-lock runbook, #3 scheduler shutdown await, #4 FailureEventBridge/NonMatchingEventConsumer, #5 Flowable timer maliyeti, #6 sweep captured-variables) **basamak-2-ilgili / basamak-1-kuyruğu / basamak-2b** olarak triyaj edilmeli. → US-F3 → `07 §5` borç #1,3,4,5,6.
+
+### 3.7 Projeksiyon retention & KVKK erasure (EPIC-G — PO-Q2/Q7)
+
+**FR-G1** [M] — Sistem, projeksiyon store'da **sınıf-bazlı otomatik retention** uygulamalı (scheduled job, `DATA_GOVERNANCE §3.3`); **default (PO-Q7): bulk 90 gün, audit-kritik yasal-saklama süresi** (kiracı override); her silme audit-log'lanmalı. → US-G1 → PO-Q7; D-B; `DATA_CLASSIFICATION.md` DP-9.
+
+**FR-G2** [M] — Sistem, bulk sınıf PII'ları için **erasure/anonimleştirme pipeline'ı** sunmalı (KVKK/GDPR silme-hakkı; data-subject anahtarına göre; SQL-uygulanabilir; soft-delete→anonymize; erasure audit-log'lanır; erasure sonrası sorgu-API o PII'yi döndürmemeli). → US-G2 → PO-Q2 katman-2; `DATA_CLASSIFICATION.md` DP-10; `DATA_GOVERNANCE §4.1`.
+
+**FR-G3** [S] — Sistem, audit-kritik kayıtlar için **pseudonymization seçeneği** sunmalı: PII alanı (userId) tersinmez takma-ada çevrilir, **kimlik↔takma-ad haritası ayrı kasada**; silme = harita kaydını silmek (denetim yapısı korunur, re-identification imkânsız); kasa L4-bitişik korunur + erişim audit'i. → US-G3 → PO-Q2 katman-3; `DATA_CLASSIFICATION.md` §6, DP-11/DP-16.
 
 ---
 
@@ -167,11 +175,12 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 > History = **PII yüzeyinin ta kendisi**. Ayrıntı: `DATA_CLASSIFICATION.md` (basamak-1 DP-1…8 devralınır; basamak-2 DP-9…15 eklenir).
 **NFR-S1** [M] — Payload/business-key/operatör-kimliği **değerleri** loglara ve metrik tag'lerine yazılmamalı (basamak-1 DP-1 devralınır; history akışına genişler). → `DATA_CLASSIFICATION.md` DP-1.
 **NFR-S2** [M] — Projeksiyon Postgres bir **L3 (PII) store**'dur: at-rest şifreleme (AES-256), erişim kontrolü, retention/silme (SQL) uygulanmalı. → `DATA_CLASSIFICATION.md` DP-9.
-**NFR-S3** [M] — KVKK/GDPR **silme-hakkı** projeksiyon store üstünde uygulanabilir olmalı; **audit-kritik sınıflarda silme-hakkı ↔ denetim-izi saklama gerilimi** (OP_LOG operatör kimlikleri) bir politikaya bağlanmalı (**PO-Q2**). → `DATA_CLASSIFICATION.md` DP-10.
+**NFR-S3** [M] — KVKK/GDPR **silme-hakkı** projeksiyon store üstünde uygulanabilir olmalı. **PO-Q2 katmanlı politikası (2026-07-17, ÇÖZÜLDÜ):** (1) audit-kritik sınıflar **yasal-saklama istisnası** (hukuki dayanak DPO doğrulaması), (2) bulk PII **erasure pipeline** (FR-G2), (3) audit-kritik **pseudonymization seçeneği** (FR-G3). → `DATA_CLASSIFICATION.md §6`, DP-10; FR-G2/FR-G3.
 **NFR-S4** [M] — History stream + `dlq.history.>` **at-rest PII** taşır: TLS + erişim kontrolü + retention; ayrı-stream [CQ-6]; DLQ byte-ayna kopya PII'yi retention süresince tutar. → `DATA_CLASSIFICATION.md` DP-13.
 **NFR-S5** [M] — Kompakt outbox (engine DB'de, audit-kritik) history payload'ı geçici taşır → kaynak event ile aynı sınıf; relay silmesiyle kısa maruziyet. → `DATA_CLASSIFICATION.md` DP-12.
 **NFR-S6** [M] — Reconciliation raporları ve sorgu-API yanıtları/log'ları PII değeri sızdırmamalı (maskeleme/sayaç-only). → `DATA_CLASSIFICATION.md` DP-14/DP-15.
 **NFR-S7** [S] — NATS transport güvenliği (TLS + NKey/JWT) production'da zorunlu; history subject'lerine subject-level authz. *Detay phase3.* → basamak-1 NFR-S3 devralınır.
+**NFR-S8** [S] — Pseudonymization kasası (kimlik↔takma-ad haritası, FR-G3) **re-identification anahtarı** taşıdığından en yüksek koruma altında (L4-bitişik, `DATA_GOVERNANCE §1.1`) tutulmalı: ayrı depo, erişim en-az-yetki + audit, projeksiyon store'dan izole. → `DATA_CLASSIFICATION.md` DP-16; FR-G3.
 
 ### 4.4 Gözlemlenebilirlik
 **NFR-O1** [M] — Tüm history publish/consume/DLQ/nak/ack olayları Micrometer sayaçlarıyla ölçülmeli (`NatsChannelMetrics` üstüne). → FR-E2.
@@ -205,7 +214,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 
 **IR-5 — Projeksiyon consumer kontratı:** asyncapi-kontratlı (ADR-0006); instance-anahtarlı partition; idempotent merge-upsert; ayrı Postgres. → FR-B2/FR-B4.
 
-**IR-6 — Sorgu-API arayüzü:** read-only; projeksiyon Postgres'ten; minimal okuma desenleri (kapsam PO-Q3); erişim kontrolü + PII maskeleme. → FR-C1.
+**IR-6 — Sorgu-API arayüzü:** **REST + JSON, sayfalamalı, read-only**; projeksiyon Postgres'ten; **çekirdek-4 okuma deseni** (processInstanceId→tam geçmiş; businessKey→instance listesi; zaman-aralığı+definition→liste; instance→task/activity/variable geçmişi — PO-Q3); erişim kontrolü + PII maskeleme; agregasyon/analitik kapsam dışı. → FR-C1.
 
 **IR-7 — Stream tipleri:** history stream (sıra-korumalı; tip phase3'te netleşir — WorkQueue değil, çünkü tek-tüketici-alır değil, projeksiyon consumer + reconciliation okur); DLQ → limits-based (basamak-1 default 14 gün), ayrı stream [CQ-6]. → `07 §1` madde 5.
 
@@ -237,6 +246,9 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 | FR-F1 | US-F1 | `07 §5` #7 | M |
 | FR-F2 | US-F2 | `07 §5` #2 | S |
 | FR-F3 | US-F3 | `07 §5` #1,3,4,5,6 | C |
+| FR-G1 | US-G1 | D-B / PO-Q7 | M |
+| FR-G2 | US-G2 | PO-Q2 (katman-2) | M |
+| FR-G3 | US-G3 | PO-Q2 (katman-3) | S |
 
 ---
 
@@ -252,6 +264,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 | Big-bang cutover | **REDDEDİLDİ** (etki yüzeyi/geri-dönüş büyük) | `07 §1` madde 3 / D-C |
 | Kalıcı dual-run | **REDDEDİLDİ** (yazım hacmi kalkmıyor — §6.7 hedefiyle çelişir) | `07 §1` madde 3 / D-C |
 | Sırasız + salt-upsert | **REDDEDİLDİ** (çatışma-çözüm karmaşası) | `07 §1` madde 5 / D-E |
+| Sorgu-API agregasyon / analitik / raporlama görünümleri | **KAPSAM DIŞI** (sorgu-API = çekirdek-4 okuma deseni) | PO-Q3 (2026-07-17) |
 | Global tek-consumer | **REDDEDİLDİ** (throughput tavanı) | `07 §1` madde 5 / D-E |
 | Flowable history offload (**basamak-2b**) | **ERTELENDİ** (7.1'de hazır async-history yok; SPI `HistoryManager` Camunda ile arayüz-paylaşımı ~0; audit-kritik harita yeniden yapılmalı) | `07 §1` madde 6 / `07 §7` / D-G |
 | Üç-motor-birlikte | **REDDEDİLDİ** (kapsam ~2×, iki SPI riski tek teslimatta) | `07 §1` madde 6 / D-G |
@@ -261,10 +274,20 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 
 ---
 
-## 8. Açık kararlar durumu
+## 8. PO Karar Kaydı (Q→A, 2026-07-17)
 
 **Kilitli teknik kararlar:** D-A…D-G **tamamı çözülü** (`07 §1`, 2026-07-15/16). Bu SRS onları **değiştirmez**; yalnız gereksinimleştirir.
 
-**PO-QUESTIONS (Levent onayına):** PO-Q1 (yerleşim), PO-Q2 (KVKK silme-hakkı ↔ denetim-izi gerilimi), PO-Q3 (sorgu-API kapsam sınırı), PO-Q4 (reconciliation N-gün-temiz), PO-Q5 (audit-kritik sınıf listesi kesinleştirme), PO-Q6 (should-kapsam), PO-Q7 (projeksiyon retention + erasure + TENANT template). Tam liste + öneriler: `USER_STORIES.md §4`.
+**PO-QUESTIONS cevaplandı (2026-07-17)** — SRS'e etkileri (sorular korunur, kararlar eklenir; tam kayıt `USER_STORIES.md §4`):
+
+| # | Karar | SRS'e etki |
+|---|---|---|
+| **PO-Q1** | Yerleşim `docs/sentinel/step2/phase1/` ONAYLANDI | Konum korundu |
+| **PO-Q2** | KVKK **katmanlı politika** (yasal-saklama istisnası + bulk erasure + audit-kritik pseudonymization) | **NFR-S3** güncellendi; **FR-G2/FR-G3** eklendi (§3.7); NFR-S8 |
+| **PO-Q3** | Sorgu-API = **çekirdek-4 okuma deseni** (REST+JSON, sayfalamalı, read-only); agregasyon kapsam dışı | **FR-C1** + **IR-6** güncellendi; §7 reddedilen tablosuna eklendi |
+| **PO-Q4** | Reconciliation N = **sınıf-başına konfig, default 7g** | **FR-D1** güncellendi |
+| **PO-Q5** | Audit-kritik = **{OP_LOG, INCIDENT, EXT_TASK_LOG}** + konfig; IDENTITYLINK/COMMENT/ATTACHMENT bulk | **FR-A3** nihaileşti |
+| **PO-Q6** | Tüm **S** kapanışa dahil; US-F3 (C) backlog | §1.2 kapsam; matris öncelikleri |
+| **PO-Q7** | Retention (sınıf-bazlı) + erasure pipeline + TENANT template = basamak-2 teslimatı | **FR-G1/G2/G3** (§3.7); NFR-S2/S3; yeni dosya `TENANT_PII_CHECKLIST_TEMPLATE.md` |
 
 **Phase3'e taşınan doğrulamalar:** Cockpit `ACT_HI` bağımlılık yüzeyi; `handleEvents(List)` batch sıklığı; `pg_stat_statements` history-write fingerprint izolasyonu; projeksiyon merge-upsert kenar durumları; kompakt outbox tek-INSERT bindirmesi (§2.5'te işaretli).

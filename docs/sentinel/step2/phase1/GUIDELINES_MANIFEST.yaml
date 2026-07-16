@@ -9,8 +9,8 @@ system_tier: carrier-grade-backend   # telco BPM messaging + history projeksiyon
                                      #      ama merkezi Admin-UI değildir (bkz. SRS §4.7 platform-compliance notu).
 
 layout_deviation: >
-  Basamak-2 teslimatları docs/sentinel/step2/phase1/ altına yazılır (PO-Q1, 2026-07-16 —
-  Levent onayına sunuldu). Gerekçe: basamak-1'in faz klasörleriyle (docs/sentinel/phase1..6/)
+  Basamak-2 teslimatları docs/sentinel/step2/phase1/ altına yazılır (PO-Q1 ONAYLANDI 2026-07-17).
+  Gerekçe: basamak-1'in faz klasörleriyle (docs/sentinel/phase1..6/)
   KARIŞMAMASI. Basamak-1 zaten Sentinel standart yerleşiminden (docs/01_product/) sapmıştı
   (basamak-1 PO-Q1, tek-klasör faz-bazlı); basamak-2 bu sapmanın ALTINA bir step2/ katmanı ekler.
   Manifest bu dizinde tutulur.
@@ -36,9 +36,10 @@ guidelines:
     - unverified-claims-tagged       # doğrulanmamış varsayımlar "phase3'te doğrulanacak" etiketli
                                      #   (örn. Cockpit history ACT_HI bağımlılık yüzeyi; handleEvents(List) batch sıklığı;
                                      #    pg_stat_statements history-write fingerprint izolasyonu)
-    - locked-decisions-immutable     # D-A…D-G KİLİTLİ (2026-07-15/16); PO-QUESTIONS yalnız AÇIK parametreleri sorar
-                                     #   (audit-kritik sınıf listesi kesinleştirme, N-gün-temiz değeri, sorgu-API kapsam
-                                     #    sınırı, KVKK erasure politikası, retention değeri) — kilitli kararı DEĞİŞTİRMEZ
+    - locked-decisions-immutable     # D-A…D-G KİLİTLİ (2026-07-15/16); PO-QUESTIONS AÇIK parametreleri sordu ve
+                                     #   PO-Q1…7 CEVAPLANDI (2026-07-17): audit-kritik liste kesinleşti (OP_LOG/INCIDENT/
+                                     #   EXT_TASK_LOG), N-gün=7 default, sorgu-API=çekirdek-4 desen, KVKK=katmanlı politika,
+                                     #   retention=sınıf-bazlı — kararlar teslimatlara işlendi, kilitli D-A…D-G'yi DEĞİŞTİRMEDİ
   disabled:
     - ui-ux-guidelines               # headless katman — merkezi Admin-UI yok (sorgu-API read-only servistir)
     - frontend-security              # kapsam dışı (UI/istemci yok)
@@ -48,7 +49,9 @@ compliance:
     - KVKK                           # history verisi PII yüzeyinin TA KENDİSİDİR: değişken payload'ları (VARINST/DETAIL),
                                      #   business-key'ler (PROCINST), operatör kimlikleri (OP_LOG userId, TASKINST assignee),
                                      #   incident mesajları. Ayrıntı: DATA_CLASSIFICATION.md (basamak-1 DP-1…8 devralınır,
-                                     #   basamak-2 DP-9…15 eklenir). KVKK silme-hakki <-> denetim-izi saklama gerilimi = PO-Q2.
+                                     #   basamak-2 DP-9…16 eklenir). KVKK silme-hakki <-> denetim-izi saklama gerilimi = PO-Q2
+                                     #   KATMANLI politika ile ÇÖZÜLDÜ (2026-07-17): (1) audit-kritik yasal-saklama istisnası,
+                                     #   (2) bulk PII erasure pipeline, (3) audit-kritik pseudonymization; teslimat = EPIC-G.
     - GDPR                           # AB kiracıları (aynı gerekçe; projeksiyon DB retention/erasure SQL ile — D-B)
   disabled:
     - PCI-DSS                        # kart verisi işlenmez

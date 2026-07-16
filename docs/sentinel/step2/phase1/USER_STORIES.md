@@ -2,11 +2,11 @@
 
 **Repo:** `nats-bpm-channels` (3eAI Labs, Apache 2.0)
 **Sentinel fazı:** Phase 1 — Product Owner (basamak-2)
-**Yerleşim:** `docs/sentinel/step2/phase1/` (PO-Q1 — Levent onayına)
+**Yerleşim:** `docs/sentinel/step2/phase1/` (PO-Q1 ONAYLANDI 2026-07-17)
 **Kapsam:** `05-db-offload-strategy.md` §6.7 **basamak-2** (History offload) — `07-history-offload.md`'in somutlaştırdığı iş
 **Girdi:** `docs/07-history-offload.md` (D-A…D-G KİLİTLİ, 2026-07-15/16)
-**Tarih:** 2026-07-16
-**Durum:** TASLAK — PO-QUESTIONS Levent onayı bekliyor (bkz. §4)
+**Tarih:** 2026-07-16 (açılış) / 2026-07-17 (PO kararları işlendi)
+**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı (bkz. §4 PO Karar Kaydı)
 
 > **Dokümantasyon dili Türkçe; kod/tanımlayıcılar İngilizce.** Motor/history-SPI davranışına dair her iddia `docs/07 §3/§7`'de **DOĞRULANMIŞ** file:line kanıtına dayanır. Doğrulanmamış varsayımlar açıkça "phase3'te doğrulanacak" etiketlidir. **Effort/story-point tahmini içermez** (workspace kuralı). **Kilitli kararlar (D-A…D-G) değiştirilmez; reddedilen/ertelenenler yeniden açılmaz.**
 
@@ -47,7 +47,7 @@
 | **P7** | **Süreç Geliştirici** | BPMN modelleyen; history'yi debug/audit için kullanan; Cockpit-history körleşmesinden etkilenen |
 
 **Öncelik ölçeği (MoSCoW):** M = Must (basamak-2 kapanışı için zorunlu), S = Should, C = Could.
-**Öneri (PO-Q6):** basamak-1 Q6 deseni gibi — tüm **S** kalemlerinin basamak-2 kapanışına DAHİL olması önerilir; yalnız **C** (US-F3) backlog adayıdır. Levent onayına.
+**PO-Q6 kararı (2026-07-17):** basamak-1 Q6 ilkesiyle aynı — **tüm S kalemleri (US-C2, D3, E2, F2, G3) basamak-2 kapanışına DAHİLDİR**; yalnız **C** (US-F3) backlog'a bırakılır. S yalnız göreli önem sırasını gösterir.
 
 ---
 
@@ -61,8 +61,9 @@
 | **EPIC-D** | Reconciliation + kademeli sınıf-bazlı cutover | US-D1 … US-D3 | D-C, D-D |
 | **EPIC-E** | Metrik & bench history modu | US-E1 … US-E3 | D-F |
 | **EPIC-F** | Basamak-1'den devreden borçlar (bench İLK GERÇEK KOŞU baseline dahil) | US-F1 … US-F3 | `07 §5` |
+| **EPIC-G** | Projeksiyon retention & KVKK erasure pipeline (PO-Q2/Q7 kararı) | US-G1 … US-G3 | D-B, PO-Q2/Q7 |
 
-Toplam: **22 user story.**
+Toplam: **25 user story.**
 
 ---
 
@@ -86,11 +87,11 @@ Toplam: **22 user story.**
 **P3 Denetim & Uyum Sorumlusu** olarak, her `ACT_HI` event-sınıfının bir **tutarlılık katmanına** atanmasını (audit-kritik ↔ bulk) ve bunun **konfigürable** olmasını istiyorum; **böylece** audit-kritik sınıflar at-least-once yola, bulk sınıflar at-most-once yola yönlensin.
 **Öncelik:** M
 **Kabul kriterleri:**
-- [ ] Audit-kritik default küme = **{OP_LOG, INCIDENT, EXT_TASK_LOG}** (düşük hacim); bulk küme = **{DETAIL, VARINST, ACTINST, PROCINST, TASKINST, …}** (hacmin ~%90'ı) — **konfigürable** (`07 §1` madde 1).
+- [ ] Audit-kritik **nihai default küme (PO-Q5 kararı 2026-07-17)** = **{OP_LOG, INCIDENT, EXT_TASK_LOG}** (düşük hacim, yüksek denetim değeri) — **konfigürable**; bulk küme = **{DETAIL, VARINST, ACTINST, PROCINST, TASKINST, IDENTITYLINK, COMMENT, ATTACHMENT, …}** (hacmin ~%90'ı).
+- [ ] **PO-Q5 kararı:** IDENTITYLINK / COMMENT / ATTACHMENT — PII-yoğun olsalar da — **bulk yolda** kalır (at-most-once); PII koruması tutarlılık katmanından değil, projeksiyon retention/erasure'dan (EPIC-G) gelir. Konfigle audit-kritik'e taşınabilirler; seçim rehberi `TENANT_PII_CHECKLIST_TEMPLATE.md`'de.
 - [ ] Sınıflandırma routing'i sürer: audit-kritik → outbox yolu (US-A3); bulk → post-commit yolu (US-A4).
 - [ ] Konfig değişimi **fork rebuild gerektirmez** (runtime/deploy config).
-- [ ] Audit-kritik kümenin **kesinleştirilmesi** açık PO-QUESTION'dır (PO-Q5): IDENTITYLINK / COMMENT / ATTACHMENT gibi PII-yoğun sınıfların audit-kritik mi bulk mı olacağı Levent onayına.
-**Dayanak:** `07 §1` madde 1 (D-A), `07 §3` (ACT_HI 16+ sınıf haritası).
+**Dayanak:** `07 §1` madde 1 (D-A), `07 §3` (ACT_HI 16+ sınıf haritası); PO-Q5 kararı (2026-07-17).
 **Bağımlılık:** US-A1.
 
 ---
@@ -223,12 +224,13 @@ Toplam: **22 user story.**
 **P6 Raporlama/Sorgu Kullanıcısı** olarak, cutover'lanan sınıflar için **projeksiyon store'u** üstünde minimal bir read-only history sorgu-API'si istiyorum; **böylece** Cockpit-history körleşmesine rağmen geçmiş instance/activity/variable sorgulanabilir kalsın.
 **Öncelik:** M
 **Kabul kriterleri:**
-- [ ] API, cutover'lanan sınıflar için Cockpit-history'nin karşıladığı **minimal** okuma desenlerini sunar (kesin kapsam sınırı = PO-Q3).
+- [ ] **PO-Q3 kararı (2026-07-17): kapsam = çekirdek-4 okuma deseni** — (1) `processInstanceId` → tam geçmiş, (2) `businessKey` → instance listesi, (3) zaman-aralığı + `processDefinition` → instance listesi, (4) instance → task/activity/variable geçmişi.
+- [ ] Protokol **REST + JSON**, **sayfalamalı (paginated)**, **read-only**.
 - [ ] Okuma **projeksiyon Postgres**'ten (D-B), engine DB'sinden **değil**.
-- [ ] **Read-only** (yazım yolu yok — projeksiyon downstream'dir).
+- [ ] Agregasyon / analitik / raporlama görünümleri **KAPSAM DIŞI** (PO-Q3 — `SRS.md §7` reddedilen tablosu).
 - [ ] Yanıtlarda **erişim kontrolü + PII maskeleme** (bkz. `DATA_CLASSIFICATION.md` DP-15); sorgu-API loglarına PII değeri yazılmaz (DP-1 devralınır).
 - [ ] Bu API, basamak-2 teslimatına **dahildir** (D-C: Cockpit körleşmesinin karşılığı).
-**Dayanak:** `07 §1` madde 3 (D-C — "minimal history sorgu-API'si dahildir").
+**Dayanak:** `07 §1` madde 3 (D-C — "minimal history sorgu-API'si dahildir"); PO-Q3 kararı (2026-07-17).
 **Bağımlılık:** US-B2, US-B3.
 
 ---
@@ -254,7 +256,7 @@ Toplam: **22 user story.**
 **Kabul kriterleri:**
 - [ ] Dual-run'da (default DB handler AÇIK + custom handler) sınıf-başına fark raporu: projeksiyon satırları ↔ `ACT_HI` satırları.
 - [ ] Reconciliation **fark sayacı** SLI üretilir (D-F destekleyici SLI).
-- [ ] Rapor hangi sınıfların **"N gün temiz"** olduğunu gösterir → cutover kapısı (N değeri = PO-Q4).
+- [ ] Rapor hangi sınıfların **"N gün temiz"** olduğunu gösterir → cutover kapısı. **PO-Q4 kararı (2026-07-17): N = sınıf-başına konfigürable, default 7 gün** ("kalibre edilebilir başlangıç" — LLD-Q3 deseni; erken üretim gözlemiyle ayarlanır).
 - [ ] Bulk at-most-once boşluklarını (US-A4) ve merge-upsert çatışmalarını (US-B2) tespit eder.
 - [ ] **Reconciliation-temizliği cutover kapısıdır** (D-C); normalize DB-yazım metriği (US-E1) ise yazım-azaltma sert kapısıdır — **iki ayrı kapı** (D-F).
 - [ ] Rapor **PII değeri sızdırmaz** (yalnız sayaç/id; `DATA_CLASSIFICATION.md` DP-14).
@@ -268,7 +270,7 @@ Toplam: **22 user story.**
 **Öncelik:** M
 **Kabul kriterleri:**
 - [ ] Cutover = o sınıf için default DB handler'ını kapatma (**sınıf-başına konfig**).
-- [ ] Kapı: sınıf reconciliation'da (US-D1) **N gün temiz** (N = PO-Q4).
+- [ ] Kapı: sınıf reconciliation'da (US-D1) **N gün temiz** (N = sınıf-başına konfig, default **7 gün** — PO-Q4 2026-07-17).
 - [ ] Sıra **hacim-öncelikli**: DETAIL→VARINST→ACTINST→… (D-D).
 - [ ] **Big-bang REDDEDİLDİ**; **kalıcı dual-run REDDEDİLDİ** (yazım hacmi gerçekten kalkmalı — §6.7 hedefi) — yeniden açılmaz.
 - [ ] Cutover sonrası o sınıfın `ACT_HI` yazım bileşeni = **0** (D-F hedefi, US-E1 ile ölçülür).
@@ -371,6 +373,49 @@ Toplam: **22 user story.**
 
 ---
 
+## EPIC-G — Projeksiyon retention & KVKK erasure pipeline (PO-Q2/Q7 kararı)
+
+> **PO-Q7 kararı (2026-07-17):** retention default'u, erasure pipeline'ı ve pseudonymization mekanizması **üçü de basamak-2 teslimatıdır.** History = kalıcı PII yüzeyi olduğundan (projeksiyon store, `DATA_CLASSIFICATION.md`), veri-yaşam döngüsü artık bir **kod teslimatıdır** (basamak-1'de yalnız retention konfigü vardı; basamak-2 aktif silme/anonimleştirme getirir). PO-Q2 katmanlı politikasını uygular.
+
+### US-G1 — Sınıf-bazlı projeksiyon retention enforcement
+**P5 Veri Koruma Sorumlusu (DPO)** olarak, projeksiyon store'daki history'nin **sınıf-bazlı** ve otomatik bir retention işiyle temizlenmesini istiyorum; **böylece** PII gereksiz süre saklanmasın ve retention KVKK/GDPR minimizasyonuna uysun.
+**Öncelik:** M
+**Kabul kriterleri:**
+- [ ] Otomatik retention job (scheduled) sınıf-başına retention penceresi uygular (`DATA_GOVERNANCE §3.3` deseni).
+- [ ] **PO-Q7 default'ları:** bulk sınıflar **90 gün** (kiracı override); audit-kritik sınıflar **yasal-saklama** süresi (örn. denetim yükümlülüğü, kiracı override).
+- [ ] Retention silmesi audit-log kaydı üretir (`DATA_GOVERNANCE §3.3` — "audit log entry for every deletion").
+- [ ] Retention penceresi **kiracı-konfigürable**; policy `TENANT_PII_CHECKLIST_TEMPLATE.md` history-katmanında kaydedilir.
+**Dayanak:** PO-Q7 kararı (2026-07-17); D-B (KVKK retention SQL'le); `DATA_CLASSIFICATION.md` DP-9, §5; `DATA_GOVERNANCE §3.1/§3.3`.
+**Bağımlılık:** US-B3 (denormalize şema, SQL retention).
+
+---
+
+### US-G2 — Bulk sınıf PII erasure pipeline (silme-hakkı)
+**P5 Veri Koruma Sorumlusu (DPO)** olarak, bulk sınıflardaki PII için projeksiyon-DB üstünde bir **erasure/anonimleştirme pipeline'ı** istiyorum; **böylece** KVKK/GDPR silme-hakkı talepleri (data subject) yerine getirilebilsin.
+**Öncelik:** M
+**Kabul kriterleri:**
+- [ ] Data-subject anahtarına (örn. businessKey / userId) göre bulk sınıf PII'ları (VARINST/DETAIL değerleri, TASKINST name/description, serbest metinler) **silinir/anonimleştirilir** (soft-delete → anonymize, `DATA_GOVERNANCE §4.1` Right to Erasure).
+- [ ] Pipeline SQL-uygulanabilir (D-B — denormalize şema); erasure işlemi audit-log'lanır (kim-neyi-ne-zaman sildi).
+- [ ] **PO-Q2 katmanı (2):** bulk PII erasure'a **tabidir** (audit-kritik'ten farklı — US-G3).
+- [ ] Erasure tamlığı doğrulanabilir (erasure sonrası sorgu-API o PII'yi döndürmez).
+**Dayanak:** PO-Q2 kararı katman-2 (2026-07-17); D-B; `DATA_CLASSIFICATION.md` DP-10; `DATA_GOVERNANCE §4.1`.
+**Bağımlılık:** US-B3, US-G1.
+
+---
+
+### US-G3 — Audit-kritik pseudonymization (kimlik↔takma-ad kasası)
+**P3 Denetim & Uyum Sorumlusu** olarak, audit-kritik kayıtlarda (OP_LOG operatör kimlikleri, INCIDENT) **pseudonymization seçeneği** istiyorum; **böylece** denetim izinin **yapısı korunurken** silme-hakkı, kimlik↔takma-ad haritasının o kaydını silerek gerçekleştirilebilsin.
+**Öncelik:** S
+**Kabul kriterleri:**
+- [ ] **PO-Q2 katmanı (3):** audit-kritik kayıtta PII alanı (userId) **tersinmez takma-ada** çevrilir; kimlik↔takma-ad haritası **ayrı bir kasada** tutulur (`DATA_CLASSIFICATION.md` DP-16).
+- [ ] **Silme = harita kaydını silmek** → takma-ad tersinmez olur (denetim izinin yapısı korunur, re-identification imkânsız).
+- [ ] Audit-kritik sınıflar **yasal-saklama istisnası (PO-Q2 katman-1)** altında erasure'dan muaf tutulabilir; pseudonymization bunun **opt-in tamamlayıcısıdır** (kiracı seçer).
+- [ ] Kasaya erişim en yüksek koruma (L4-bitişik: re-identification anahtarı); erişim audit-log'lanır.
+**Dayanak:** PO-Q2 kararı katman-3 (2026-07-17); `DATA_CLASSIFICATION.md` §6, DP-11, DP-16.
+**Bağımlılık:** US-G1; ilgili audit-kritik yol US-A3.
+
+---
+
 ## 3. İzlenebilirlik özeti (US → kilitli karar / kanıt)
 
 | US | İlgili kilitli karar | Birincil kanıt (`07 §3/§7` DOĞRULANMIŞ) |
@@ -397,22 +442,25 @@ Toplam: **22 user story.**
 | US-F1 | — (`07 §5` #7) | `07 §5` borç #7 (bench ilk koşu = hedef tavan) |
 | US-F2 | — (`07 §5` #2) | `07 §5` borç #2; CQ-6 |
 | US-F3 | — (`07 §5` #1,3,4,5,6) | `07 §5` borç tablosu |
+| US-G1 | D-B, PO-Q7 | PO-Q7 kararı; `DATA_GOVERNANCE §3.1/§3.3`; DP-9 |
+| US-G2 | PO-Q2 (katman-2) | PO-Q2 kararı; `DATA_GOVERNANCE §4.1`; DP-10 |
+| US-G3 | PO-Q2 (katman-3) | PO-Q2 kararı; `DATA_CLASSIFICATION.md §6`; DP-11/DP-16 |
 
 ---
 
-## 4. PO-QUESTIONS (Levent onayına)
+## 4. PO Karar Kaydı (Q→A, 2026-07-17)
 
-> Aşağıdaki sorular **kilitli D-A…D-G kararlarını DEĞİŞTİRMEZ**; yalnız docs/07'de bilinçle **açık/konfigürable bırakılmış parametreleri** ve teslimat kapsamının PO-kararı gereken kenarlarını sorar.
+> Basamak-2 phase1 kapanışında Levent'e sunulan 7 PO-QUESTION ve verilen kararlar (**sorular korunur, cevaplar eklenir**). Hiçbir karar kilitli D-A…D-G'yi değiştirmez; yalnız docs/07'de bilinçle **açık/konfigürable bırakılmış parametreleri** sabitler.
 
-| # | Soru (PO-QUESTION) | Neden açık | Öneri (PO onayına) |
+| # | Soru (PO-QUESTION) | Verilen karar (2026-07-17) | Bu fazda uygulanışı |
 |---|---|---|---|
-| **PO-Q1** | **Yerleşim:** basamak-2 teslimatları `docs/sentinel/step2/phase1/` altında mı kalsın? | Basamak-1 zaten `docs/sentinel/phase1..6/` kullanıyor; karışmaması için step2/ katmanı önerildi (görev girdisi). | **EVET** — `docs/sentinel/step2/phase1/`; manifest layout_deviation güncellendi. |
-| **PO-Q2** | **KVKK silme-hakkı ↔ denetim-izi saklama gerilimi:** audit-kritik sınıflarda (OP_LOG operatör kimlikleri, INCIDENT) KVKK silme-hakkı ile denetim-izi saklama nasıl uzlaştırılsın? | D-B "KVKK retention SQL'le" der ama audit-kritik veri **hem** silinmeli (erasure) **hem** saklanmalı (denetim) — çelişki. `DATA_CLASSIFICATION.md §4/§6` ayrıntılandırır. | Öneri: audit-kritik alanlar **yasal-yükümlülük saklama istisnası** altında tutulur; PII-taşıyan bulk alanlar erasure/anonimleştirmeye tabi; kiracı-konfigürable retention. Levent kararı. |
-| **PO-Q3** | **Sorgu-API kapsam sınırı:** minimal history sorgu-API'si hangi okuma desenlerini kapsasın, hangilerini kapsamasın? | D-C "minimal" der ama sınır çizilmemiş; Cockpit-history'nin tamamını taklit etmek kapsam patlaması. | Öneri: yalnız instance/activity/variable/task **nokta-sorgu + zaman-aralığı listeleme**; karmaşık Cockpit analitik görünümleri kapsam dışı. Levent kapsamı onaylasın. |
-| **PO-Q4** | **Reconciliation "N gün temiz" değeri:** bir sınıf cutover için kaç gün sıfır-fark reconciliation gerektirsin? | D-C "N gün temiz" der, N verilmedi. | Öneri: sınıf-başına konfigürable, default örn. **7 gün**; audit-kritik sınıflar (cutover olmasa da) daha uzun gözlem. Levent değeri onaylasın. |
-| **PO-Q5** | **Audit-kritik sınıf listesinin kesinleştirilmesi:** {OP_LOG, INCIDENT, EXT_TASK_LOG} nihai mi? IDENTITYLINK/COMMENT/ATTACHMENT gibi PII-yoğun sınıflar audit-kritik mi bulk mı? | D-A default'u verir + "konfigürable" der; ama PII-yoğun sınıfların hangi yola gideceği veri-koruma kararıdır. | Öneri: PII-yoğun-ama-yüksek-hacim sınıflar (VARINST/DETAIL) bulk kalır (at-most-once); kimlik-atama (IDENTITYLINK) audit-kritik'e alınmalı mı? Levent onayına. |
-| **PO-Q6** | **Should-kapsam:** tüm **S** kalemleri (US-C2, D3, E2, F2) basamak-2 kapanışına dahil mi? US-F3 (C) backlog mı? | Basamak-1 Q6 deseni: S'ler dahil edilmişti. | Öneri: tüm **M+S** basamak-2 kapanışına DAHİL; **US-F3 (C)** backlog. Levent onayına. |
-| **PO-Q7** | **Projeksiyon store PII duruşu + TENANT template genişletmesi:** projeksiyon Postgres retention default'u ne olsun; KVKK erasure pipeline'ı basamak-2 teslimatı mı; `TENANT_PII_CHECKLIST_TEMPLATE` history-sınıf genişletmesi ayrı dosya olarak mı materyalize edilsin? | D-B retention'ı SQL'e bırakır ama default/erasure teslimat kapsamı PO kararıdır; template genişletmesi `DATA_CLASSIFICATION.md §8`'de tanımlandı ama dosyalaştırma kararı açık. | Öneri: projeksiyon retention kiracı-konfigürable (bulk kısa, audit-kritik uzun); erasure pipeline basamak-2 teslimatı; template basamak-2 dosyası olarak materyalize edilir. Levent onayına. |
+| **PO-Q1** | Yerleşim: basamak-2 teslimatları `docs/sentinel/step2/phase1/` altında mı kalsın? | **ONAYLANDI** — `docs/sentinel/step2/phase1/` kalır. | Konum korundu; `GUIDELINES_MANIFEST.yaml` layout_deviation "onaylandı 2026-07-17" notu. |
+| **PO-Q2** | KVKK silme-hakkı ↔ denetim-izi saklama gerilimi nasıl uzlaştırılsın? | **KATMANLI politika ONAYLANDI:** (1) audit-kritik sınıflar **yasal-saklama istisnası** (hukuki dayanak DPO doğrulamasına işaretli); (2) bulk sınıf PII → projeksiyon-DB **erasure pipeline**; (3) audit-kritik kayıtlarda **pseudonymization seçeneği** (kimlik↔takma-ad haritası ayrı kasada; silme = harita kaydını silmek). | `DATA_CLASSIFICATION.md §6` **karar** olarak yazıldı; DP-10 netleşti, DP-16 eklendi; **EPIC-G** (US-G1/G2/G3) eklendi. |
+| **PO-Q3** | Sorgu-API kapsam sınırı? | **çekirdek-4 okuma deseni ONAYLANDI:** (1) processInstanceId→tam geçmiş, (2) businessKey→instance listesi, (3) zaman-aralığı+definition→liste, (4) instance→task/activity/variable geçmişi; **REST+JSON, sayfalamalı, read-only**. Agregasyon/analitik **KAPSAM DIŞI**. | US-C1 çekirdek-4 ile netleşti; `SRS.md §7` reddedilen tablosuna "sorgu-API agregasyon/analitik" eklendi; FR-C1/IR-6 güncellendi. |
+| **PO-Q4** | Reconciliation "N gün temiz" değeri? | **sınıf-başına konfig, default 7 gün** ("kalibre edilebilir başlangıç" — LLD-Q3 deseni). | US-D1/US-D2 + FR-D1 default 7g olarak sabitlendi. |
+| **PO-Q5** | Audit-kritik sınıf listesi kesinleştirme? | **default = {OP_LOG, INCIDENT, EXT_TASK_LOG} + konfig ONAYLANDI**; IDENTITYLINK/COMMENT/ATTACHMENT **bulk yolda**. | US-A2/FR-A3 nihaileşti; `DATA_CLASSIFICATION.md §2.1` tutarlılık sütunu güncellendi; `TENANT_PII_CHECKLIST_TEMPLATE.md`'e sınıf-seçim rehberi maddesi eklendi. |
+| **PO-Q6** | Should-kapsam: tüm S kalemleri kapanışa dahil mi? | **Tüm S DAHİL** (US-C2, D3, E2, F2, G3); **US-F3 (C) backlog**. | §1 MoSCoW notu karara çevrildi. |
+| **PO-Q7** | Projeksiyon retention default + erasure pipeline + TENANT template materyalizasyonu? | **Üçü de basamak-2 teslimatı:** retention **sınıf-bazlı** (bulk 90g / audit-kritik yasal-saklama, kiracı override); **erasure pipeline kod teslimatı**; **TENANT_PII_CHECKLIST history-genişletmesi ayrı dosya**. | **EPIC-G** (US-G1 retention, US-G2 erasure, US-G3 pseudonymization); yeni dosya `TENANT_PII_CHECKLIST_TEMPLATE.md`; `DATA_CLASSIFICATION.md §5/§8` güncellendi. |
 
 ---
 
