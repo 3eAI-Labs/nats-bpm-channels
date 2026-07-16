@@ -5,10 +5,12 @@
 **Sentinel fazı:** Phase 1 — Product Owner (basamak-2)
 **Yerleşim:** `docs/sentinel/step2/phase1/` (PO-Q1)
 **Tarih:** 2026-07-16 (açılış) / 2026-07-17 (PO kararları işlendi)
-**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı; **PO-Q2 KVKK katmanlı politikası §6'da KARAR olarak yazıldı**
+**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı; **PO-Q2 KVKK katmanlı politikası §6'da KARAR olarak yazıldı**; phase1-review bulguları kapatıldı (F-001 anchor/sürüm-pin, F-004 DP-16 aralığı)
 **İlgili teslimatlar:** `USER_STORIES.md`, `SRS.md`, `GUIDELINES_MANIFEST.yaml`, `TENANT_PII_CHECKLIST_TEMPLATE.md` (basamak-2 history-genişletmesi, PO-Q7 — bu dizinde), basamak-1 `../../phase1/DATA_CLASSIFICATION.md` (DP-1…8 devri) + `../../phase1/TENANT_PII_CHECKLIST_TEMPLATE.md` (taban)
 
 > **Basamak-2, veri-koruma açısından basamağın en ağırıdır: history verisi PII yüzeyinin TA KENDİSİDİR.** Basamak-1'de tel üzerinde geçen payload'lar geçici (WorkQueue ack'te silinir, DLQ 14g) idi; basamak-2 bu veriyi **kalıcı, sorgulanabilir bir projeksiyon store'una** yazar → **uzun retention + rastgele-erişim + operatör-kimlikleri** yeni bir governance yüzeyi açar. Bu belge history akışında akan/saklanan/loglanan tüm veri öğelerini sınıflandırır. Motor/SPI iddiaları `07 §3`'te **DOĞRULANMIŞ** `file:line` referanslıdır. Basamak-1 **DP-1…DP-8 aynen devralınır**; basamak-2 **DP-9…DP-16** ekler (PO-Q2/Q7 kararları işlendi).
+>
+> **Guideline sürüm-pini (review F-001):** bu belgedeki `DATA_GOVERNANCE` atıfları **v4.0** bölüm numaralarına sabitlenmiştir; silme-hakkı/retention yükümlülüklerinin hukuki kaynağı etkin `compliance/KVKK.md` **v1.0** + `compliance/GDPR.md` **v1.0**'dır (manifest `compliance.enabled`).
 
 ---
 
@@ -48,7 +50,7 @@
 | **ATTACHMENT** | **B** bulk (PO-Q5) | ad, url/içerik, userId | **RESTRICTED / PII** | Binary/dosya referansı; bulk yolda, EPIC-G erasure'a tabi |
 | **TASK LOG / DECINST / CASEINST / BATCH** | B | karar girdi/çıktıları, batch meta | CONFIDENTIAL → içerik **PII** riski | DECINST karar payload'ı PII taşıyabilir |
 
-> **Sonuç:** history sınıflarının **çoğu** en az koşullu-PII taşır; birçoğu operatör kimliği (kişisel veri) içerir. Bu yüzden **projeksiyon store bütünüyle L3 (PII) muamelesi görür** (upward-inheritance, `DATA_GOVERNANCE §1.2 madde 2`).
+> **Sonuç:** history sınıflarının **çoğu** en az koşullu-PII taşır; birçoğu operatör kimliği (kişisel veri) içerir. Bu yüzden **projeksiyon store bütünüyle L3 (PII) muamelesi görür** (upward-inheritance, `DATA_GOVERNANCE v4.0 §2.2 kural 2`).
 
 ### 2.2 Wire (NATS mesaj header + gövde)
 
@@ -98,7 +100,7 @@
 ```
 
 - **Kritik yeni geçiş:** history verisi artık **kalıcı, ayrı bir store'a** (Postgres projeksiyon) yazılır → PII **uzun süre at-rest** durur. Basamak-1'de payload geçiciydi (ack'te silinirdi); basamak-2'de **saklamak amacın kendisidir** (sorgulanabilir history). Bu, retention/erasure politikasını (DP-9/DP-10) **zorunlu** kılar.
-- **Operatör kimlikleri güven sınırında:** OP_LOG/TASKINST/IDENTITYLINK operatör kimlikleri projeksiyon store'a ve sorgu-API'sine ulaşır → çalışan kişisel verisi işlenir (KVKK/GDPR data-controller yükümlülüğü, `DATA_GOVERNANCE §4.2`).
+- **Operatör kimlikleri güven sınırında:** OP_LOG/TASKINST/IDENTITYLINK operatör kimlikleri projeksiyon store'a ve sorgu-API'sine ulaşır → çalışan kişisel verisi işlenir (KVKK/GDPR data-controller yükümlülüğü — `compliance/KVKK v1.0 §2.3` controller/processor beyanı).
 - **En uzun tel-maruziyeti:** `dlq.history.>` (14g byte-ayna), basamak-1 ile aynı.
 
 ---
@@ -118,7 +120,7 @@
 | **DP-7** | Idempotency/Correlation business-key'den türerse PSEUDONYMOUS (hash/opak) | NFR-S1 |
 | **DP-8** | Business-Key masking **önerilir** (normatif değil, kiracı kararı) | NFR-S1 |
 
-**Basamak-2 yeni (DP-9…DP-15):**
+**Basamak-2 yeni (DP-9…DP-16):**
 
 | ID | Gereksinim | Bağlı NFR |
 |---|---|---|
@@ -129,7 +131,7 @@
 | **DP-13** | **History stream + `dlq.history.>` at-rest PII** taşır: TLS + subject-level erişim kontrolü + retention; ayrı-stream [CQ-6]; DLQ byte-ayna PII'yi 14g tutar → PII işleyen kiracı history-DLQ retention'ı kısaltır. | NFR-S4 |
 | **DP-14** | **Reconciliation raporları** PII değeri içermez (yalnız sayaç/id/hash); fark örnekleri gerekiyorsa maskeli. | NFR-S6 |
 | **DP-15** | **Sorgu-API** yanıtları role-based erişim + PII maskeleme; sorgu-API log'una PII değeri yazılmaz; erişim-audit (kim-neyi-sorguladı) tutulabilir. | NFR-S6 |
-| **DP-16** | **Pseudonymization kasası** (kimlik↔takma-ad haritası, FR-G3) **re-identification anahtarıdır** → **L4-bitişik** (`DATA_GOVERNANCE §1.1` "encryption keys" seviyesi): ayrı depo, en-az-yetki erişim + audit, projeksiyon store'dan izole. **Silme = harita kaydını silmek** → takma-ad tersinmez (denetim yapısı korunur). | NFR-S8 |
+| **DP-16** | **Pseudonymization kasası** (kimlik↔takma-ad haritası, FR-G3) **re-identification anahtarıdır** → **L4-bitişik** (`DATA_GOVERNANCE v4.0 §2.1` L4 "encryption keys" seviyesi): ayrı depo, en-az-yetki erişim + audit, projeksiyon store'dan izole. **Silme = harita kaydını silmek** → takma-ad tersinmez (denetim yapısı korunur). | NFR-S8 |
 
 ---
 
@@ -143,21 +145,21 @@
 | History DLQ mesajı | limits-based, default 14g | Uzun (byte-ayna) |
 | `ACT_HI_*` (dual-run) | motor cleanup; cutover sonrası o sınıf yazılmaz | Orta |
 
-**Governance kararı (PO-Q7 ONAYLANDI 2026-07-17):** projeksiyon retention **sınıf-bazlı** ve otomatik enforcement'lı (US-G1/FR-G1) — **bulk sınıflar default 90 gün** (kiracı override, operasyonel gereksinime göre uzatılabilir), **audit-kritik sınıflar yasal-saklama süresi** (denetim yükümlülüğü, `DATA_GOVERNANCE §3.1` audit-logs 7y taban; kiracı override). Her retention silmesi audit-log'lanır (`DATA_GOVERNANCE §3.3`).
+**Governance kararı (PO-Q7 ONAYLANDI 2026-07-17):** projeksiyon retention **sınıf-bazlı** ve otomatik enforcement'lı (US-G1/FR-G1) — **bulk sınıflar default 90 gün** (kiracı override, operasyonel gereksinime göre uzatılabilir), **audit-kritik sınıflar yasal-saklama süresi** (denetim yükümlülüğü, `DATA_GOVERNANCE v4.0 §4.2` audit-logs 7y taban; `compliance/KVKK v1.0 §4.2` denetim kayıtları 7y; kiracı override). Her retention silmesi audit-log'lanır (`DATA_GOVERNANCE v4.0 §4.4` "audit log entry per deletion").
 
 ---
 
 ## 6. KVKK silme-hakkı ↔ denetim-izi saklama gerilimi — KARAR (PO-Q2 ONAYLANDI 2026-07-17)
 
 > **Bu, basamak-2'nin en kritik veri-koruma kararıdır.** İki yükümlülük **çelişir**:
-> - **KVKK/GDPR silme-hakkı** (`DATA_GOVERNANCE §4.1` Right to Erasure): kişisel veri, meşru talep üzerine silinmeli.
-> - **Denetim-izi saklama** (`DATA_GOVERNANCE §3.1` Audit Logs: "immutable, no deletion, 7 yıl"): OP_LOG (kim-ne-yaptı), INCIDENT — audit-kritik ve **kişisel veri (operatör userId) içerir**.
+> - **KVKK/GDPR silme-hakkı** (`DATA_GOVERNANCE v4.0 §2.5` data-rights Erasure; `compliance/KVKK v1.0 §2.1` silme 30 gün SLA; `compliance/GDPR v1.0 §2.5` subject-rights): kişisel veri, meşru talep üzerine silinmeli.
+> - **Denetim-izi saklama** (`DATA_GOVERNANCE v4.0 §4.2` Audit logs: "immutable, append-only, 7y cold"; `compliance/KVKK v1.0 §4.2` denetim kayıtları 7y): OP_LOG (kim-ne-yaptı), INCIDENT — audit-kritik ve **kişisel veri (operatör userId) içerir**.
 
 **Gerilim:** Bir operatörün kişisel verisi (userId) hem OP_LOG denetim izinde tutulmalı (uyum/adli), hem silme-hakkı talebine tabi. `ACT_HI`'de bu tutarsızlık örtük; **projeksiyon store'a taşıyınca açık ve SQL-uygulanabilir** hale gelir → politika **şimdi** netleştirildi.
 
 **KARAR — KATMANLI politika (Levent, 2026-07-17):**
-1. **Yasal-saklama istisnası (audit-kritik):** audit-kritik sınıflar (OP_LOG, INCIDENT, EXT_TASK_LOG) `DATA_GOVERNANCE §4.1`/KVKK "kanunen saklama" gerekçesiyle **erasure'dan muaf**; retention denetim süresiyle sınırlı (US-G1). ⚠️ **Hukuki dayanak DPO doğrulamasına işaretli kalır** (bu SRS/veri-koruma teslimatı mekanizmayı verir; hukuki dayanağın kesin gerekçelendirmesi kiracı DPO'sunun onayıdır).
-2. **Bulk PII erasure pipeline:** bulk sınıflardaki PII (VARINST/DETAIL değerleri, TASKINST name/description, serbest metinler) projeksiyon-DB üstünde **erasure/anonimleştirme pipeline'ına tabi** (US-G2/FR-G2; DP-10).
+1. **Yasal-saklama istisnası (audit-kritik):** audit-kritik sınıflar (OP_LOG, INCIDENT, EXT_TASK_LOG) `compliance/KVKK v1.0 §4.2` (denetim retention; sapma = ADR + hukuki onay) / `DATA_GOVERNANCE v4.0 §2.5` istisna çerçevesiyle "kanunen saklama" gerekçesiyle **erasure'dan muaf**; retention denetim süresiyle sınırlı (US-G1). ⚠️ **Hukuki dayanak DPO doğrulamasına işaretli kalır** (bu SRS/veri-koruma teslimatı mekanizmayı verir; hukuki dayanağın kesin gerekçelendirmesi kiracı DPO'sunun onayıdır).
+2. **Bulk PII erasure pipeline:** bulk sınıflardaki PII (VARINST/DETAIL değerleri, TASKINST name/description, serbest metinler) projeksiyon-DB üstünde **erasure/anonimleştirme pipeline'ına tabi** (US-G2/FR-G2; DP-10; desen: `compliance/KVKK v1.0 §4.3` soft-delete → anonimleştirme → hard-delete, DPO doğrulamalı).
 3. **Audit-kritik pseudonymization seçeneği:** audit izinin **yapısını** koruyup PII alanını (userId) tersinmez takma-ada çevirme — **kimlik↔takma-ad haritası ayrı bir kasada** (DP-16); **silme = harita kaydını silmek** → takma-ad tersinmez olur (re-identification imkânsız, denetim tutarlılığı korunur). Opt-in; kiracı seçer (US-G3/FR-G3).
 4. **Kiracı kararı:** nihai retention/erasure duruşu kiracının data-controller yükümlülüğüdür; bu repo **mekanizmayı** sağlar (US-G1/G2/G3), **politikayı** kiracı `TENANT_PII_CHECKLIST_TEMPLATE.md` (bu dizin, §8) ile verir.
 

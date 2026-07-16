@@ -7,7 +7,7 @@
 **Kapsam:** `05-db-offload-strategy.md` §6.7 **basamak-2** (`07-history-offload.md`'in gereksinimleştirilmesi)
 **Girdi:** `docs/07-history-offload.md` (D-A…D-G KİLİTLİ, 2026-07-15/16)
 **Tarih:** 2026-07-16 (açılış) / 2026-07-17 (PO kararları işlendi)
-**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı (bkz. §8 PO Karar Kaydı)
+**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı (bkz. §8 PO Karar Kaydı); phase1-review KOŞULLU ONAY bulguları F-001…F-005 kapatıldı (2026-07-17: anchor'lar v4.0'a pinlendi, NFR-R8 eklendi)
 **Sürüm:** 1.0 (basamak-2)
 
 > Bu SRS, LLD değildir; **ne** yapılacağını (gereksinim) sabitler, **nasıl** yapılacağını (tasarım) `07`'ye + phase3/phase4'e bırakır. History-SPI/motor davranış iddiaları `07 §3/§7`'de **DOĞRULANMIŞ** `file:line` kanıtına dayanır. Doğrulanmamış varsayımlar "phase3'te doğrulanacak" etiketlidir. **Effort tahmini içermez.** Kilitli D-A…D-G kararları değiştirilmez.
@@ -145,9 +145,9 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 
 ### 3.7 Projeksiyon retention & KVKK erasure (EPIC-G — PO-Q2/Q7)
 
-**FR-G1** [M] — Sistem, projeksiyon store'da **sınıf-bazlı otomatik retention** uygulamalı (scheduled job, `DATA_GOVERNANCE §3.3`); **default (PO-Q7): bulk 90 gün, audit-kritik yasal-saklama süresi** (kiracı override); her silme audit-log'lanmalı. → US-G1 → PO-Q7; D-B; `DATA_CLASSIFICATION.md` DP-9.
+**FR-G1** [M] — Sistem, projeksiyon store'da **sınıf-bazlı otomatik retention** uygulamalı (scheduled job, `DATA_GOVERNANCE v4.0 §4.4`); **default (PO-Q7): bulk 90 gün, audit-kritik yasal-saklama süresi** (kiracı override); her silme audit-log'lanmalı. → US-G1 → PO-Q7; D-B; `DATA_CLASSIFICATION.md` DP-9.
 
-**FR-G2** [M] — Sistem, bulk sınıf PII'ları için **erasure/anonimleştirme pipeline'ı** sunmalı (KVKK/GDPR silme-hakkı; data-subject anahtarına göre; SQL-uygulanabilir; soft-delete→anonymize; erasure audit-log'lanır; erasure sonrası sorgu-API o PII'yi döndürmemeli). → US-G2 → PO-Q2 katman-2; `DATA_CLASSIFICATION.md` DP-10; `DATA_GOVERNANCE §4.1`.
+**FR-G2** [M] — Sistem, bulk sınıf PII'ları için **erasure/anonimleştirme pipeline'ı** sunmalı (KVKK/GDPR silme-hakkı; data-subject anahtarına göre; SQL-uygulanabilir; soft-delete→anonymize; erasure audit-log'lanır; erasure sonrası sorgu-API o PII'yi döndürmemeli). → US-G2 → PO-Q2 katman-2; `DATA_CLASSIFICATION.md` DP-10; `DATA_GOVERNANCE v4.0 §2.5`; `compliance/KVKK v1.0 §2.1/§4.3`; `compliance/GDPR v1.0 §2.5`.
 
 **FR-G3** [S] — Sistem, audit-kritik kayıtlar için **pseudonymization seçeneği** sunmalı: PII alanı (userId) tersinmez takma-ada çevrilir, **kimlik↔takma-ad haritası ayrı kasada**; silme = harita kaydını silmek (denetim yapısı korunur, re-identification imkânsız); kasa L4-bitişik korunur + erişim audit'i. → US-G3 → PO-Q2 katman-3; `DATA_CLASSIFICATION.md` §6, DP-11/DP-16.
 
@@ -170,9 +170,10 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 **NFR-R5** [M] — `dual-write` kalıcılaşmamalı: dual-run **geçici** (reconciliation kapısı); cutover sonrası DB yazımı gerçekten kalkmalı (kalıcı dual-run REDDEDİLDİ). → FR-D2.
 **NFR-R6** [M] — Idempotency: tüm consumer'lar dedup (`Nats-Msg-Id=<eventId>:<type>`) + merge-upsert ile çift/geç teslimi güvenle yutmalı. → FR-B2.
 **NFR-R7** [S] — Cutover **geri-döndürülebilir** olmalı (sınıfı yeniden açma, konfig). → FR-D3.
+**NFR-R8** [S] — **Erişilebilirlik/kurtarma zarfı (phase1-review F-003):** yeni stateful yüzeyler için duruş açıkça şudur — (1) **relay HA** basamak-1 `SweepLeaderLease` lider-devri deseninden **devralınır** (lider düşerse lease TTL içinde devir; relay kesintisi audit verisi KAYBETMEZ — kompakt outbox birikir, custody-transfer korunur; NFR-R1/R3); (2) **projeksiyon Postgres'in HA/failover/RTO-RPO hedefi kiracı-owned'dır** (gömülebilir-kütüphane duruşu, §4.7) — store kesintisi projeksiyon-lag'ini büyütür (NFR-P3 SLI), audit kaybı üretmez; kiracı RTO/RPO beklentisini `TENANT_PII_CHECKLIST` üzerinden verir. Relay lider-devri süresi phase3'te doğrulanacak. → FR-B1; NFR-P3.
 
 ### 4.3 Güvenlik & veri koruma
-> History = **PII yüzeyinin ta kendisi**. Ayrıntı: `DATA_CLASSIFICATION.md` (basamak-1 DP-1…8 devralınır; basamak-2 DP-9…15 eklenir).
+> History = **PII yüzeyinin ta kendisi**. Ayrıntı: `DATA_CLASSIFICATION.md` (basamak-1 DP-1…8 devralınır; basamak-2 DP-9…16 eklenir).
 **NFR-S1** [M] — Payload/business-key/operatör-kimliği **değerleri** loglara ve metrik tag'lerine yazılmamalı (basamak-1 DP-1 devralınır; history akışına genişler). → `DATA_CLASSIFICATION.md` DP-1.
 **NFR-S2** [M] — Projeksiyon Postgres bir **L3 (PII) store**'dur: at-rest şifreleme (AES-256), erişim kontrolü, retention/silme (SQL) uygulanmalı. → `DATA_CLASSIFICATION.md` DP-9.
 **NFR-S3** [M] — KVKK/GDPR **silme-hakkı** projeksiyon store üstünde uygulanabilir olmalı. **PO-Q2 katmanlı politikası (2026-07-17, ÇÖZÜLDÜ):** (1) audit-kritik sınıflar **yasal-saklama istisnası** (hukuki dayanak DPO doğrulaması), (2) bulk PII **erasure pipeline** (FR-G2), (3) audit-kritik **pseudonymization seçeneği** (FR-G3). → `DATA_CLASSIFICATION.md §6`, DP-10; FR-G2/FR-G3.
@@ -180,7 +181,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 **NFR-S5** [M] — Kompakt outbox (engine DB'de, audit-kritik) history payload'ı geçici taşır → kaynak event ile aynı sınıf; relay silmesiyle kısa maruziyet. → `DATA_CLASSIFICATION.md` DP-12.
 **NFR-S6** [M] — Reconciliation raporları ve sorgu-API yanıtları/log'ları PII değeri sızdırmamalı (maskeleme/sayaç-only). → `DATA_CLASSIFICATION.md` DP-14/DP-15.
 **NFR-S7** [S] — NATS transport güvenliği (TLS + NKey/JWT) production'da zorunlu; history subject'lerine subject-level authz. *Detay phase3.* → basamak-1 NFR-S3 devralınır.
-**NFR-S8** [S] — Pseudonymization kasası (kimlik↔takma-ad haritası, FR-G3) **re-identification anahtarı** taşıdığından en yüksek koruma altında (L4-bitişik, `DATA_GOVERNANCE §1.1`) tutulmalı: ayrı depo, erişim en-az-yetki + audit, projeksiyon store'dan izole. → `DATA_CLASSIFICATION.md` DP-16; FR-G3.
+**NFR-S8** [S] — Pseudonymization kasası (kimlik↔takma-ad haritası, FR-G3) **re-identification anahtarı** taşıdığından en yüksek koruma altında (L4-bitişik, `DATA_GOVERNANCE v4.0 §2.1`) tutulmalı: ayrı depo, erişim en-az-yetki + audit, projeksiyon store'dan izole. → `DATA_CLASSIFICATION.md` DP-16; FR-G3.
 
 ### 4.4 Gözlemlenebilirlik
 **NFR-O1** [M] — Tüm history publish/consume/DLQ/nak/ack olayları Micrometer sayaçlarıyla ölçülmeli (`NatsChannelMetrics` üstüne). → FR-E2.
@@ -269,7 +270,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 | Flowable history offload (**basamak-2b**) | **ERTELENDİ** (7.1'de hazır async-history yok; SPI `HistoryManager` Camunda ile arayüz-paylaşımı ~0; audit-kritik harita yeniden yapılmalı) | `07 §1` madde 6 / `07 §7` / D-G |
 | Üç-motor-birlikte | **REDDEDİLDİ** (kapsam ~2×, iki SPI riski tek teslimatta) | `07 §1` madde 6 / D-G |
 | Flowable-süresiz-dışarıda | **REDDEDİLDİ** (üç-motor-eşitliği vizyonunu kırar → basamak-2b planlı) | `07 §1` madde 6 / D-G |
-| token-move/completion tx kaldırılması | **KAPSAM DIŞI** → basamak-6 (P2) | `05 §6.7` |
+| token-move/completion tx kaldırılması | **KAPSAM DIŞI** → basamak-6 (`05 §6.7` strangler basamağı; "P2" persona değil) | `05 §6.7` |
 | Büyük değişken externalization / DB sharding | **KAPSAM DIŞI** → basamak 3 / 5 | `05 §6.7` |
 
 ---

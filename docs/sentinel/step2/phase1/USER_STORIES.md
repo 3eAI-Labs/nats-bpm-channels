@@ -6,7 +6,7 @@
 **Kapsam:** `05-db-offload-strategy.md` §6.7 **basamak-2** (History offload) — `07-history-offload.md`'in somutlaştırdığı iş
 **Girdi:** `docs/07-history-offload.md` (D-A…D-G KİLİTLİ, 2026-07-15/16)
 **Tarih:** 2026-07-16 (açılış) / 2026-07-17 (PO kararları işlendi)
-**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı (bkz. §4 PO Karar Kaydı)
+**Durum:** Onaylı (2026-07-17) — PO-Q1…7 cevaplandı (bkz. §4 PO Karar Kaydı); phase1-review bulguları kapatıldı (F-001 anchor'lar, F-002 EPIC-G kapsam-ack)
 
 > **Dokümantasyon dili Türkçe; kod/tanımlayıcılar İngilizce.** Motor/history-SPI davranışına dair her iddia `docs/07 §3/§7`'de **DOĞRULANMIŞ** file:line kanıtına dayanır. Doğrulanmamış varsayımlar açıkça "phase3'te doğrulanacak" etiketlidir. **Effort/story-point tahmini içermez** (workspace kuralı). **Kilitli kararlar (D-A…D-G) değiştirilmez; reddedilen/ertelenenler yeniden açılmaz.**
 
@@ -376,16 +376,18 @@ Toplam: **25 user story.**
 ## EPIC-G — Projeksiyon retention & KVKK erasure pipeline (PO-Q2/Q7 kararı)
 
 > **PO-Q7 kararı (2026-07-17):** retention default'u, erasure pipeline'ı ve pseudonymization mekanizması **üçü de basamak-2 teslimatıdır.** History = kalıcı PII yüzeyi olduğundan (projeksiyon store, `DATA_CLASSIFICATION.md`), veri-yaşam döngüsü artık bir **kod teslimatıdır** (basamak-1'de yalnız retention konfigü vardı; basamak-2 aktif silme/anonimleştirme getirir). PO-Q2 katmanlı politikasını uygular.
+>
+> **Kapsam-ack (phase1-review F-002):** EPIC-G, `docs/07 §6` "kod kapsamı özü"nü **aşan** yeni kod yüzeyidir (özellikle US-G3 pseudonymization kasası — ayrı stateful depo) ve D-A…D-G'nin file:line kanıt tabanı dışındadır. Bilinçli PO kararı; kilitli kararları değiştirmez. `docs/07 §6`'ya kapsam-eki notu düşüldü; **phase3 HLD/ADR'de kasa + erasure pipeline ilk-sınıf tasarım kalemidir.**
 
 ### US-G1 — Sınıf-bazlı projeksiyon retention enforcement
 **P5 Veri Koruma Sorumlusu (DPO)** olarak, projeksiyon store'daki history'nin **sınıf-bazlı** ve otomatik bir retention işiyle temizlenmesini istiyorum; **böylece** PII gereksiz süre saklanmasın ve retention KVKK/GDPR minimizasyonuna uysun.
 **Öncelik:** M
 **Kabul kriterleri:**
-- [ ] Otomatik retention job (scheduled) sınıf-başına retention penceresi uygular (`DATA_GOVERNANCE §3.3` deseni).
+- [ ] Otomatik retention job (scheduled) sınıf-başına retention penceresi uygular (`DATA_GOVERNANCE v4.0 §4.4` deseni).
 - [ ] **PO-Q7 default'ları:** bulk sınıflar **90 gün** (kiracı override); audit-kritik sınıflar **yasal-saklama** süresi (örn. denetim yükümlülüğü, kiracı override).
-- [ ] Retention silmesi audit-log kaydı üretir (`DATA_GOVERNANCE §3.3` — "audit log entry for every deletion").
+- [ ] Retention silmesi audit-log kaydı üretir (`DATA_GOVERNANCE v4.0 §4.4` — "audit log entry per deletion").
 - [ ] Retention penceresi **kiracı-konfigürable**; policy `TENANT_PII_CHECKLIST_TEMPLATE.md` history-katmanında kaydedilir.
-**Dayanak:** PO-Q7 kararı (2026-07-17); D-B (KVKK retention SQL'le); `DATA_CLASSIFICATION.md` DP-9, §5; `DATA_GOVERNANCE §3.1/§3.3`.
+**Dayanak:** PO-Q7 kararı (2026-07-17); D-B (KVKK retention SQL'le); `DATA_CLASSIFICATION.md` DP-9, §5; `DATA_GOVERNANCE v4.0 §4.2/§4.4`; `compliance/KVKK v1.0 §4.2`.
 **Bağımlılık:** US-B3 (denormalize şema, SQL retention).
 
 ---
@@ -394,11 +396,11 @@ Toplam: **25 user story.**
 **P5 Veri Koruma Sorumlusu (DPO)** olarak, bulk sınıflardaki PII için projeksiyon-DB üstünde bir **erasure/anonimleştirme pipeline'ı** istiyorum; **böylece** KVKK/GDPR silme-hakkı talepleri (data subject) yerine getirilebilsin.
 **Öncelik:** M
 **Kabul kriterleri:**
-- [ ] Data-subject anahtarına (örn. businessKey / userId) göre bulk sınıf PII'ları (VARINST/DETAIL değerleri, TASKINST name/description, serbest metinler) **silinir/anonimleştirilir** (soft-delete → anonymize, `DATA_GOVERNANCE §4.1` Right to Erasure).
+- [ ] Data-subject anahtarına (örn. businessKey / userId) göre bulk sınıf PII'ları (VARINST/DETAIL değerleri, TASKINST name/description, serbest metinler) **silinir/anonimleştirilir** (soft-delete → anonymize, `DATA_GOVERNANCE v4.0 §2.5` Erasure; `compliance/KVKK v1.0 §4.3` anonimleştirme pipeline'ı).
 - [ ] Pipeline SQL-uygulanabilir (D-B — denormalize şema); erasure işlemi audit-log'lanır (kim-neyi-ne-zaman sildi).
 - [ ] **PO-Q2 katmanı (2):** bulk PII erasure'a **tabidir** (audit-kritik'ten farklı — US-G3).
 - [ ] Erasure tamlığı doğrulanabilir (erasure sonrası sorgu-API o PII'yi döndürmez).
-**Dayanak:** PO-Q2 kararı katman-2 (2026-07-17); D-B; `DATA_CLASSIFICATION.md` DP-10; `DATA_GOVERNANCE §4.1`.
+**Dayanak:** PO-Q2 kararı katman-2 (2026-07-17); D-B; `DATA_CLASSIFICATION.md` DP-10; `DATA_GOVERNANCE v4.0 §2.5`; `compliance/KVKK v1.0 §2.1/§4.3`; `compliance/GDPR v1.0 §2.5`.
 **Bağımlılık:** US-B3, US-G1.
 
 ---
@@ -442,8 +444,8 @@ Toplam: **25 user story.**
 | US-F1 | — (`07 §5` #7) | `07 §5` borç #7 (bench ilk koşu = hedef tavan) |
 | US-F2 | — (`07 §5` #2) | `07 §5` borç #2; CQ-6 |
 | US-F3 | — (`07 §5` #1,3,4,5,6) | `07 §5` borç tablosu |
-| US-G1 | D-B, PO-Q7 | PO-Q7 kararı; `DATA_GOVERNANCE §3.1/§3.3`; DP-9 |
-| US-G2 | PO-Q2 (katman-2) | PO-Q2 kararı; `DATA_GOVERNANCE §4.1`; DP-10 |
+| US-G1 | D-B, PO-Q7 | PO-Q7 kararı; `DATA_GOVERNANCE v4.0 §4.2/§4.4`; DP-9 |
+| US-G2 | PO-Q2 (katman-2) | PO-Q2 kararı; `DATA_GOVERNANCE v4.0 §2.5`; `KVKK v1.0 §2.1/§4.3`; DP-10 |
 | US-G3 | PO-Q2 (katman-3) | PO-Q2 kararı; `DATA_CLASSIFICATION.md §6`; DP-11/DP-16 |
 
 ---

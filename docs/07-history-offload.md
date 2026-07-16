@@ -67,6 +67,8 @@ Fork history alanında upstream Camunda 7 ile **birebir** (tek commit: paket ren
 - **D-G — Flowable tarafı:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = Camunda ailesi önce; Flowable = basamak-2b (bkz. §1 madde 6).
 
 > **Durum (2026-07-16):** D-A…D-G **tamamı çözüldü.** Bu belge **basamak-2 Sentinel phase1 girdisi olarak HAZIR.** Kod kapsamı özü: NatsHistoryEventHandler (composite, sınıf-bazlı hibrit yol) + kompakt outbox + relay, post-commit publisher (basamak-1 deseni yeniden kullanım), Postgres projeksiyon servisi (asyncapi-kontratlı, instance-anahtarlı partition + merge-upsert), minimal history sorgu-API'si, reconciliation raporu + kademeli cutover konfigürasyonu, bench history modu.
+>
+> **Kapsam eki (2026-07-17, PO-Q7 — phase1-review F-002 izlenebilirlik notu):** phase1'de **EPIC-G veri-koruma teslimatları kod kapsamına EKLENDİ** — sınıf-bazlı retention enforcement (US-G1), bulk-PII erasure/anonimleştirme pipeline'ı (US-G2) ve **pseudonymization kasası** (US-G3; ayrı depo, kimlik↔takma-ad haritası, L4-bitişik). Bunlar yukarıdaki kod-kapsamı özünde YOKTU ve D-A…D-G'nin file:line kanıt tabanının dışındadır (bilinçli PO kararı, kilitli kararları değiştirmez). **Phase3 HLD/ADR bunları ilk-sınıf tasarım kalemi olarak ele almalıdır** (özellikle kasa: yeni stateful bileşen).
 
 ## 7. Doğrulama notları
 

@@ -45,6 +45,9 @@ guidelines:
     - frontend-security              # kapsam dışı (UI/istemci yok)
 
 compliance:
+  # Sürüm-pini (phase1-review F-001): teslimatlardaki guideline atıfları şu sürümlere sabitlidir —
+  #   core/DATA_GOVERNANCE.md v4.0, compliance/KVKK.md v1.0, compliance/GDPR.md v1.0.
+  #   Guideline sürümü değişirse anchor'lar yeniden doğrulanmalı.
   enabled:
     - KVKK                           # history verisi PII yüzeyinin TA KENDİSİDİR: değişken payload'ları (VARINST/DETAIL),
                                      #   business-key'ler (PROCINST), operatör kimlikleri (OP_LOG userId, TASKINST assignee),
