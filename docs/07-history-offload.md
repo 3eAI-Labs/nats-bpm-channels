@@ -12,7 +12,12 @@ Basamak-2'nin karar dokümanı — `06-external-task-over-jetstream.md`'nin basa
 
 ## 1. Karar özeti (kilitli)
 
-*(Henüz karar kilitlenmedi — §6 sırayla soruluyor.)*
+1. **D-A (2026-07-15): Hibrit, event-sınıfı-bazlı tutarlılık.** Audit-kritik sınıflar (OP_LOG, INCIDENT, EXT_TASK_LOG — düşük hacim) → tx-içi **kompakt outbox** + relay/delete (**at-least-once**, audit kaybı imkansız); bulk sınıflar (DETAIL, VARINST, ACTINST — hacmin ~%90'ı) → **post-commit listener** (**at-most-once**, sıfır DB yazımı). Sınıflandırma konfigürable. docs/05 D2 interim-posture'ının history izdüşümü. REDDEDİLEN: handler-içi senkron publish (tx coupling, §4); tek-desen-hepsi varyantları (tam-outbox: yazım kalır; tam-post-commit: sessiz audit kaybı).
+2. **D-B (2026-07-16): Query-store = engine DB'sinden AYRI Postgres projeksiyonu.** Denormalize/sorgu-odaklı şema; consumer = asyncapi-kontratlı projeksiyon servisi (ADR-0006 deseni). Contention domain ayrılır, SQL/ops bilgisi yeniden kullanılır, KVKK retention SQL'le. Hacim zorlarsa ClickHouse'a evrim ayrı karar (kontrat sabit → consumer değişimi izole). REDDEDİLEN: JetStream-only (rastgele-erişim audit sorguları için yetersiz); ClickHouse-şimdi (yeni ops yüzeyi, ihtiyaç kanıtlanmadan).
+3. **D-C (2026-07-16): Kademeli sınıf-bazlı cutover + minimal sorgu-API.** Dual-run boyunca sınıf-başına reconciliation raporu (projeksiyon ↔ ACT_HI); sınıf N gün temiz kalınca yalnız o sınıfın DB yazımı kapatılır (hacim-öncelikli sıra: DETAIL→VARINST→ACTINST→…). Cutover'lanan sınıflar için Cockpit history körleşir; karşılığında basamak-2 teslimatına query-store üstünde **minimal history sorgu-API'si** dahildir. Geri dönüş = sınıfı yeniden açmak (konfig). REDDEDİLEN: big-bang (etki yüzeyi/geri dönüş büyük), kalıcı dual-run (yazım hacmi kalkmıyor — §6.7 hedefiyle çelişir).
+4. **D-D (2026-07-16, D-A/D-C'nin sonucu — sorulmadan kapatıldı):** Kapsam = **tüm ACT_HI event sınıfları** (sınıf-bazlı makine hepsini taşır); cutover SIRASI hacim-öncelikli. İstisna yok — düşük-hacim/yüksek-audit sınıflar zaten D-A'da outbox yoluna ayrıldı.
+5. **D-E (2026-07-16): Instance-anahtarlı sıra + merge-upsert.** Subject şeması `history.<engineId>.<class>.<processInstanceId>` (aynı instance aynı subject'te → stream sırası korunur); projeksiyon consumer'ı instance-anahtarıyla partition'lı (aynı instance hep aynı işleyicide); güvenlik ağı: **idempotent merge-upsert** (geç/eski event yeni state'i ezmez). Dedup: `Nats-Msg-Id = <historyEventId>:<eventType>`. DLQ: basamak-1 D-E kontratı AYNEN (`dlq.history.>`, header-korumalı, custody-transfer ack; ayrı-stream şartı [CQ-6] history stream'leri için de geçerli). REDDEDİLEN: sırasız+salt-upsert (çatışma-çözüm karmaşası), global tek-consumer (throughput tavanı).
+6. **D-F (2026-07-16, basamak-1 D-F deseninin izdüşümü — sorulmadan kapatıldı):** Birincil metrik = **process-adımı başına normalize DB yazım-op'u** (baseline: mevcut AUDIT seviyesi dual-run öncesi; hedef: cutover'lanan sınıflarda history-yazım bileşeni **0**, outbox bileşeni yalnız audit-kritik sınıflarda ≤1 kompakt satır/tx). `nats-bpm-bench`'e history modu eklenir; sert kapı yalnız normalize metrik (PO-Q7 ilkesi), reconciliation-temizliği cutover kapısıdır (D-C). Destekleyici SLI: projeksiyon gecikmesi (event→query-store p95), reconciliation fark sayacı.
 
 ## 2. Neden bu belge
 
@@ -52,13 +57,13 @@ Fork history alanında upstream Camunda 7 ile **birebir** (tek commit: paket ren
 
 ## 6. Açık kararlar (sırayla Levent onayına)
 
-- **D-A — Yayın ve tutarlılık deseni:** custom handler in-tx'te ne yapar; at-least-once nasıl sağlanır (kompakt outbox / post-commit at-most-once / event-sınıfı-bazlı hibrit)? Cutover-sonrası telafi kaynağı sorusu burada çözülür. — **sıradaki karar.**
-- **D-B — Query-store seçimi:** history sorguları (Cockpit dahil) nereden okur — ayrı Postgres/ClickHouse/ES projeksiyonu mu, JetStream stream + on-demand projeksiyon mu? Consumer = asyncapi kontratlı projeksiyon servisi.
-- **D-C — Geçiş stratejisi + Cockpit kaderi:** dual-run (DB+NATS) → doğrulama → cutover (`enableDefaultDbHistoryEventHandler=false`); Cockpit history UI'ı ACT_HI'dan okur — cutover sonrası ne olur (query-store'a yönlendirme / kayıp kabulü / Cockpit-history'siz işletim)?
-- **D-D — Tablo/event kapsamı:** tümü mü, hacim-öncelikli alt küme mi (DETAIL/VARINST/ACTINST önce)? OP_LOG/COMMENT/ATTACHMENT gibi düşük-hacim + yüksek-audit sınıfların yeri.
-- **D-E — DLQ/ack + dedup:** history event'leri için `Nats-Msg-Id` anahtarı (event id?), D-E(basamak-1) kontratının yeniden kullanımı, sıralama gereksinimleri (aynı instance'ın event'leri sıralı mı tüketilmeli — JetStream ordering / partition anahtarı).
-- **D-F — Başarı metriği:** bench'e history modu — normalize "DB yazım-op / process-adımı" metriği; baseline = mevcut AUDIT seviyesi.
-- **D-G — Flowable tarafı:** Flowable history mimarisi farklı (async history zaten var mı? — doğrulanacak); kapsam bu basamakta Camunda/CadenzaFlow mu, üç motor mu?
+- **D-A — Yayın ve tutarlılık deseni:** ✅ **ÇÖZÜLDÜ (2026-07-15)** = hibrit sınıf-bazlı (bkz. §1 madde 1).
+- **D-B — Query-store seçimi:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = ayrı Postgres projeksiyonu (bkz. §1 madde 2).
+- **D-C — Geçiş stratejisi + Cockpit kaderi:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = kademeli sınıf-bazlı + sorgu-API (§1 madde 3).
+- **D-D — Tablo/event kapsamı:** ✅ **KAPATILDI (2026-07-16, D-A/D-C sonucu)** = tüm sınıflar, hacim-öncelikli sıra (§1 madde 4).
+- **D-E — Sıralama + dedup + DLQ:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = instance-anahtarlı sıra + merge-upsert (§1 madde 5).
+- **D-F — Başarı metriği:** ✅ **KAPATILDI (2026-07-16, basamak-1 deseni)** = normalize DB yazım-op/adım + bench history modu (§1 madde 5).
+- **D-G — Flowable tarafı:** Flowable history mimarisi farklı (async history zaten var mı? — **kanıt keşfi sürüyor, 2026-07-16**); kapsam bu basamakta Camunda/CadenzaFlow mu, üç motor mu? — **keşif raporu sonrası sorulacak (son açık karar).**
 
 ## 7. Doğrulama notları
 
