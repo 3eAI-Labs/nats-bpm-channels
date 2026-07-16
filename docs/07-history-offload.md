@@ -1,8 +1,8 @@
 # Strateji: History Offload — ACT_HI Yazımını DB'den NATS'a Taşı (Basamak-2)
 
 **Bağlam:** `05-db-offload-strategy.md` §6.7 merdiveni, basamak-2. Basamak-1 (dispatch push) v0.2.0 olarak yayında (`9e04b16`).
-**Durum:** Taslak — açık kararlar tek tek Levent onayına sunuluyor ([[decision-workflow-preference]] kalıbı).
-**Tarih:** 2026-07-15
+**Durum:** ✅ Kararlar kilitli (D-A…D-G, 2026-07-15/16) — **Sentinel phase1 (basamak-2) girdisi HAZIR.**
+**Tarih:** 2026-07-15 (açılış) / 2026-07-16 (kararlar tamam)
 
 ---
 
@@ -17,7 +17,8 @@ Basamak-2'nin karar dokümanı — `06-external-task-over-jetstream.md`'nin basa
 3. **D-C (2026-07-16): Kademeli sınıf-bazlı cutover + minimal sorgu-API.** Dual-run boyunca sınıf-başına reconciliation raporu (projeksiyon ↔ ACT_HI); sınıf N gün temiz kalınca yalnız o sınıfın DB yazımı kapatılır (hacim-öncelikli sıra: DETAIL→VARINST→ACTINST→…). Cutover'lanan sınıflar için Cockpit history körleşir; karşılığında basamak-2 teslimatına query-store üstünde **minimal history sorgu-API'si** dahildir. Geri dönüş = sınıfı yeniden açmak (konfig). REDDEDİLEN: big-bang (etki yüzeyi/geri dönüş büyük), kalıcı dual-run (yazım hacmi kalkmıyor — §6.7 hedefiyle çelişir).
 4. **D-D (2026-07-16, D-A/D-C'nin sonucu — sorulmadan kapatıldı):** Kapsam = **tüm ACT_HI event sınıfları** (sınıf-bazlı makine hepsini taşır); cutover SIRASI hacim-öncelikli. İstisna yok — düşük-hacim/yüksek-audit sınıflar zaten D-A'da outbox yoluna ayrıldı.
 5. **D-E (2026-07-16): Instance-anahtarlı sıra + merge-upsert.** Subject şeması `history.<engineId>.<class>.<processInstanceId>` (aynı instance aynı subject'te → stream sırası korunur); projeksiyon consumer'ı instance-anahtarıyla partition'lı (aynı instance hep aynı işleyicide); güvenlik ağı: **idempotent merge-upsert** (geç/eski event yeni state'i ezmez). Dedup: `Nats-Msg-Id = <historyEventId>:<eventType>`. DLQ: basamak-1 D-E kontratı AYNEN (`dlq.history.>`, header-korumalı, custody-transfer ack; ayrı-stream şartı [CQ-6] history stream'leri için de geçerli). REDDEDİLEN: sırasız+salt-upsert (çatışma-çözüm karmaşası), global tek-consumer (throughput tavanı).
-6. **D-F (2026-07-16, basamak-1 D-F deseninin izdüşümü — sorulmadan kapatıldı):** Birincil metrik = **process-adımı başına normalize DB yazım-op'u** (baseline: mevcut AUDIT seviyesi dual-run öncesi; hedef: cutover'lanan sınıflarda history-yazım bileşeni **0**, outbox bileşeni yalnız audit-kritik sınıflarda ≤1 kompakt satır/tx). `nats-bpm-bench`'e history modu eklenir; sert kapı yalnız normalize metrik (PO-Q7 ilkesi), reconciliation-temizliği cutover kapısıdır (D-C). Destekleyici SLI: projeksiyon gecikmesi (event→query-store p95), reconciliation fark sayacı.
+6. **D-G (2026-07-16): Kapsam = Camunda 7 + CadenzaFlow; Flowable = basamak-2b.** Fork ailesi aynı `HistoryEventHandler` SPI'ını paylaşır (tek adapter + byte-ayna, basamak-1 deseni). Flowable ertelenme gerekçesi (kanıtlı): 7.1'de hazır async-history YOK (6.x producer'ı kaldırılmış — `initHistoryManager` bytecode'u async'e dallanmıyor, `initHistoryJobHandlers` boş; yalnız executor iskeleti duruyor); asıl SPI `HistoryManager` (40+ imperatif metot, DTO'suz, canlı entity'ler) → Camunda adapter'ıyla arayüz-seviyesi kod paylaşımı sıfıra yakın; audit-kritik sınıf haritası (OP_LOG/INCIDENT/EXT_TASK_LOG Flowable BPMN'de ACT_HI değil; ENTITYLINK/TSK_LOG Flowable'a özgü) yeniden yapılmalı. **Basamak-2b:** ayrı kısa karar dokümanı — `CompositeHistoryManager` + `HistoryConfigurationSettings` gating + aynı wire-kontrat/query-store'a bağlanma; desen/projeksiyon 2'de kanıtlandıktan sonra yalnız adapter işi. REDDEDİLEN: üç-motor-birlikte (kapsam ~2×, iki SPI riski tek teslimatta); Flowable-süresiz-dışarıda (üç-motor-eşitliği vizyonunu kırar).
+7. **D-F (2026-07-16, basamak-1 D-F deseninin izdüşümü — sorulmadan kapatıldı):** Birincil metrik = **process-adımı başına normalize DB yazım-op'u** (baseline: mevcut AUDIT seviyesi dual-run öncesi; hedef: cutover'lanan sınıflarda history-yazım bileşeni **0**, outbox bileşeni yalnız audit-kritik sınıflarda ≤1 kompakt satır/tx). `nats-bpm-bench`'e history modu eklenir; sert kapı yalnız normalize metrik (PO-Q7 ilkesi), reconciliation-temizliği cutover kapısıdır (D-C). Destekleyici SLI: projeksiyon gecikmesi (event→query-store p95), reconciliation fark sayacı.
 
 ## 2. Neden bu belge
 
@@ -62,12 +63,14 @@ Fork history alanında upstream Camunda 7 ile **birebir** (tek commit: paket ren
 - **D-C — Geçiş stratejisi + Cockpit kaderi:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = kademeli sınıf-bazlı + sorgu-API (§1 madde 3).
 - **D-D — Tablo/event kapsamı:** ✅ **KAPATILDI (2026-07-16, D-A/D-C sonucu)** = tüm sınıflar, hacim-öncelikli sıra (§1 madde 4).
 - **D-E — Sıralama + dedup + DLQ:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = instance-anahtarlı sıra + merge-upsert (§1 madde 5).
-- **D-F — Başarı metriği:** ✅ **KAPATILDI (2026-07-16, basamak-1 deseni)** = normalize DB yazım-op/adım + bench history modu (§1 madde 5).
-- **D-G — Flowable tarafı:** Flowable history mimarisi farklı (async history zaten var mı? — **kanıt keşfi sürüyor, 2026-07-16**); kapsam bu basamakta Camunda/CadenzaFlow mu, üç motor mu? — **keşif raporu sonrası sorulacak (son açık karar).**
+- **D-F — Başarı metriği:** ✅ **KAPATILDI (2026-07-16, basamak-1 deseni)** = normalize DB yazım-op/adım + bench history modu (§1 madde 7).
+- **D-G — Flowable tarafı:** ✅ **ÇÖZÜLDÜ (2026-07-16)** = Camunda ailesi önce; Flowable = basamak-2b (bkz. §1 madde 6).
+
+> **Durum (2026-07-16):** D-A…D-G **tamamı çözüldü.** Bu belge **basamak-2 Sentinel phase1 girdisi olarak HAZIR.** Kod kapsamı özü: NatsHistoryEventHandler (composite, sınıf-bazlı hibrit yol) + kompakt outbox + relay, post-commit publisher (basamak-1 deseni yeniden kullanım), Postgres projeksiyon servisi (asyncapi-kontratlı, instance-anahtarlı partition + merge-upsert), minimal history sorgu-API'si, reconciliation raporu + kademeli cutover konfigürasyonu, bench history modu.
 
 ## 7. Doğrulama notları
 
 - Fork history altyapısı haritası → ✅ DOĞRULANDI (2026-07-15, Explore keşfi — §3'teki tüm file:line'lar).
-- Flowable history mimarisi (async history job / handler SPI'ı) → doğrulanacak (D-G öncesi).
+- Flowable history mimarisi → ✅ **DOĞRULANDI (2026-07-16, jar-keşfi):** 7.1'de async-history producer YOK (`initHistoryManager` async'e dallanmıyor — bytecode kanıtı; `AsyncHistoryManager/Session/Listener` hiçbir jar'da yok); gerçek SPI `HistoryManager`/`CompositeHistoryManager`/`setHistoryManager` + `HistoryConfigurationSettings`; `HistoryJobHandler` + `ACT_RU_HISTORY_JOB` + bytearray-payload iskeleti mevcut ama producer köprüsü bize kalır; Event Registry history'den tamamen ayrık. → D-G kararının kanıt tabanı.
 - Cockpit history UI'ının ACT_HI bağımlılık yüzeyi → doğrulanacak (D-C öncesi).
 - `handleEvents(List)` batch yolunun gerçek kullanım sıklığı (composite tek tek `handleEvent`'e düşüyor — `CompositeHistoryEventHandler.java:100-105`) → phase3'te doğrulanacak.
