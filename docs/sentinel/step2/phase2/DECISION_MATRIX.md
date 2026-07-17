@@ -4,7 +4,7 @@
 **Sentinel fazı:** Phase 2 — Business Analyst (basamak-2)
 **İlgili:** `BUSINESS_LOGIC.md` (BR-XXX kataloğu, süreç akışları, durum makineleri), `EXCEPTION_CODES.md`
 **Tarih:** 2026-07-17
-**Durum:** BA-Q1…8 kararları işlendi (2026-07-17) — phase-review bekliyor
+**Durum:** BA-Q1…8 kararları işlendi (2026-07-17); phase-review KOŞULLU ONAY + bulgular düzeltildi (`PHASE2_REVIEW.md`) — Levent faz-3 onayı bekleniyor
 
 > BA Guideline §2.2 gereği "if-this-then-that" mantığı burada tablo olarak sabitlenir — düz metin YASAK. Her satır bir BR/FR/US'ye bağlıdır. Kanıtlar `[07§3]` (docs/07 §3/§7'de DOĞRULANMIŞ, bu fazda taşındı), `[07§4]` (basamak-1'den reusable, docs/07 §4) ya da `[BA-türetildi]` (bu fazda bulunan kenar-durum, `BUSINESS_LOGIC.md §9` BA-Q'ya bağlı) etiketlidir. Görev talimatı gereği asgari altı ana matris + üç destekleyici matris üretilmiştir.
 

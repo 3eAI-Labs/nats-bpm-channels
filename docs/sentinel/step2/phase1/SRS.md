@@ -115,7 +115,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 
 ### 3.3 Sorgu-API + Cockpit-körleşme telafisi (EPIC-C)
 
-**FR-C1** [M] — Sistem, **projeksiyon store** üstünde **read-only minimal history sorgu-API'si** sunmalı (cutover'lanan sınıflar için). **Kapsam (PO-Q3 2026-07-17) = çekirdek-4 okuma deseni:** (1) `processInstanceId`→tam geçmiş, (2) `businessKey`→instance listesi, (3) zaman-aralığı+`processDefinition`→instance listesi, (4) instance→task/activity/variable geçmişi; **REST+JSON, sayfalamalı, read-only**. Agregasyon/analitik **kapsam dışı** (§7). Yanıtlarda erişim kontrolü + PII maskeleme (`DATA_CLASSIFICATION.md` DP-15), loglara PII değeri yazılmamalı. → US-C1 → `07 §1` madde 3 (D-C); PO-Q3.
+**FR-C1** [M] — Sistem, **projeksiyon store** üstünde **read-only minimal history sorgu-API'si** sunmalı. **Sunulan sınıf kümesi (BA-Q3 kararı 2026-07-17):** projeksiyonda **var olan HER sınıf** (dual-run dahil, cutover-durumundan bağımsız) — "cutover'lanan sınıflar için" ifadesi API'nin varlık gerekçesidir (Cockpit-körleşme telafisi), teknik filtre değil. **Kapsam (PO-Q3 2026-07-17) = çekirdek-4 okuma deseni:** (1) `processInstanceId`→tam geçmiş, (2) `businessKey`→instance listesi, (3) zaman-aralığı+`processDefinition`→instance listesi, (4) instance→task/activity/variable geçmişi; **REST+JSON, sayfalamalı, read-only**. Agregasyon/analitik **kapsam dışı** (§7). Yanıtlarda erişim kontrolü + PII maskeleme (`DATA_CLASSIFICATION.md` DP-15), loglara PII değeri yazılmamalı. → US-C1 → `07 §1` madde 3 (D-C); PO-Q3.
 
 **FR-C2** [S] — Sistem dokümantasyonu, sınıf-başına hangi Cockpit-history görünümünün cutover'da körleştiğini belirtmeli; **runtime Cockpit (`ACT_RU_*`) etkilenmemeli**; Cockpit `ACT_HI` bağımlılık yüzeyi **phase3'te doğrulanacak** (D-C öncesi). → US-C2 → `07 §7` (Cockpit bağımlılığı doğrulanacak); D-C.
 
@@ -163,7 +163,7 @@ Bu belge, basamak-2'nin — `ACT_HI_*` history yazımının engine DB'sinin ACID
 **NFR-P5** [S] — Projeksiyon consumer instance-anahtarlı partition'la **yatay ölçeklenebilir** olmalı (global tek-consumer REDDEDİLDİ). → FR-B2.
 
 ### 4.2 Güvenilirlik & tutarlılık
-**NFR-R1** [M] — Audit-kritik sınıflar **at-least-once** olmalı; **kalıcı audit kaybı imkansız** olmalı (kompakt outbox handoff). → FR-A4/FR-B1.
+**NFR-R1** [M] — Audit-kritik sınıflar **at-least-once** olmalı; **kalıcı audit kaybı imkansız** olmalı (kompakt outbox handoff). **Önkoşul (BA-Q4 kararı 2026-07-17, phase2-review F-001):** garanti, aktif `HistoryLevel`'in audit-kritik sınıfların event'lerini **ÜRETTİĞİ** konfigürasyonlar için geçerlidir; üretmeyen seviye (örn. NONE) handler'a hiç event ulaştırmaz — bu durum deployment-time WARN ile görünür kılınır (`VAL_HISTORY_LEVEL_AUDIT_CRITICAL_MISMATCH`, BR-HDL-007; motor bloklanmaz). → FR-A4/FR-B1.
 **NFR-R2** [M] — Bulk sınıflar **at-most-once** olmalı; kayıp penceresi bilinçli kabul, dual-run'da reconciliation ile tespit edilebilir olmalı. → FR-A5/FR-D1.
 **NFR-R3** [M] — Custody-transfer: hiçbir history mesajı kalıcılık el değiştirmeden ACK'lenmemeli; **sessiz kayıp olmamalı** (zehirli mesaj DLQ'ya ya da nak'a). → FR-B1/FR-B5.
 **NFR-R4** [M] — Sıralama garanti edilmeli: aynı instance aynı subject/partition (stream sırası) + **merge-upsert güvenlik ağı** (geç/eski event yeni state'i ezmez). → FR-A7/FR-B2.

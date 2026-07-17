@@ -4,7 +4,7 @@
 **Sentinel fazı:** Phase 2 — Business Analyst (basamak-2)
 **Girdi:** `docs/sentinel/step2/phase1/USER_STORIES.md` (25 US, 7 epic — EPIC-A…G), `SRS.md` (26 FR + 30 NFR + 7 IR), `DATA_CLASSIFICATION.md` (DP-1…16, §6 KVKK katmanlı politika), `GUIDELINES_MANIFEST.yaml`, `docs/07-history-offload.md` (D-A…D-G KİLİTLİ, 2026-07-15/16), `docs/05-db-offload-strategy.md §6.7` (basamak zinciri)
 **Tarih:** 2026-07-17
-**Durum:** BA-Q1…8 KARARA BAĞLANDI (2026-07-17, hepsi önerilen seçenek — bkz. §9) — phase-review bekliyor
+**Durum:** BA-Q1…8 KARARA BAĞLANDI (2026-07-17, hepsi önerilen — §9); phase-review KOŞULLU ONAY (🔴0 🟠0 🟡2 🟢4, spot-check 5/5) + bulgular F-001…005 DÜZELTİLDİ (bkz. `PHASE2_REVIEW.md` kapanış kaydı) — Levent faz-3 onayı bekleniyor
 
 > Bu belge basamak-2 SRS'inin **ne**'sini iş kuralına, süreç akışına ve durum makinesine çevirir. Her kural bir US'ye ve FR'ye bağlanır (§8 izlenebilirlik). **Kanıt etiketleri:** `[07§3]` = `docs/07-history-offload.md §3/§7`'de **zaten DOĞRULANMIŞ** motor/SPI iddiası (bu fazda kaynak kod tekrar okunmadı — talimat gereği yalnız docs/07'nin doğrulanmış tabanı taşınır, yeni file:line uydurulmaz); `[07§4]` = basamak-1'den **yeniden kullanılabilir** olarak docs/07 §4'te adlandırılan varlık (SweepLeaderLease, DlqPublisher, post-commit TransactionListener deseni, ADR-0006, `nats-bpm-bench`, CQ-6); `[phase3'te doğrulanacak]` = SRS §2.5/§9'da açıkça işaretli doğrulanmamış varsayım; `[BA-türetildi]` = bu fazda BA analiziyle bulunan, US/FR metninde açıkça çözülmemiş kenar-durum (kilitli D-A…D-G'yi **yeniden açmaz**, yalnız onların içindeki boşluğu doldurur — §9 BA-QUESTIONS'a taşınmıştır). **Effort tahmini içermez.** Reddedilen/ertelenen kararlar (handler-içi senkron publish, tam-outbox, tam-post-commit, JetStream-only, ClickHouse-şimdi, big-bang, kalıcı dual-run, sırasız+salt-upsert, global tek-consumer, Flowable-basamak-2b, üç-motor-birlikte) bu belgede **yeniden açılmamıştır** — yalnız referans olarak anılır (§7).
 
@@ -97,7 +97,7 @@ flowchart TD
     D --> E{"Merge-upsert: gelen event'in sıra-anahtarı, mevcut projeksiyon satırının sıra-anahtarından YENİ mi? [BA-türetildi, BA-Q1 — kesin alan phase3]"}
     E -->|"Evet (yeni/beklenen sıra)"| F["Upsert uygulanır — projeksiyon güncellenir"]
     E -->|"Hayır (geç/eski event)"| G["BUS_PROJECTION_STALE_EVENT_DISCARDED — ezilmez, no-op (güvenlik ağı çalışıyor)"]
-    E -->|"[BA-türetildi] Sıra-anahtarı eşit/belirsiz (aynı anda iki yazardan gelen, saat kayması riski)"| H["BUS_MERGE_UPSERT_CONFLICT_AMBIGUOUS — WARN + geçici tie-break (stream-sequence) — phase3'te netleşir"]
+    E -->|"[BA-türetildi] Sıra-anahtarı eşit/belirsiz (aynı anda iki yazardan gelen, saat kayması riski)"| H["BUS_MERGE_UPSERT_CONFLICT_AMBIGUOUS — WARN + tie-break stream-sequence (BA-Q1 KARAR) — uygulama detayı phase3/4 LLD"]
     F --> I["Denormalize/sorgu-odaklı şemaya yazılır — engine DB'sinden AYRI Postgres (D-B)"]
     I --> J["KVKK retention/silme SQL ile uygulanabilir (US-G1/G2 girdisi)"]
 ```
@@ -444,7 +444,7 @@ stateDiagram-v2
 | # | Koşul | Beklenen sonuç |
 |---|---|---|
 | 1 | HistoryLevel=AUDIT (default) | OP_LOG/INCIDENT/EXT_TASK_LOG üretilir — garanti geçerli |
-| 2 | HistoryLevel=NONE, bir sınıf audit-kritik konfigüre edilmiş | `VAL_HISTORY_LEVEL_AUDIT_CRITICAL_MISMATCH` — deployment-time WARN (bkz. BA-Q4, hard-reject mi WARN mı açık) |
+| 2 | HistoryLevel=NONE, bir sınıf audit-kritik konfigüre edilmiş | `VAL_HISTORY_LEVEL_AUDIT_CRITICAL_MISMATCH` — deployment-time WARN (BA-Q4 KARAR 2026-07-17: hard-reject DEĞİL) |
 
 **Bağımlılık:** BR-HDL-002.
 
@@ -542,7 +542,7 @@ stateDiagram-v2
 
 **Tanım:** NFR-R4 "geç/eski event yeni state'i ezmez" der ama hangi alanın "daha yeni"yi belirlediğini (event-timestamp mi, NATS stream-sequence mi, ayrı monotonik sayaç mı) tanımlamaz — SRS §2.5 bunu açıkça "phase3'te doğrulanacak: projeksiyon merge-upsert çatışma-çözüm kenar durumları" olarak işaretler.
 
-**Öneri (`[BA-türetildi]`):** NATS JetStream **stream-sequence numarası** birincil tie-breaker olsun (broker tarafından atanır, monotonik, engine node'ları arası saat kaymasından etkilenmez); event-timestamp yalnız ikincil/görüntüleme alanı olarak taşınsın.
+**KARAR (BA-Q1, 2026-07-17):** NATS JetStream **stream-sequence numarası** birincil tie-breaker olsun (broker tarafından atanır, monotonik, engine node'ları arası saat kaymasından etkilenmez); event-timestamp yalnız ikincil/görüntüleme alanı olarak taşınsın.
 
 **Koşullar:**
 | # | Koşul | Beklenen sonuç |
@@ -662,7 +662,7 @@ stateDiagram-v2
 
 **Tanım:** SRS "N gün temiz" der ama "temiz"in mutlak sıfır fark mı yoksa tolerans-bantlı mı olduğunu tanımlamaz. Bulk sınıflar **tasarım gereği** at-most-once kayıp yaşayabilir (D-A bilinçli kabul) — bu, mutlak-sıfır kriterinin yüksek-hacimli sınıflar için pratikte ULAŞILAMAZ olmasına yol açabilir.
 
-**Öneri (`[BA-türetildi]`):** Audit-kritik sınıflar için **mutlak sıfır** fark (at-least-once garantisiyle tutarlı — herhangi bir fark bir hata sinyalidir). Bulk sınıflar için fark-sayısı ≤ **konfigürable epsilon** (default öneri: 0, ama sınıf-başına açıkça override edilebilir çünkü çökme-penceresi kaybı mimari olarak beklenen bir sonuçtur) + **azalan/sabit trend** şartı (artan trend streak'i bozar).
+**KARAR (BA-Q2, 2026-07-17):** Audit-kritik sınıflar için **mutlak sıfır** fark (at-least-once garantisiyle tutarlı — herhangi bir fark bir hata sinyalidir). Bulk sınıflar için fark-sayısı ≤ **konfigürable epsilon** (default öneri: 0, ama sınıf-başına açıkça override edilebilir çünkü çökme-penceresi kaybı mimari olarak beklenen bir sonuçtur) + **azalan/sabit trend** şartı (artan trend streak'i bozar).
 
 **Koşullar:**
 | # | Koşul | Beklenen sonuç |
@@ -822,11 +822,11 @@ stateDiagram-v2
 ---
 
 ### BR-PII-004: `[BA-türetildi]` Pseudonym üretimi in-tx saf hesap; kasa-persist downstream
-**User Story:** US-G3 (kenar-durum) | **FR:** FR-G3 | **Öncelik:** Must (BA-Q5)
+**User Story:** US-G3 (kenar-durum) | **FR:** FR-G3 | **Öncelik:** Koşullu-Must (US-G3 [S] kapsamda kaldıkça bağlayıcı — BA-Q5; phase2-review F-003)
 
 **Tanım:** US-G3/FR-G3 pseudonymization'ın **NE ZAMAN** uygulandığını (tx-içi mi, downstream mi) belirtmez. D-A'nın kilitli ilkesi — "handler-içi senkron I/O yasak" (NATS publish için) — **aynı mantıkla** kasa round-trip'i için de geçerli olmalıdır: bir vault çağrısı da tx-içi senkron dış-I/O'dur, D-A'nın reddettiği tam risk profilini taşır (latency engine komutunu bloklar; exception commit'i atlatabilir).
 
-**Öneri (`[BA-türetildi]`, D-A ilkesinin genişlemesi):** Pseudonym **DEĞERİ** tx-içinde **saf/deterministik** hesaplanır (örn. kiracı-anahtarlı keyed-hash — I/O gerektirmez); kasaya **YAZIM** (kimlik↔takma-ad haritası satırı) downstream/async olarak, relay/projeksiyon ile aynı boru hattında gerçekleşir.
+**KARAR (BA-Q5, 2026-07-17 — D-A ilkesinin genişlemesi):** Pseudonym **DEĞERİ** tx-içinde **saf/deterministik** hesaplanır (örn. kiracı-anahtarlı keyed-hash — I/O gerektirmez); kasaya **YAZIM** (kimlik↔takma-ad haritası satırı) downstream/async olarak, relay/projeksiyon ile aynı boru hattında gerçekleşir.
 
 **Koşullar:**
 | # | Koşul | Beklenen sonuç |
@@ -843,7 +843,7 @@ stateDiagram-v2
 
 **Tanım:** Erasure, data-subject anahtarına (businessKey/userId) göre çalışır ama telco bağlamında (MSISDN) bu kimlikler **zaman içinde yeniden atanabilir** (churn) — aynı businessKey farklı dönemlerde farklı gerçek kişileri temsil edebilir. Bare key-match, YANLIŞ kişinin verisini silme/koruma riski taşır.
 
-**Öneri (`[BA-türetildi]`):** Erasure talepleri, bare businessKey eşleşmesiyle **doğrudan** yürütülmez; önce aday instance/zaman-aralığı listesi sunulur, talep sahibinden **açık kapsam onayı** istenir.
+**KARAR (BA-Q6, 2026-07-17):** Erasure talepleri, bare businessKey eşleşmesiyle **doğrudan** yürütülmez; önce aday instance/zaman-aralığı listesi sunulur, talep sahibinden **açık kapsam onayı** istenir.
 
 **Koşullar:**
 | # | Koşul | Beklenen sonuç |

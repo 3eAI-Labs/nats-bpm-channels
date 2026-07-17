@@ -230,6 +230,7 @@ Toplam: **25 user story.**
 - [ ] Agregasyon / analitik / raporlama görünümleri **KAPSAM DIŞI** (PO-Q3 — `SRS.md §7` reddedilen tablosu).
 - [ ] Yanıtlarda **erişim kontrolü + PII maskeleme** (bkz. `DATA_CLASSIFICATION.md` DP-15); sorgu-API loglarına PII değeri yazılmaz (DP-1 devralınır).
 - [ ] Bu API, basamak-2 teslimatına **dahildir** (D-C: Cockpit körleşmesinin karşılığı).
+- [ ] **BA-Q3 kararı (2026-07-17):** API, projeksiyonda **var olan her sınıfı** sunar (dual-run dahil, cutover-bağımsız); hikâyedeki "cutover'lanan sınıflar için" ifadesi motivasyondur, teknik filtre değil (bkz. `../phase2/BUSINESS_LOGIC.md` BR-QRY-003).
 **Dayanak:** `07 §1` madde 3 (D-C — "minimal history sorgu-API'si dahildir"); PO-Q3 kararı (2026-07-17).
 **Bağımlılık:** US-B2, US-B3.
 
