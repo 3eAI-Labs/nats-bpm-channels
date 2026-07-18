@@ -1,0 +1,307 @@
+asyncapi: 3.1.0
+info:
+  title: nats-bpm-channels — Basamak-2 History Wire Contract (ACT_HI → NATS → async query-store)
+  version: 1.0.0
+  description: >
+    Basamak-2 "History Offload" için makine-okunur tel sözleşmesi (Sentinel Phase 3
+    teslimatı). Fork-ailesi motorların (Camunda 7 / CadenzaFlow) `ACT_HI_*` history
+    yazımı, motor-içi in-tx DB handler yerine motor-dışı push + async projeksiyona
+    taşınır. Bu belge history subject şemasını, mesaj/header formatlarını, dedup
+    id'sini, DLQ sözleşmesini ve custody-transfer ack semantiğini sabitler.
+
+
+    İki yayın yolu aynı teli üretir (D-A hibrit): audit-kritik sınıflar tx-içi
+    kompakt outbox + leader-elected relay ile (at-least-once), bulk sınıflar
+    post-commit publisher ile (at-most-once). İki yol da AYNI subject/dedup şemasını
+    kullanır — consumer taraf ayrım yapmaz (ADR-0010/ADR-0013).
+
+
+    Kaynak kararlar: docs/07-history-offload.md (D-A…D-G), SRS IR-1…IR-7,
+    BUSINESS_LOGIC BR-HDL/BR-REL katalogu, basamak-1 ADR-0006 (contract-first) deseninin
+    history izdüşümü (ADR-0013). JetStream stream/consumer konfigürasyonları AsyncAPI
+    standart binding'i olmadığından `x-jetstream-*` uzantı alanlarıyla ve
+    API_CONTRACTS.md §3 tablolarıyla taşınır.
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: 3eAI Labs
+    url: https://github.com/3eAI-Labs/nats-bpm-channels
+
+defaultContentType: application/octet-stream
+
+servers:
+  broker:
+    host: 'localhost:4222'
+    protocol: nats
+    description: >
+      NATS/JetStream 2.10+ broker. Production'da TLS + NKey/JWT zorunlu (NFR-S4/S7 / DP-4/DP-13);
+      history.* ve dlq.history.* subject namespace'leri subject-level permission ile izole edilir
+      (relay/post-commit publish yalnız history.>; projeksiyon consumer yalnız history.>; DLQ
+      inceleme yalnız yetkili). Bkz. ADR-0019 (history subject-level authz — basamak-1 ADR-0008
+      genişlemesi; NFR-S7 kapanır).
+
+channels:
+  historyEvent:
+    address: 'history.{engineId}.{class}.{processInstanceId}'
+    title: History event stream (instance-anahtarlı, sıra-korumalı)
+    description: >
+      Fork-ailesi motorun ürettiği bir `ACT_HI` event'ini taşır. Subject instance-anahtarlıdır
+      (`processInstanceId` gömülü) → aynı instance'ın event'leri aynı subject'te, JetStream
+      stream sırasını korur (D-E). Stream retention = Limits-based (WorkQueue DEĞİL — projeksiyon
+      consumer + reconciliation/replay okuyabilmeli, IR-7); retention penceresi ADR-0019.
+      Hem relay (audit-kritik) hem post-commit publisher (bulk) aynı subject'e yayınlar.
+    parameters:
+      engineId:
+        description: Motor örneği kimliği (Camunda 7 / CadenzaFlow node kümesi kimliği; INTERNAL).
+      class:
+        description: >
+          ACT_HI event sınıfı (VARINST | DETAIL | ACTINST | PROCINST | TASKINST | OP_LOG |
+          INCIDENT | EXT_TASK_LOG | IDENTITYLINK | JOB_LOG | COMMENT | ATTACHMENT | DECINST |
+          CASEINST | BATCH | ...). Metrik/routing tag'i (PUBLIC, düşük-kardinalite).
+      processInstanceId:
+        description: Process-instance surrogate id (PSEUDONYMOUS; partition + sıra anahtarı).
+    messages:
+      historyEvent:
+        $ref: '#/components/messages/HistoryEventMessage'
+    x-jetstream:
+      streamRetention: Limits
+      streamName: HISTORY
+      retentionDays: 7
+      ackWaitSeconds: 30
+      maxDeliver: 4
+      duplicateWindowSeconds: 120
+      dedupHeader: Nats-Msg-Id
+      dedupValue: '<historyEventId>:<eventType>'
+      partitioning: 'deterministic subject-mapped by processInstanceId (ARCH-Q3 — mekanizma seçimi)'
+
+  historyDeadLetter:
+    address: 'dlq.history.{originalSubject}'
+    title: History dead-letter queue (ayrı stream, dlq.history.>)
+    description: >
+      Teslim edilemeyen (deliveryCount > maxDeliver) veya işlenemeyen history mesajları.
+      Basamak-1 D-E DLQ kontratı AYNEN: header-korumalı byte-ayna kopya, custody-transfer,
+      dlq-of-dlq YOK. AYRI stream (CQ-6) — iş dağıtımı `dlq.>` stream'inden bağımsız. Retention
+      limits-based (default 14 gün, PII işleyen kiracı kısaltır — DP-13). PII yüzeyidir; erişim
+      role-based (RES_HISTORY_DLQ_ACCESS_DENIED).
+    parameters:
+      originalSubject:
+        description: DLQ'ya yönlendirilmeden önceki orijinal history.<...> subject'i.
+    messages:
+      historyDeadLetterMessage:
+        $ref: '#/components/messages/HistoryDeadLetterMessage'
+    x-jetstream:
+      streamRetention: Limits
+      streamName: DLQ_HISTORY
+      retentionDays: 14
+      dedupHeader: Nats-Msg-Id
+      dedupValue: '<original-msg-id>.dlq'
+
+operations:
+  publishHistoryEvent:
+    action: send
+    title: Engine → JetStream (relay re-publish / post-commit publish)
+    channel:
+      $ref: '#/channels/historyEvent'
+    messages:
+      - $ref: '#/channels/historyEvent/messages/historyEvent'
+    description: >
+      Audit-kritik: leader-elected HistoryOutboxRelay kompakt outbox satırını okur → publish →
+      PubAck sonrası satırı siler (custody-transfer, at-least-once; BR-REL-001). Bulk:
+      HistoryPostCommitPublisher `TransactionState.COMMITTED` listener'ında tx-dışı, DB-sorgusuz
+      publish eder (at-most-once; BR-HDL-004). İki yol da `Nats-Msg-Id=<historyEventId>:<eventType>`
+      dedup id taşır. Broker erişilemezse relay retry/backoff (outbox SİLİNMEZ,
+      SYS_OUTBOX_RELAY_PUBLISH_FAILED); post-commit publish kaybı at-most-once bilinçli kabul.
+
+  consumeHistoryEvent:
+    action: receive
+    title: Projeksiyon consumer ← JetStream (instance-partition + merge-upsert)
+    channel:
+      $ref: '#/channels/historyEvent'
+    messages:
+      - $ref: '#/channels/historyEvent/messages/historyEvent'
+    description: >
+      HistoryProjectionConsumer history stream'ini instance-anahtarıyla partition'lı tüketir
+      (aynı processInstanceId → aynı işleyici, sıra korunur). Idempotent merge-upsert: gelen
+      event'in JetStream stream-sequence'i mevcut projeksiyon satırından ESKİ/EŞİT ise no-op
+      (BUS_PROJECTION_STALE_EVENT_DISCARDED; BA-Q1 tie-break = stream-sequence). Yazım hedefi
+      engine DB'sinden AYRI Postgres (D-B). deliveryCount > maxDeliver → dlq.history.<...>.
+      Custody-transfer: merge-upsert (veya bilinçli no-op) uygulanınca ack; transient hata → nak.
+
+  routeHistoryToDlq:
+    action: send
+    title: Consumer/Relay → DLQ (in-band maxDeliver+1 / şema-drift)
+    channel:
+      $ref: '#/channels/historyDeadLetter'
+    messages:
+      - $ref: '#/channels/historyDeadLetter/messages/historyDeadLetterMessage'
+    description: >
+      publishToDlq (basamak-1 DlqPublisher yeniden kullanım): orijinal payload byte-aynen +
+      orijinal header'lar AYNEN + DLQ meta header'lar + Nats-Msg-Id=<orijinal>.dlq. DLQ-PubAck
+      sonrası orijinal mesaj ACK'lenir; DLQ publish fail → nak + alert (asla ack-drop;
+      SYS_HISTORY_DLQ_PUBLISH_FAILED, BR-REL-005).
+
+  consumeHistoryDlq:
+    action: receive
+    title: Ops/inceleme ← history DLQ
+    channel:
+      $ref: '#/channels/historyDeadLetter'
+    messages:
+      - $ref: '#/channels/historyDeadLetter/messages/historyDeadLetterMessage'
+    description: >
+      History DLQ ops görünürlüğü için tüketilir (metrik/alert, US-E2). PII yüzeyi (DP-13):
+      erişim role-based, yetkisiz okuma RES_HISTORY_DLQ_ACCESS_DENIED. dlq-of-dlq YOK — bu
+      stream nihai varıştır.
+
+components:
+  parameters:
+    engineId:
+      description: Motor örneği kimliği.
+    class:
+      description: ACT_HI event sınıfı adı.
+    processInstanceId:
+      description: Process-instance surrogate id (partition/sıra anahtarı).
+    originalSubject:
+      description: DLQ öncesi orijinal history subject'i.
+
+  messages:
+    HistoryEventMessage:
+      name: HistoryEventMessage
+      title: History event mesajı
+      summary: Bir ACT_HI event'ini projeksiyona taşır (relay veya post-commit yayını).
+      contentType: application/octet-stream
+      headers:
+        $ref: '#/components/schemas/HistoryHeaders'
+      payload:
+        $ref: '#/components/schemas/HistoryEventPayload'
+      x-data-classification: RESTRICTED/PII (variable değerleri, operatör kimlikleri, serbest metin — DP-9/DP-11/DP-13)
+
+    HistoryDeadLetterMessage:
+      name: HistoryDeadLetterMessage
+      title: History DLQ mesajı
+      summary: Orijinal history payload byte-aynen + orijinal header'lar + DLQ meta header'lar.
+      contentType: application/octet-stream
+      headers:
+        $ref: '#/components/schemas/HistoryDlqHeaders'
+      payload:
+        $ref: '#/components/schemas/OpaqueHistoryPayload'
+      x-data-classification: RESTRICTED/PII (14 gün retention — en uzun maruziyet, DP-13)
+
+  schemas:
+    HistoryHeaders:
+      type: object
+      description: >
+        History-özgü kanonik meta (IR-2) + basamak-1'den devralınan BpmHeaders + dedup id.
+        Business-Key subject'e GÖMÜLMEZ (DP-2); yalnız header'da opsiyonel, masking kiracı kararı (DP-8).
+      properties:
+        Nats-Msg-Id:
+          type: string
+          description: 'Dedup anahtarı = <historyEventId>:<eventType> (IR-3 / BR-HDL-006).'
+        X-Cadenzaflow-History-Engine-Id:
+          type: string
+          description: Motor örneği kimliği (INTERNAL).
+        X-Cadenzaflow-History-Class:
+          type: string
+          description: ACT_HI event sınıfı (PUBLIC, düşük-kardinalite).
+        X-Cadenzaflow-History-Event-Type:
+          type: string
+          description: Event tipi (create/update/delete/complete vb.; INTERNAL).
+        X-Cadenzaflow-History-Event-Id:
+          type: string
+          description: Motor history event surrogate id (INTERNAL; dedup anahtarının parçası).
+        X-Cadenzaflow-History-Process-Instance-Id:
+          type: string
+          description: Process-instance id (PSEUDONYMOUS; partition/sıra anahtarı).
+        X-Cadenzaflow-Trace-Id:
+          type: string
+          description: Dağıtık izleme kimliği (PSEUDONYMOUS; devralınan). Okuma X-Trace-Id fallback (basamak-1 FR-C7).
+        X-Cadenzaflow-Business-Key:
+          type: string
+          description: İş kimliği (CONFIDENTIAL/koşullu PII — telco'da MSISDN olabilir; masking kiracı kararı, DP-8).
+        X-Cadenzaflow-Idempotency-Key:
+          type: string
+          description: Apply-zamanı idempotency anahtarı (PSEUDONYMOUS; devralınan).
+      required:
+        - Nats-Msg-Id
+        - X-Cadenzaflow-History-Class
+        - X-Cadenzaflow-History-Event-Id
+        - X-Cadenzaflow-History-Process-Instance-Id
+
+    HistoryDlqHeaders:
+      type: object
+      description: Orijinal history header'ları AYNEN + DLQ meta header'lar (basamak-1 DlqHeaders deseni).
+      properties:
+        Nats-Msg-Id:
+          type: string
+          description: '<orijinal-msg-id>.dlq (çift DLQ kaydına karşı; BR-REL-005).'
+        X-Cadenzaflow-History-Class:
+          type: string
+        X-Cadenzaflow-History-Event-Id:
+          type: string
+        X-Cadenzaflow-History-Process-Instance-Id:
+          type: string
+        X-Cadenzaflow-Trace-Id:
+          type: string
+        X-Cadenzaflow-Business-Key:
+          type: string
+        X-Cadenzaflow-Dlq-Original-Subject:
+          type: string
+          description: DLQ öncesi orijinal history subject'i (PUBLIC routing meta).
+        X-Cadenzaflow-Dlq-Delivery-Count:
+          type: integer
+          description: Son deliveryCount (INTERNAL ops meta).
+        X-Cadenzaflow-Dlq-Reason:
+          type: string
+          description: Yalnız hata SINIFI/kodu; payload/PII SIZDIRMAZ (DP-6).
+        X-Cadenzaflow-Dlq-Timestamp:
+          type: string
+          format: date-time
+          description: DLQ'ya yönlendirme zamanı (PUBLIC).
+      required:
+        - Nats-Msg-Id
+        - X-Cadenzaflow-Dlq-Original-Subject
+        - X-Cadenzaflow-Dlq-Delivery-Count
+        - X-Cadenzaflow-Dlq-Reason
+        - X-Cadenzaflow-Dlq-Timestamp
+
+    OpaqueHistoryPayload:
+      type: string
+      description: >
+        History event gövdesi (byte-aynen kopya). Bu katman içeriği yorumlamaz. RESTRICTED/PII
+        varsayılır; alan-düzeyi PII haritası kiracı-tanımlıdır (TENANT_PII_CHECKLIST_TEMPLATE.md).
+
+    HistoryEventPayload:
+      type: object
+      description: >
+        History event'inin somut kontrat şekli. Kimlik alanları + opsiyonel opak variable gövdesi.
+        Byte-array HISTORY payload'ının (ByteArrayEntity ResourceTypes.HISTORY, DbHistoryEventHandler.java:97-105)
+        inline mı referans mı taşınacağı ARCH-Q1'e bağlıdır — `payload` alanı opak string olarak
+        modellenir; nihai taşıma (inline byte vs referans) ARCH-Q1 kararıyla netleşir (kontrat şekli değişmez).
+      properties:
+        historyEventId:
+          type: string
+          description: Motor history event surrogate id (INTERNAL; dedup anahtarının parçası).
+        eventType:
+          type: string
+          description: Event tipi (INTERNAL; dedup anahtarının parçası).
+        historyClass:
+          type: string
+          description: ACT_HI event sınıfı (PUBLIC).
+        processInstanceId:
+          type: string
+          description: Process-instance id (PSEUDONYMOUS).
+        streamSequence:
+          type: integer
+          description: >
+            JetStream tarafından atanan stream-sequence (broker tarafında set edilir; consumer
+            msg metadata'sından okur). Merge-upsert tie-break/versiyon alanı (BA-Q1; ADR-0012).
+            Publisher tarafında YOKTUR — bilgilendirici; projeksiyon consumer doldurur.
+        payload:
+          type: string
+          description: >
+            Opak variable/event gövdesi (RESTRICTED/PII, kiracı-tanımlı). Taşıma biçimi ARCH-Q1.
+      required:
+        - historyEventId
+        - eventType
+        - historyClass
+        - processInstanceId

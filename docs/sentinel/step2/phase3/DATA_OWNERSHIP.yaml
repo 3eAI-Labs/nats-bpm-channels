@@ -1,0 +1,148 @@
+# DATA OWNERSHIP & FLOW — Basamak-2: History Offload
+# Sentinel Phase 3 (Architect) makine-okunur veri-sahipliği haritası.
+# Her capability tek provider'a sahiptir; consumer'lar yalnız published kontrat üzerinden erişir.
+# Sınıflandırma DATA_CLASSIFICATION.md DP-1..16'ya, yaşam döngüsü KVKK/GDPR (manifest compliance.enabled)
+# yükümlülüklerine bağlıdır. Erişim deseni her provider->consumer çifti için ADR-atıflıdır.
+# Data-flow diyagramı bu dosyadan TÜRETİLİR (§data_flow_diagram); elle bakımı YAPILMAZ.
+#
+# Kaynak: HLD.md §3, ADR 0010/0011/0013/0014/0016/0017/0018/0019, DATA_CLASSIFICATION.md §2-§6.
+# NOT: fork motor (Camunda7/CadenzaFlow) ve engine DB (ACT_RU_*/ACT_HI_* runtime) basamak-2 kapsamı
+#      DIŞINDAKI provider'lardır; burada yalnız basamak-2'nin AÇTIĞI/SAHİPLENDİĞİ yüzeyler listelenir.
+
+meta:
+  project: nats-bpm-channels
+  scope: basamak-2-history-offload
+  phase: 3-architecture
+  date: 2026-07-17
+  compliance: [KVKK, GDPR]   # manifest compliance.enabled; erasure/retention yükümlülüğü buradan gelir
+
+entities:
+
+  # ---- History teli (JetStream) ----
+  - capability: history.event-stream
+    provider: engine-node-history-publisher   # relay (audit-kritik) + post-commit publisher (bulk); tek yayın-sahibi
+    classification: RESTRICTED/PII             # DP-13 (payload + operatör kimlikleri + variable değerleri)
+    lifecycle: "JetStream Limits stream (history.>); retention default 7g kısa transit-buffer; kalıcı kayıt projeksiyon store'da (ADR-0019)"
+    published:
+      event: 'history.<engineId>.<class>.<processInstanceId>@asyncapi-1.0.0'   # api/asyncapi.yaml historyEvent
+      api: null
+    private: [kompakt-outbox-referans-alanlari]
+    consumers:
+      - service: history-projection-service
+        access: event-replication            # JetStream push, instance-partition + merge-upsert
+        freshness: "eventual, SLI p95 izlenen (NFR-P3, sert kapı değil)"
+        on_stale: "projeksiyon-lag büyür; audit-kritik yol outbox'ta güvende (kayıp yok); merge-upsert stale-event no-op"
+        adr: [ADR-0011, ADR-0012, ADR-0013]
+      - service: reconciliation-job
+        access: event-replication            # dolaylı: projeksiyon çıktısını ACT_HI ile karşılaştırır (read-only)
+        freshness: "periyodik (dual-run boyunca)"
+        on_stale: "streak ilerlemez; cutover kapısı bekler (BUS_RECONCILIATION_DIFF_DETECTED)"
+        adr: [ADR-0015]
+
+  - capability: history.dead-letter
+    provider: engine-node-history-publisher   # DlqPublisher (basamak-1 reuse); consumer/relay yönlendirir
+    classification: RESTRICTED/PII             # DP-13 (byte-ayna kopya = en uzun tel-maruziyeti)
+    lifecycle: "JetStream Limits stream (dlq.history.>, AYRI stream CQ-6); default 14g; PII kiracı kısaltır (ADR-0019)"
+    published:
+      event: 'dlq.history.<originalSubject>@asyncapi-1.0.0'   # api/asyncapi.yaml historyDeadLetter
+      api: null
+    private: []
+    consumers:
+      - service: ops-history-dlq-inspection
+        access: sync-api                     # yetkili ops consume (role-based)
+        freshness: "on-demand (inceleme)"
+        on_stale: "yetkisiz erişim RES_HISTORY_DLQ_ACCESS_DENIED; dlq-of-dlq YOK"
+        adr: [ADR-0019, ADR-0004]
+
+  # ---- Kompakt outbox (engine DB, audit-kritik) ----
+  - capability: history.compact-outbox
+    provider: engine-node-history-handler     # NatsHistoryEventHandler yazar; relay okur+siler (aynı güven-sınırı)
+    classification: RESTRICTED/PII             # DP-12 (kaynak event ile aynı sınıf; kısa maruziyet)
+    lifecycle: "engine DB tx-içi dayanıklı ara-kayıt; relay PubAck-sonrası SİLER (çok kısa); SYS_OUTBOX_ROW_STUCK stuck-alarmı"
+    published:
+      event: null                            # published DEĞİL — motor-node içi handoff (private)
+      api: null
+    private: [outbox-tablosu-referans-satiri]
+    consumers:
+      - service: history-outbox-relay
+        access: internal                     # aynı bounded-context (engine node); leader-elected okuma+delete
+        freshness: "relay-döngü (leader-elected)"
+        on_stale: "relay down/leader stuck → satır hayatta kalır (at-least-once); SYS_OUTBOX_ROW_STUCK"
+        adr: [ADR-0010, ADR-0002]
+
+  # ---- Projeksiyon store (ayrı Postgres, L3) ----
+  - capability: history.projection
+    provider: history-projection-service      # consumer yazar (merge-upsert); store'un tek yazım-sahibi
+    classification: RESTRICTED/PII            # DP-9 (L3 upward-inheritance; at-rest AES-256)
+    lifecycle: >
+      Sınıf-bazlı retention (PO-Q7): bulk 90g / audit-kritik yasal-saklama (kiracı override); retention-expiry
+      DROP/DETACH PARTITION (ADR-0018). KVKK/GDPR erasure: bulk soft-delete->anonymize (talep-tetikli, kapsam-onaylı,
+      ADR-0017); audit-kritik yasal-saklama istisnası + opt-in pseudonymization (ADR-0016).
+    published:
+      event: null
+      api: 'GET /api/v1/history/*@openapi-1.0.0'   # api/openapi.yaml (read-only çekirdek-4)
+    private: [denormalize-internal-columns, stream-sequence-version-column]
+    consumers:
+      - service: history-query-api-client       # kiracı sorgu istemcisi (pluggable authz — ARCH-Q4)
+        access: sync-api                        # read-only çekirdek-4; role-based erişim + PII maskeleme
+        freshness: "eventual (projeksiyon gecikmesi); cutover-bağımsız kapsam (BA-Q3)"
+        on_stale: "projeksiyon-lag yanıtta görünür; PII-görme izni yoksa maskeli (BUS_QUERY_PII_MASKED)"
+        adr: [ADR-0014]
+      - service: retention-enforcement-job
+        access: internal                        # aynı provider bounded-context (scheduled write)
+        freshness: "scheduled"
+        on_stale: "SYS_RETENTION_JOB_FAILED → sonraki periyot; audit-log fail → SYS_RETENTION_AUDIT_LOG_WRITE_FAILED (CRITICAL)"
+        adr: [ADR-0018]
+      - service: erasure-pipeline
+        access: internal                        # talep-tetikli write (soft-delete->anonymize)
+        freshness: "on-request (KVKK 30g SLA)"
+        on_stale: "RES_ERASURE_VERIFICATION_FAILED (CRITICAL); SYS_ERASURE_PIPELINE_FAILED retry"
+        adr: [ADR-0017]
+      - service: reconciliation-job
+        access: sync-api                        # read-only fark sayacı (projeksiyon ↔ ACT_HI)
+        freshness: "periyodik"
+        on_stale: "PII sızdırmaz (sayaç/id/hash — DP-14)"
+        adr: [ADR-0015]
+
+  # ---- Pseudonymization kasası (L4-bitişik, izole) ----
+  - capability: history.pseudonym-map
+    provider: pseudonymization-vault-service    # ayrı depo (ARCH-Q2 KARAR 2026-07-18: ayrı Postgres); projeksiyon'dan izole
+    classification: L4-adjacent                 # DP-16 (re-identification anahtarı; en yüksek koruma)
+    lifecycle: >
+      Kimlik<->takma-ad haritası; silme = harita-kaydı silme (BUS_PSEUDONYM_MAP_ENTRY_DELETED) => takma-ad tersinmez.
+      Retention denetim kaydının yaşam döngüsüne bağlı; pseudonymization retention'ı KISALTMAZ (BA-Q8).
+    published:
+      event: null                              # published kontrat YOK (izole, en-az-yetki)
+      api: null
+    private: [kimlik-takmaad-map, re-identification-key]
+    consumers:
+      - service: history-projection-service
+        access: internal                       # downstream/async map-write (BA-Q5; tx-dışı)
+        freshness: "async downstream (SYS_PSEUDONYM_VAULT_UNAVAILABLE => retry, audit akışı ENGELLENMEZ)"
+        on_stale: "kasa-persist gecikir; pseudonym değeri zaten tx-içi hesaplandı"
+        adr: [ADR-0016]
+      - service: erasure-pipeline
+        access: internal                       # map-kaydı silme (pseudonymized audit-kritik erasure)
+        freshness: "on-request"
+        on_stale: "takma-ad tersinmez olur (denetim yapısı korunur)"
+        adr: [ADR-0016, ADR-0017]
+      - service: authorized-reidentification    # yasal/adli, nadir
+        access: sync-api                       # en-az-yetki + açık gerekçe + audit
+        freshness: "on-demand (nadir)"
+        on_stale: "yetkisiz => AUTH_PSEUDONYM_VAULT_ACCESS_DENIED (CRITICAL, security-page)"
+        adr: [ADR-0016]
+
+# ---- Data-flow diyagramı (BU DOSYADAN TÜRETİLDİ — elle bakım YOK) ----
+data_flow_diagram: |
+  flowchart LR
+    PUB[engine-node-history-publisher] -- "history.<...>@1.0.0 (event-replication)" --> PROJ[history-projection-service]
+    PUB -- "history.<...> (event-replication, read-only diff)" --> RECON[reconciliation-job]
+    PUB -- "dlq.history.<...>@1.0.0 (sync-api)" --> DLQI[ops-history-dlq-inspection]
+    HANDLER[engine-node-history-handler] -- "compact-outbox (internal, leader)" --> RELAY[history-outbox-relay]
+    PROJ -- "GET /api/v1/history/* (sync-api, maskeli)" --> QC[history-query-api-client]
+    PROJ -- "internal (scheduled)" --> RET[retention-enforcement-job]
+    PROJ -- "internal (on-request)" --> ERA[erasure-pipeline]
+    PROJ -- "sync-api (read-only)" --> RECON
+    PROJ -- "async map-write (internal)" --> VAULT[pseudonymization-vault-service]
+    ERA -- "map-kaydi-sil (internal)" --> VAULT
+    VAULT -- "sync-api (re-identification, nadir)" --> REID[authorized-reidentification]

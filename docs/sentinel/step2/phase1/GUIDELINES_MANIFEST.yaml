@@ -60,6 +60,31 @@ compliance:
     - PCI-DSS                        # kart verisi işlenmez
     - HIPAA                          # sağlık verisi işlenmez
 
+stack:
+  # Phase3 (Architect) amendment (2026-07-17): HLD.md'de GERÇEKTEN kullanılan teknolojiler.
+  # Her enabled giriş bir Accepted ADR ile yetkilendirilir (ARCHITECT_GUIDELINE §7.5); disabled
+  # girişler bilinçle reddedilen/ertelenen — ADR/karar gerekçeli. Hiç değerlendirilmemiş teknoloji
+  # LİSTELENMEZ (pseudonym kasası deposu ARCH-Q2 KARAR 2026-07-18 = ayrı Postgres, ADR-0016 Kabul;
+  # OpenBao kiracı-deployment seçeneği olarak not edildi, çekirdekte reddedilmedi → listelenmez).
+  # BESPOKE şema; basamak-1 ile yorum stili tutarlı.
+  enabled:
+    - NATS_JETSTREAM                 # history teli + DLQ + relay leader KV-lease; iki yayın yolu tek substratta
+                                     #   (ADR-0010 relay/outbox, ADR-0011 instance-partition, ADR-0013 wire-contract,
+                                     #    ADR-0019 stream retention + subject-authz; basamak-1 ADR-0002/0006/0008 devralınır)
+    - POSTGRES                       # ayrı projeksiyon store (L3, denormalize, range-partition) + retention/erasure SQL
+                                     #   (ADR-0011 projeksiyon, ADR-0017 erasure, ADR-0018 retention;
+                                     #    pseudonym kasası deposu = ayrı Postgres — ADR-0016 Kabul, ARCH-Q2 KARAR 2026-07-18)
+    - JAVA                           # composite HistoryEventHandler + relay + post-commit publisher + projeksiyon
+                                     #   consumer + sorgu-API; fork motor JVM (Java 21 build — memory build-requires-java21)
+                                     #   (ADR-0009 handler plug-in, ADR-0010 yayın topolojisi, ADR-0014 sorgu-API)
+  disabled:
+    - KAFKA                          # REDDEDİLDİ: substrat NATS/JetStream (docs/01 §6 pinli; basamak-1 ADR-0006
+                                     #   AsyncAPI/NATS deseni). Async idiom NATS'ta; Kafka yeni ağır bağımlılık, tez-dışı.
+                                     #   (gerekçe ADR-0013 — history wire-contract NATS/AsyncAPI; ARCHITECT_GUIDELINE
+                                     #    default Kafka'dan bilinçli sapma — düşük-latency + KV-lease + mevcut substrat)
+    - CLICKHOUSE                     # ERTELENDİ (D-B): hacim-tetikli ayrı karar; kontrat sabit kaldığından consumer
+                                     #   değişimi izole (NFR-M4). Şimdi yeni ops yüzeyi açılmaz. (gerekçe ADR-0011)
+
 review:
   spot_check_minimum: 5              # faz-review başına en az 5 file:line doğrulaması (docs/07 §3 kanıt haritası taban)
   phase_gate: >

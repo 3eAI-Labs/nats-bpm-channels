@@ -1,0 +1,438 @@
+openapi: 3.0.3
+info:
+  title: nats-bpm-channels — Basamak-2 History Query API (read-only, çekirdek-4)
+  version: 1.0.0
+  description: >
+    Basamak-2 minimal history sorgu-API'si (Sentinel Phase 3 teslimatı). Cutover'lanan
+    sınıflarda Cockpit-history körleşmesinin telafisidir (D-C): projeksiyon Postgres store
+    üstünde read-only geçmiş sorgusu sunar (engine DB'den DEĞİL). Kapsam PO-Q3 ile
+    **çekirdek-4 okuma desenine** sabitlenmiştir; agregasyon/analitik/raporlama KAPSAM DIŞI
+    (VAL_QUERY_UNSUPPORTED_PATTERN). Sunulan sınıf kümesi = projeksiyonda VAR OLAN her sınıf
+    (dual-run dahil, cutover-bağımsız; BA-Q3).
+
+
+    Dağıtım biçimi (gömülebilir kütüphane vs standalone servis) ve somut authz bağlaması
+    ARCH-Q4'e bağlıdır; bu kontrat pluggable-authz SPI varsayar (SRS §4.7 — kiracı-sağlar,
+    read-only servis, merkezi Admin-UI DEĞİL). Yanıtlar standart zarfla döner ve RESTRICTED/PII
+    alanlar role-bazlı maskelenir (DP-15; ADR-0014).
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: 3eAI Labs
+    url: https://github.com/3eAI-Labs/nats-bpm-channels
+
+servers:
+  - url: /api/v1
+    description: History query API taban yolu (kiracı gateway'ine gömülür; URL versiyonlama).
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: process-instance-history
+    description: Çekirdek-4 okuma desenleri (processInstanceId / businessKey / zaman-aralığı+definition / instance-detay).
+
+paths:
+  /history/process-instances:
+    get:
+      tags: [process-instance-history]
+      operationId: listProcessInstanceHistory
+      summary: Instance listesi (çekirdek-2 businessKey · çekirdek-3 zaman-aralığı+definition)
+      description: >
+        Çekirdek-4 deseni 2 ve 3. `businessKey` verilirse o iş anahtarına ait instance listesi;
+        `processDefinitionKey` + zaman-aralığı (`startedAfter`/`startedBefore`) verilirse tanım+dönem
+        filtresi. En az bir filtre zorunlu (filtresiz tam-tarama = VAL_QUERY_UNSUPPORTED_PATTERN).
+        Read-only, sayfalamalı. businessKey CONFIDENTIAL/koşullu-PII (maskeleme kiracı politikası, DP-8).
+      parameters:
+        - $ref: '#/components/parameters/BusinessKey'
+        - $ref: '#/components/parameters/ProcessDefinitionKey'
+        - $ref: '#/components/parameters/StartedAfter'
+        - $ref: '#/components/parameters/StartedBefore'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Instance listesi (sayfalamalı).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ProcessInstanceHistory'
+        '400':
+          $ref: '#/components/responses/UnsupportedPattern'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+
+  /history/process-instances/{processInstanceId}:
+    get:
+      tags: [process-instance-history]
+      operationId: getProcessInstanceHistory
+      summary: Tek instance tam geçmişi (çekirdek-1)
+      description: >
+        Çekirdek-4 deseni 1: `processInstanceId` → o instance'ın tam geçmiş özeti
+        (process-instance düzeyi). Aktivite/task/variable detayları için alt-kaynaklar
+        (`/activities`, `/tasks`, `/variables`) kullanılır. Read-only.
+      parameters:
+        - $ref: '#/components/parameters/ProcessInstanceId'
+      responses:
+        '200':
+          description: Instance tam geçmişi.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProcessInstanceHistory'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /history/process-instances/{processInstanceId}/activities:
+    get:
+      tags: [process-instance-history]
+      operationId: listActivityHistory
+      summary: Instance activity geçmişi (çekirdek-4a)
+      description: 'Çekirdek-4 deseni 4: instance → activity geçmişi. Read-only, sayfalamalı.'
+      parameters:
+        - $ref: '#/components/parameters/ProcessInstanceId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Activity geçmişi (sayfalamalı).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ActivityInstanceHistory'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /history/process-instances/{processInstanceId}/tasks:
+    get:
+      tags: [process-instance-history]
+      operationId: listTaskHistory
+      summary: Instance task geçmişi (çekirdek-4b)
+      description: >
+        Çekirdek-4 deseni 4: instance → task geçmişi. assignee/owner RESTRICTED/PII →
+        role-bazlı maskeleme (DP-11/DP-15). Read-only, sayfalamalı.
+      parameters:
+        - $ref: '#/components/parameters/ProcessInstanceId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Task geçmişi (sayfalamalı).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/TaskInstanceHistory'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /history/process-instances/{processInstanceId}/variables:
+    get:
+      tags: [process-instance-history]
+      operationId: listVariableHistory
+      summary: Instance variable geçmişi (çekirdek-4c)
+      description: >
+        Çekirdek-4 deseni 4: instance → variable geçmişi. variable değeri RESTRICTED/PII →
+        PII-görme izni yoksa değer maskelenir (BUS_QUERY_PII_MASKED; DP-15). Read-only, sayfalamalı.
+      parameters:
+        - $ref: '#/components/parameters/ProcessInstanceId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Variable geçmişi (sayfalamalı, PII-maskeli).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/VariableHistory'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Pluggable authz yer-tutucusu (ARCH-Q4 / SRS §4.7): somut kimlik/yetki bağlaması
+        kiracı stack'i tarafından sağlanır (bearer JWT örnek). Yetkisiz istek → AUTH_QUERY_ACCESS_DENIED.
+
+  parameters:
+    ProcessInstanceId:
+      name: processInstanceId
+      in: path
+      required: true
+      description: Process-instance surrogate id (PSEUDONYMOUS).
+      schema:
+        type: string
+    BusinessKey:
+      name: businessKey
+      in: query
+      required: false
+      description: İş anahtarı (CONFIDENTIAL/koşullu PII; telco'da MSISDN olabilir — DP-8).
+      schema:
+        type: string
+    ProcessDefinitionKey:
+      name: processDefinitionKey
+      in: query
+      required: false
+      description: Process tanım anahtarı (PUBLIC).
+      schema:
+        type: string
+    StartedAfter:
+      name: startedAfter
+      in: query
+      required: false
+      description: Başlangıç zaman-aralığı alt sınırı (ISO-8601).
+      schema:
+        type: string
+        format: date-time
+    StartedBefore:
+      name: startedBefore
+      in: query
+      required: false
+      description: Başlangıç zaman-aralığı üst sınırı (ISO-8601).
+      schema:
+        type: string
+        format: date-time
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Sayfa numarası (0-tabanlı).
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Sayfa boyutu (üst sınır kiracı-konfig).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+
+  responses:
+    UnsupportedPattern:
+      description: İstek çekirdek-4 okuma desenlerinden birine uymuyor (agregasyon/analitik/filtresiz).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+          example:
+            success: false
+            message: 'İstek desteklenen çekirdek-4 okuma desenine uymuyor (kapsam dışı).'
+            code: VAL_QUERY_UNSUPPORTED_PATTERN
+            data: null
+            meta:
+              traceId: 'abc-123'
+    AccessDenied:
+      description: Role-based erişim kontrolü başarısız.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+          example:
+            success: false
+            message: 'Bu kaynağa erişim yetkiniz yok.'
+            code: AUTH_QUERY_ACCESS_DENIED
+            data: null
+            meta:
+              traceId: 'abc-123'
+    NotFound:
+      description: İstenen instance projeksiyonda bulunamadı.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+          example:
+            success: false
+            message: 'Instance projeksiyonda bulunamadı.'
+            code: RES_HISTORY_INSTANCE_NOT_FOUND
+            data: null
+            meta:
+              traceId: 'abc-123'
+
+  schemas:
+    ApiResponse:
+      type: object
+      description: >
+        Standart yanıt zarfı (ARCHITECT_GUIDELINE §4). `data` uç-noktaya göre nesne/dizi/null.
+        RESTRICTED/PII alanlar role-bazlı maskeli (DP-15); loglara PII değeri yazılmaz (DP-1).
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        code:
+          type: string
+          description: Makine-okunur durum/hata kodu (EXCEPTION_CODES.md taksonomisi).
+        data:
+          description: Payload (nesne / dizi / null; tip uç-noktaya göre belirlenir).
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+      required:
+        - success
+        - code
+
+    PageMeta:
+      type: object
+      description: Sayfalama + trace meta.
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+          format: int64
+        traceId:
+          type: string
+          description: Dağıtık izleme kimliği (PSEUDONYMOUS).
+
+    ProcessInstanceHistory:
+      type: object
+      description: Process-instance düzeyi geçmiş özeti (PROCINST projeksiyonu).
+      properties:
+        processInstanceId:
+          type: string
+          description: PSEUDONYMOUS.
+        processDefinitionKey:
+          type: string
+          description: PUBLIC.
+        businessKey:
+          type: string
+          description: CONFIDENTIAL/koşullu PII — role-bazlı maskelenebilir (DP-8).
+        startUserId:
+          type: string
+          description: Başlatan operatör kimliği (RESTRICTED/PII — maskeli; DP-11).
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+        state:
+          type: string
+          description: Instance durumu (ACTIVE/COMPLETED/... — INTERNAL).
+        cutoverState:
+          type: string
+          description: >
+            Bu sınıfın cutover durumu (DUAL_RUN/CUTOVERLANMIS/...) — bilgilendirici; sorgu-API
+            projeksiyonda var olan her sınıfı sunar (cutover-bağımsız, BA-Q3).
+
+    ActivityInstanceHistory:
+      type: object
+      description: Activity-instance geçmişi (ACTINST projeksiyonu).
+      properties:
+        activityId:
+          type: string
+          description: INTERNAL.
+        activityType:
+          type: string
+          description: INTERNAL.
+        assignee:
+          type: string
+          nullable: true
+          description: User-task assignee (RESTRICTED/PII — maskeli; DP-11).
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+
+    TaskInstanceHistory:
+      type: object
+      description: Task-instance geçmişi (TASKINST projeksiyonu).
+      properties:
+        taskId:
+          type: string
+          description: INTERNAL.
+        name:
+          type: string
+          description: Serbest metin (RESTRICTED/PII riski — maskeli; DP-11/DP-15).
+        assignee:
+          type: string
+          nullable: true
+          description: RESTRICTED/PII — maskeli (DP-11).
+        owner:
+          type: string
+          nullable: true
+          description: RESTRICTED/PII — maskeli (DP-11).
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+
+    VariableHistory:
+      type: object
+      description: Variable geçmişi (VARINST/DETAIL projeksiyonu).
+      properties:
+        variableName:
+          type: string
+          description: Değişken adı (CONFIDENTIAL — bağlama göre).
+        variableType:
+          type: string
+          description: INTERNAL.
+        value:
+          type: string
+          nullable: true
+          description: >
+            Değişken değeri (RESTRICTED/PII). PII-görme izni yoksa maskelenir
+            (BUS_QUERY_PII_MASKED; DP-15). Byte-array değerler için referans/özet döner.
+        masked:
+          type: boolean
+          description: Değerin maskelenip maskelenmediği (bilgilendirici).
+        timestamp:
+          type: string
+          format: date-time
