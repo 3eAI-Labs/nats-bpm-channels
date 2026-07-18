@@ -3,9 +3,9 @@
 
 **Repo:** `nats-bpm-channels` (3eAI Labs, Apache 2.0)
 **Sentinel fazı:** Phase 3 — Architect (AI performs, Human validates)
-**Girdi:** `docs/sentinel/step2/phase2/` (BUSINESS_LOGIC 31 BR, DECISION_MATRIX 9 matris/62 satır, EXCEPTION_CODES 41 kod, PHASE2_REVIEW koşullu-onay kapanışı), `docs/sentinel/step2/phase1/` (25 US, 26 FR + 30 NFR + 7 IR, DATA_CLASSIFICATION DP-1…16), `docs/07-history-offload.md` (D-A…D-G kilitli)
+**Girdi:** `docs/sentinel/step2/phase2/` (BUSINESS_LOGIC 31 BR, DECISION_MATRIX 9 matris/62 satır, EXCEPTION_CODES 42 kod (`RES_HISTORY_INSTANCE_NOT_FOUND` phase3-review F-001 ile eklendi), PHASE2_REVIEW koşullu-onay kapanışı), `docs/sentinel/step2/phase1/` (25 US, 26 FR + 30 NFR + 7 IR, DATA_CLASSIFICATION DP-1…16), `docs/07-history-offload.md` (D-A…D-G kilitli)
 **Tarih:** 2026-07-17
-**Durum:** ARCH-Q1…5 KARARA BAĞLANDI (2026-07-18, 5/5 önerilen seçenek — §12); ADR 0009…0019 **11/11 Kabul** (ADR-0016 ARCH-Q2 kararıyla Kabul'e geçti) — phase-review bekliyor
+**Durum:** ARCH-Q1…5 KARARA BAĞLANDI (2026-07-18, 5/5 önerilen — §12); ADR 0009…0019 **11/11 Kabul**; phase-review KOŞULLU ONAY (🔴0 🟠0 🟡2 🟢3+1, fork spot-check 6/6, iki spec validator-temiz) + bulgular DÜZELTİLDİ (`PHASE3_REVIEW.md` kapanış kaydı) — Levent faz-4 onayı bekleniyor
 
 > Bu belge **HLD**'dir (bileşen mimarisi + entegrasyon), LLD değildir. Sınıf-içi algoritma/DDL detayı phase4'e bırakılır. Motor/adapter iddiaları `file:line` kanıtlı (`[07§3]` = docs/07 §3/§7'de DOĞRULANMIŞ; bu fazda fork kaynağı 2 kalemde tekrar spot-check edildi — §11). Kilitli kararlar (D-A…D-G, PO-Q1…7, BA-Q1…8) DEĞİŞTİRİLMEZ; mimari onların üstüne kurulur. **Effort tahmini içermez.** Dokümantasyon TR, kod/tanımlayıcı EN.
 

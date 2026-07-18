@@ -63,6 +63,7 @@
 | `VAL_QUERY_UNSUPPORTED_PATTERN` | reddedilir (400-eşdeğeri) | İstek çekirdek-4 okuma desenlerinden (PO-Q3) birine uymuyor (örn. agregasyon/analitik/raporlama) | İstek reddedilir; kapsam-dışı olduğu (SRS §7) mesajla belirtilir | N/A | WARN | BR-QRY-001 / FR-C1 / US-C1 | `07§1` madde 3 (D-C); PO-Q3; SRS §7 |
 | `AUTH_QUERY_ACCESS_DENIED` | reddedilir (403-eşdeğeri) | Role-based erişim kontrolü başarısız | İstek reddedilir | N/A | WARN | BR-QRY-001 / FR-C1 / US-C1 | `DATA_CLASSIFICATION.md` DP-15 |
 | `BUS_QUERY_PII_MASKED` *(bilgilendirici, hata değil)* | yanıt-maskeli | Yanıt RESTRICTED/PII alan içeriyor, istek sahibinin PII-görme izni yok | Alan maskelenir (DP-15); loglara PII DEĞERİ yazılmaz (DP-1 devralınan) | N/A | DEBUG/INFO | BR-QRY-001 / FR-C1 / US-C1 | `DATA_CLASSIFICATION.md` DP-1, DP-15 |
+| `RES_HISTORY_INSTANCE_NOT_FOUND` *(beklenen durum, hata değil)* | bulunamadı (404-eşdeğeri) | Çekirdek-4 sorgusunun hedef instance/kaydı projeksiyonda yok (hiç yazılmadı, retention ile silindi ya da erasure sonrası) | Boş/404 yanıt; PII sızdırmayan mesaj. Retention/erasure sonrası "yokluk" MEŞRU sonuçtur (US-G1/G2) | N/A | DEBUG/INFO | BR-QRY-001 / FR-C1 / US-C1 | phase3 `api/openapi.yaml` 404 yanıtı (phase3-review F-001 ile registry'ye eklendi) |
 
 ---
 
@@ -142,9 +143,9 @@
 | `SYS_` | 14 | Sistem/altyapı arızası — çoğunlukla ERROR (relay-publish/leader/stuck ×3, projeksiyon-write/schema-drift ×2, history-dlq-publish, reconciliation-job, cutover-config-apply, retention-job, erasure-pipeline, pseudonym-vault-unavailable, bench-environment/sli-drift ×2) — *not: `SYS_RETENTION_AUDIT_LOG_WRITE_FAILED` CRITICAL (compliance-invariant); `SYS_BENCH_HISTORY_ENVIRONMENT_UNAVAILABLE`/`SYS_BENCH_HISTORY_SLI_DRIFT`/`SYS_OUTBOX_RELAY_LEADER_LOST` WARN'dır, kategori SYS_ olsa da build/akışı bloklamaz* |
 | `AUTH_` | 2 | Kimlik/yetki sorunu (sorgu-API erişim reddi, kasa erişim reddi) — *not: `AUTH_PSEUDONYM_VAULT_ACCESS_DENIED` CRITICAL + security-page, `SYS_SENTINEL_WORKER_CONFLICT` (basamak-1) ile aynı ciddiyet sınıfı* |
 
-**Toplam: 41 exception/durum kodu** (11 kaynak grubu: Handler/Config=3, Outbox/Relay=4, Projeksiyon-Consumer=4, History-DLQ=3, Sorgu-API=3, Reconciliation=4, Cutover=3, Bench=4, Retention=4, Erasure=5, Pseudonymization=4 → 3+4+4+3+3+4+3+4+4+5+4=41). Bunlardan **9 kodu** açıkça **"beklenen durum/bilgilendirici, hata değil"** olarak etiketlenmiştir (`BUS_OUTBOX_DUPLICATE_RELAY_DELIVERY`, `BUS_PROJECTION_STALE_EVENT_DISCARDED`, `BUS_QUERY_PII_MASKED`, `BUS_CUTOVER_ROLLBACK_TRIGGERED`, `BUS_RETENTION_WINDOW_BREACH_DETECTED`, `BUS_ERASURE_REQUEST_ACCEPTED`, `BUS_ERASURE_REQUEST_LEGAL_HOLD_BLOCKED`, `BUS_PSEUDONYMIZATION_APPLIED`, `BUS_PSEUDONYM_MAP_ENTRY_DELETED` — ERROR_HANDLING_GUIDELINE §6 ilkesi: "Errors are not exceptions to normal flow — they ARE normal flow"). **3 kod CRITICAL/security-page seviyesindedir** (`SYS_RETENTION_AUDIT_LOG_WRITE_FAILED`, `RES_ERASURE_VERIFICATION_FAILED`, `AUTH_PSEUDONYM_VAULT_ACCESS_DENIED`) — hepsi compliance-invariant ihlalleri, basamak-1'in `SYS_SENTINEL_WORKER_CONFLICT` (BAQ-7) ciddiyet sınıfıyla eşdeğer.
+**Toplam: 42 exception/durum kodu** (11 kaynak grubu: Handler/Config=3, Outbox/Relay=4, Projeksiyon-Consumer=4, History-DLQ=3, Sorgu-API=4, Reconciliation=4, Cutover=3, Bench=4, Retention=4, Erasure=5, Pseudonymization=4 → 3+4+4+3+4+4+3+4+4+5+4=42; `RES_HISTORY_INSTANCE_NOT_FOUND` phase3-review F-001 ile eklendi). Bunlardan **10 kodu** açıkça **"beklenen durum/bilgilendirici, hata değil"** olarak etiketlenmiştir (`BUS_OUTBOX_DUPLICATE_RELAY_DELIVERY`, `BUS_PROJECTION_STALE_EVENT_DISCARDED`, `BUS_QUERY_PII_MASKED`, `BUS_CUTOVER_ROLLBACK_TRIGGERED`, `BUS_RETENTION_WINDOW_BREACH_DETECTED`, `BUS_ERASURE_REQUEST_ACCEPTED`, `BUS_ERASURE_REQUEST_LEGAL_HOLD_BLOCKED`, `BUS_PSEUDONYMIZATION_APPLIED`, `BUS_PSEUDONYM_MAP_ENTRY_DELETED`, `RES_HISTORY_INSTANCE_NOT_FOUND` — ERROR_HANDLING_GUIDELINE §6 ilkesi: "Errors are not exceptions to normal flow — they ARE normal flow"). **3 kod CRITICAL/security-page seviyesindedir** (`SYS_RETENTION_AUDIT_LOG_WRITE_FAILED`, `RES_ERASURE_VERIFICATION_FAILED`, `AUTH_PSEUDONYM_VAULT_ACCESS_DENIED`) — hepsi compliance-invariant ihlalleri, basamak-1'in `SYS_SENTINEL_WORKER_CONFLICT` (BAQ-7) ciddiyet sınıfıyla eşdeğer.
 
-**Basamak-1 ile birlikte repo-geneli toplam: 23 (basamak-1) + 41 (basamak-2) = 64 exception/durum kodu.**
+**Basamak-1 ile birlikte repo-geneli toplam: 23 (basamak-1) + 42 (basamak-2) = 65 exception/durum kodu.**
 
 ---
 
@@ -194,7 +195,7 @@
 | AUTH_PSEUDONYM_VAULT_ACCESS_DENIED | BR-PII-003 | FR-G3 | US-G3 |
 | BUS_PSEUDONYM_MAP_ENTRY_DELETED | BR-PII-003 | FR-G3 | US-G3 |
 
-**Sonuç:** 41/41 kod, sıfır izlenebilirlik-dışı (traceless) kod yok — hepsi bir BR üzerinden bir US'ye bağlanır.
+**Sonuç:** 42/42 kod, sıfır izlenebilirlik-dışı (traceless) kod yok — hepsi bir BR üzerinden bir US'ye bağlanır.
 
 ---
 

@@ -223,7 +223,9 @@ components:
           description: Apply-zamanı idempotency anahtarı (PSEUDONYMOUS; devralınan).
       required:
         - Nats-Msg-Id
+        - X-Cadenzaflow-History-Engine-Id
         - X-Cadenzaflow-History-Class
+        - X-Cadenzaflow-History-Event-Type
         - X-Cadenzaflow-History-Event-Id
         - X-Cadenzaflow-History-Process-Instance-Id
 
