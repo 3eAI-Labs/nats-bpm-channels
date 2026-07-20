@@ -15,9 +15,19 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Vault-DB CLIENT — talks to the physically separate pseudonym-vault Postgres (`DB_SCHEMA.md`
- * §0/§3, ARCH-Q2). Never called from the audit-critical hot path directly; invoked
- * downstream/async from {@link com.threeai.nats.history.projection.HistoryProjectionConsumer}
- * (BA-Q5) once the projection row carrying {@code pseudonym_token} is committed.
+ * §0/§3, ARCH-Q2).
+ *
+ * <p><b>FINDING-003 (faz-5 review, MINOR — stale Javadoc, CQ-1 sonrası güncellendi):</b> {@link
+ * #persistMapping} is called ENGINE-SIDE, downstream/async of the tx-in write, by {@code
+ * CompactHistoryOutboxWriter} (`camunda-nats-channel`/`cadenzaflow-nats-channel` mirror) —
+ * the ONLY place that ever has both the real value AND the token together (BA-Q5 tx-in keyed-hash
+ * computation). The engine-neutral projection consumer ({@code
+ * com.threeai.nats.history.projection.HistoryProjectionConsumer}, `nats-history-projection`) is
+ * entirely vault-UNAWARE — it only ever sees the pseudonym TOKEN on the wire (DP-1: the raw value
+ * never reaches the projection module at all) and carries no {@code PseudonymizationVaultClient}
+ * dependency. {@code nats-history-projection} DOES still use this client — but only for {@link
+ * #deleteMapping} (erasure-triggered hard-delete, ADR-0016 "silme = harita-kaydı silme") and
+ * {@link #reidentify} (authorized re-identification lookups) — never {@code persistMapping}.
  *
  * <p><b>CODER-NOTE (constructor, beyond the LLD sketch):</b> a trailing {@code String
  * columnEncryptionKey} parameter was added. {@code pgp_sym_encrypt}/{@code pgp_sym_decrypt}
@@ -47,7 +57,8 @@ public class PseudonymizationVaultClient {
      * NOTHING}, since the same deterministic token from the same real value is expected to
      * repeat). Writes {@code vault_access_audit} (operation=WRITE). Unreachable vault →
      * {@code SYS_PSEUDONYM_VAULT_UNAVAILABLE}, caller retries; audit-critical outbox/relay/NATS
-     * flow is NEVER blocked by this (BA-Q5).
+     * flow is NEVER blocked by this (BA-Q5). Called ENGINE-SIDE, downstream/async, by {@code
+     * CompactHistoryOutboxWriter} — see class Javadoc CQ-1/FINDING-003 note.
      */
     public void persistMapping(String pseudonymToken, String engineId, String realUserId, int tenantKeyVersion,
             String sourceClass) {
@@ -63,7 +74,9 @@ public class PseudonymizationVaultClient {
             stmt.setString(5, columnEncryptionKey);
             stmt.setString(6, sourceClass);
             stmt.executeUpdate();
-            auditor.record(pseudonymToken, "WRITE", "system:history-projection-consumer", null, true);
+            // FINDING-003: accessor identity corrected post-CQ-1 -- the engine-side outbox
+            // writer calls this, never the projection consumer (which is vault-unaware).
+            auditor.record(pseudonymToken, "WRITE", "system:compact-history-outbox-writer", null, true);
             log.info("Pseudonym mapping persisted", kv("source_class", sourceClass), kv("engine_id", engineId));
         } catch (SQLException e) {
             log.error("Pseudonym vault unavailable — mapping write failed, caller may retry",
