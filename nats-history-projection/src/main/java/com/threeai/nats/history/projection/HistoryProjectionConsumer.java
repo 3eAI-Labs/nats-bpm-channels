@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.threeai.nats.core.dlq.DlqPublishOutcome;
 import com.threeai.nats.core.dlq.DlqReason;
 import com.threeai.nats.core.history.HistoryClassNames;
 import com.threeai.nats.core.history.HistoryHeaders;
@@ -118,9 +119,25 @@ public class HistoryProjectionConsumer {
         routeToDlqThenAck(msg, DlqReason.HISTORY_SCHEMA_DRIFT);
     }
 
+    /**
+     * FINDING-004 (faz-5 review): custody-transfer is complete (ack) ONLY once the DLQ publish
+     * genuinely succeeded ({@code PUBLISHED_JETSTREAM}/{@code PUBLISHED_CORE_FALLBACK}, IR-4). A
+     * DLQ publish failure ({@code FAILED_NO_DLQ_SUBJECT}/{@code FAILED_BOTH_PUBLISH}) previously
+     * still acked unconditionally — silently losing the message. Now naks instead, so the message
+     * is redelivered and DLQ-routing retried.
+     */
     private void routeToDlqThenAck(Message msg, DlqReason reason) {
-        dlqConsumer.routeToDlq(msg, reason);
-        msg.ack(); // custody-transfer complete once handed to DLQ (IR-4)
+        DlqPublishOutcome outcome = dlqConsumer.routeToDlq(msg, reason);
+        if (outcome == DlqPublishOutcome.PUBLISHED_JETSTREAM || outcome == DlqPublishOutcome.PUBLISHED_CORE_FALLBACK) {
+            msg.ack(); // custody-transfer complete once handed to DLQ (IR-4)
+            return;
+        }
+        // SYS_HISTORY_DLQ_PUBLISH_FAILED -- nak+alert (both JetStream and core-NATS DLQ publish
+        // failed, or no DLQ subject configured): the message is NOT discarded, redelivery will
+        // retry DLQ-routing on the next attempt.
+        log.error("History DLQ publish failed — original message NAKed for redelivery, not discarded",
+                kv("subject", msg.getSubject()), kv("outcome", outcome));
+        msg.nak();
     }
 
     private ParsedEnvelope parseEnvelope(Message msg) {

@@ -79,6 +79,8 @@ public class ProjectionStore {
                         kv("stream_sequence", record.streamSequence()));
                 return UpsertOutcome.STALE_DISCARDED;
             }
+            // BUS_PROJECTION_STALE_EVENT_DISCARDED -- expected, no-op (FINDING-004, faz-5 review:
+            // this was ALREADY the emit point, just missing the registry code comment).
             log.debug("Stale event discarded (incoming stream_sequence older than stored)",
                     kv("history_class", historyClass), kv("entity_id", record.entityId()));
             return UpsertOutcome.STALE_DISCARDED;

@@ -172,6 +172,11 @@ public class CompactHistoryOutboxWriter {
         fields.remove("userId"); // raw value never persisted alongside the token in the same row
         fields.put("userIdPseudonymized", true);
         fields.put("pseudonymToken", token);
+        // BUS_PSEUDONYMIZATION_APPLIED -- informational success (FINDING-004). DP-1: never logs
+        // the raw userId or the token itself (a deterministic keyed-hash is a correlation
+        // surface) -- only the fact that pseudonymization was applied, for this class/engine.
+        log.info("Pseudonymization applied to OP_LOG.userId before tx-in outbox write",
+                kv("history_class", historyClass), kv("engine_id", engineId), kv("tenant_key_version", tenantKeyVersion));
     }
 
     /**

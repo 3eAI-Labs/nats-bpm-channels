@@ -17,7 +17,23 @@ import com.threeai.nats.bench.BenchMode;
 public record HistoryDbWriteOpReport(
         long actHiWriteOpCount, long compactOutboxRowCount, long compactOutboxPayloadRowCount, BenchMode mode) {
 
-    /** BUS_BENCH_HISTORY_METRIC_REGRESSION — the ONE hard gate (D-F). */
+    /**
+     * BUS_BENCH_HISTORY_METRIC_REGRESSION — the ONE hard gate (D-F).
+     *
+     * <p><b>CODER-NOTE (FINDING-004, faz-5 review — BUS_BENCH_BASELINE_MISSING /
+     * SYS_BENCH_HISTORY_SLI_DRIFT not yet emitted):</b> the ERROR_REGISTRY also names two
+     * SUPPORTING (non-hard-gate) signals this report does not currently produce: {@code
+     * BUS_BENCH_BASELINE_MISSING} (the {@code DB_HISTORY_BASELINE} reference measurement could
+     * not be captured for comparison) and {@code SYS_BENCH_HISTORY_SLI_DRIFT} (a secondary SLI
+     * comparison, beyond this ONE hard gate, drifting outside an expected band). Neither is
+     * fabricated here: {@link HistoryBenchScenario#run} always runs baseline synchronously before
+     * offload within the SAME scenario instance (a genuinely "missing" baseline is not a state
+     * the current single-scenario design can reach — it would require a caller invoking {@code
+     * HISTORY_OFFLOAD} without ever having called {@code DB_HISTORY_BASELINE} first, which no
+     * current caller does), and no supporting-SLI comparison beyond the hard gate exists yet to
+     * drift. Both are bounded follow-ups (same design-only-deferral discipline as {@link
+     * RelayFailoverBenchScenario}), not implemented merely to produce a log line.
+     */
     public boolean passesHardGate() {
         if (mode == BenchMode.HISTORY_OFFLOAD) {
             return actHiWriteOpCount == 0;

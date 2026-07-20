@@ -190,4 +190,48 @@ class HistoryOutboxRelayTest {
 
         assertThat(countOutboxRows()).isEqualTo(1); // NOT deleted -- retried next cycle
     }
+
+    /**
+     * FINDING-004 (faz-5 review): {@code BUS_OUTBOX_DUPLICATE_RELAY_DELIVERY} -- {@code
+     * compact_history_outbox} has a UNIQUE (history_event_id, event_type) constraint, so the
+     * SAME row can never be duplicated at the DB layer. The realistic trigger is instead: an
+     * EARLIER relay cycle published this row's dedup id successfully but crashed/lost the PubAck
+     * before it could DELETE the row (still-present, retried next cycle) -- simulated here by
+     * publishing the SAME dedup id directly BEFORE the row's own {@code relayCycle()} runs. The
+     * broker's duplicate window absorbs the relay's (first, from ITS OWN perspective) publish;
+     * custody-transfer still completes normally (row deleted, no error) and the event is logged.
+     */
+    @Test
+    void relayCycle_rowDedupIdAlreadyPublishedByAnEarlierCrashedCycle_logsDuplicate_rowStillDeleted() throws Exception {
+        String historyEventId = UUID.randomUUID().toString();
+        insertOutboxRow(historyEventId, "proc-dup-1");
+        String dedupId = historyEventId + ":UserOperationLog";
+
+        // Simulate the earlier crashed cycle's publish (SAME dedup id, same subject shape).
+        jetStream.publish(io.nats.client.impl.NatsMessage.builder()
+                .subject("history.camunda.OP_LOG.proc-dup-1")
+                .headers(new io.nats.client.impl.Headers().put(
+                        io.nats.client.support.NatsJetStreamConstants.MSG_ID_HDR, dedupId))
+                .data("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .build());
+
+        HistoryOutboxRelay relay = newRelayAsLeader(new HistoryOutboxProperties());
+
+        ch.qos.logback.classic.Logger relayLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(HistoryOutboxRelay.class);
+        relayLogger.setLevel(ch.qos.logback.classic.Level.INFO);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        relayLogger.addAppender(appender);
+
+        try {
+            relay.relayCycle();
+        } finally {
+            relayLogger.detachAppender(appender);
+        }
+
+        assertThat(countOutboxRows()).isZero(); // relayed+deleted despite the broker-level dedup
+        assertThat(appender.list).anyMatch(event -> event.getFormattedMessage().contains("JetStream-deduplicated"));
+    }
 }

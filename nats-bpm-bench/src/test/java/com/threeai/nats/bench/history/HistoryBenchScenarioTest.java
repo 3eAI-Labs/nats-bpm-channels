@@ -36,7 +36,12 @@ class HistoryBenchScenarioTest {
             assertThat(offload.actHiWriteOpCount()).isZero();
             assertThat(offload.compactOutboxRowCount()).isGreaterThan(0);
         } catch (ContainerLaunchException dockerUnavailable) {
-            abort("SYS_BENCH_ENVIRONMENT_UNAVAILABLE — Docker/Testcontainers unavailable, main CI is not blocked");
+            // SYS_BENCH_HISTORY_ENVIRONMENT_UNAVAILABLE (FINDING-004, faz-5 review) -- the
+            // basamak-2-specific registry code (distinct from basamak-1's generic
+            // SYS_BENCH_ENVIRONMENT_UNAVAILABLE, e.g. ExternalTaskLifecycleBenchTest): this
+            // scenario needs BOTH Testcontainers Postgres AND NATS, so its own history-scoped
+            // abort signal is meaningful for ops triage.
+            abort("SYS_BENCH_HISTORY_ENVIRONMENT_UNAVAILABLE — Docker/Testcontainers unavailable, main CI is not blocked");
         } catch (Exception e) {
             throw new RuntimeException("History bench scenario failed", e);
         }

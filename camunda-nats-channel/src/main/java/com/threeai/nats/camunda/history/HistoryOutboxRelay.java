@@ -74,7 +74,15 @@ public class HistoryOutboxRelay {
 
     @Scheduled(fixedDelayString = "${spring.nats.camunda.history.outbox.relay-cycle-period-seconds:30}000")
     public void relayCycle() {
+        boolean wasLeader = leaderLease.isLeader();
         if (!leaderLease.tryAcquireOrRenew()) {
+            if (wasLeader) {
+                // SYS_OUTBOX_RELAY_LEADER_LOST -- transparent failover, routine (FINDING-004):
+                // this node HELD the lease as of the previous cycle and no longer does; another
+                // node takes over relaying. Not an error by itself -- WARN visibility only.
+                log.warn("Outbox relay leadership lost — another node will take over relaying",
+                        kv("engine_id", engineId));
+            }
             return; // not the leader -- zero DB reads (basamak-1 parity, ADR-0002)
         }
         List<OutboxRow> rows;
@@ -97,7 +105,16 @@ public class HistoryOutboxRelay {
             String payload = HistoryWireMessageFactory.encodePayloadFromRawFieldsJson(row.payloadScalar(), largePayload);
             NatsMessage msg = buildMessage(row, payload);
 
-            jetStream.publish(msg); // synchronous publish -- throws unless PubAck is received
+            io.nats.client.api.PublishAck ack = jetStream.publish(msg); // synchronous -- throws unless PubAck is received
+            if (ack.isDuplicate()) {
+                // BUS_OUTBOX_DUPLICATE_RELAY_DELIVERY -- informational, no-op (FINDING-004): the
+                // JetStream broker's own Nats-Msg-Id duplicate window already absorbed this
+                // (e.g. a previous relay cycle published this SAME row but crashed before the
+                // row could be deleted) -- downstream consumers see exactly one delivery either
+                // way; this is purely an observability signal that the row lingered a cycle.
+                log.info("Outbox row relay publish was a JetStream-deduplicated redelivery",
+                        kv("history_class", row.historyClass()), kv("history_event_id", row.historyEventId()));
+            }
             deleteOutboxRow(row.id());
 
             if (metrics != null) {
