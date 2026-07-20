@@ -57,7 +57,8 @@ import org.springframework.core.env.Environment;
 @AutoConfiguration
 @ConditionalOnClass(org.cadenzaflow.bpm.engine.ProcessEngine.class)
 @EnableConfigurationProperties({NatsProperties.class, CadenzaFlowNatsProperties.class, A2Properties.class,
-        HistoryClassificationProperties.class, HistoryOutboxProperties.class})
+        HistoryClassificationProperties.class, HistoryOutboxProperties.class,
+        com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties.class})
 public class CadenzaFlowNatsAutoConfiguration {
 
     private static final String ENGINE_ID = "cadenzaflow";
@@ -186,13 +187,55 @@ public class CadenzaFlowNatsAutoConfiguration {
         return new PseudonymTokenGenerator();
     }
 
+    /**
+     * CQ-1: engine-side pseudonym-vault write path (ADR-0016 "persist downstream/async").
+     * Physically SEPARATE Postgres pool (ARCH-Q2) — never shares {@code dataSource} (the engine
+     * DB). Gated on {@code history.vault.datasource.jdbc-url} being configured at all:
+     * pseudonymization opt-in without a configured vault is a valid (if unusual) tenant choice
+     * (see {@code CompactHistoryOutboxWriter}'s CODER-NOTE) — this bean simply does not exist in
+     * that case, and {@code compactHistoryOutboxWriter} below falls back to its
+     * vault-less constructor.
+     */
+    @Bean(name = "pseudonymVaultDataSource", destroyMethod = "close")
+    @ConditionalOnMissingBean(name = "pseudonymVaultDataSource")
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "history.vault.datasource", name = "jdbc-url")
+    public DataSource pseudonymVaultDataSource(com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties props) {
+        com.zaxxer.hikari.HikariConfig config = new com.zaxxer.hikari.HikariConfig();
+        config.setJdbcUrl(props.getJdbcUrl());
+        config.setUsername(props.getUsername());
+        config.setPassword(props.getPassword());
+        config.setPoolName("cadenzaflow-pseudonym-vault-pool");
+        return new com.zaxxer.hikari.HikariDataSource(config);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(name = "pseudonymVaultDataSource")
+    public com.threeai.nats.core.vault.VaultAccessAuditor vaultAccessAuditor(
+            @org.springframework.beans.factory.annotation.Qualifier("pseudonymVaultDataSource") DataSource vaultDataSource) {
+        return new com.threeai.nats.core.vault.VaultAccessAuditor(vaultDataSource);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(name = "pseudonymVaultDataSource")
+    public com.threeai.nats.core.vault.PseudonymizationVaultClient pseudonymizationVaultClient(
+            @org.springframework.beans.factory.annotation.Qualifier("pseudonymVaultDataSource") DataSource vaultDataSource,
+            com.threeai.nats.core.vault.VaultAccessAuditor auditor,
+            com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties props) {
+        return new com.threeai.nats.core.vault.PseudonymizationVaultClient(
+                vaultDataSource, auditor, props.getVaultColumnEncryptionKeyRef());
+    }
+
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
     public CompactHistoryOutboxWriter compactHistoryOutboxWriter(DataSource dataSource,
             PseudonymTokenGenerator pseudonymGenerator, HistoryClassificationProperties classification,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new CompactHistoryOutboxWriter(dataSource, pseudonymGenerator, classification, metrics);
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            @Autowired(required = false) com.threeai.nats.core.vault.PseudonymizationVaultClient vaultClient) {
+        return new CompactHistoryOutboxWriter(dataSource, pseudonymGenerator, classification, metrics, vaultClient);
     }
 
     @Bean

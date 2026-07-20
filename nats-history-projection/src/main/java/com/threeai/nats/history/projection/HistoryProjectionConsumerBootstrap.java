@@ -10,7 +10,6 @@ import java.util.List;
 
 import com.threeai.nats.core.jetstream.JetStreamSubjectPartitioner;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
-import com.threeai.nats.history.vault.PseudonymizationVaultClient;
 import io.nats.client.Dispatcher;
 import io.nats.client.JetStream;
 import io.nats.client.PushSubscribeOptions;
@@ -53,7 +52,6 @@ public class HistoryProjectionConsumerBootstrap implements InitializingBean, Dis
     private final io.nats.client.Connection connection;
     private final ProjectionStore projectionStore;
     private final HistoryDlqConsumer dlqConsumer;
-    private final PseudonymizationVaultClient vaultClient;
     private final NatsChannelMetrics metrics;
     private final HistoryProjectionProperties properties;
 
@@ -61,13 +59,12 @@ public class HistoryProjectionConsumerBootstrap implements InitializingBean, Dis
     private final List<Dispatcher> dispatchers = new ArrayList<>();
 
     public HistoryProjectionConsumerBootstrap(JetStream jetStream, io.nats.client.Connection connection,
-            ProjectionStore projectionStore, HistoryDlqConsumer dlqConsumer, PseudonymizationVaultClient vaultClient,
+            ProjectionStore projectionStore, HistoryDlqConsumer dlqConsumer,
             NatsChannelMetrics metrics, HistoryProjectionProperties properties) {
         this.jetStream = jetStream;
         this.connection = connection;
         this.projectionStore = projectionStore;
         this.dlqConsumer = dlqConsumer;
-        this.vaultClient = vaultClient;
         this.metrics = metrics;
         this.properties = properties;
     }
@@ -90,7 +87,7 @@ public class HistoryProjectionConsumerBootstrap implements InitializingBean, Dis
 
     private void registerPartitionConsumer(int partitionIndex) {
         HistoryProjectionConsumer consumer = new HistoryProjectionConsumer(partitionIndex, jetStream,
-                projectionStore, dlqConsumer, vaultClient, metrics, MAX_DELIVER);
+                projectionStore, dlqConsumer, metrics, MAX_DELIVER);
         String filterSubject = JetStreamSubjectPartitioner.partitionFilterSubject(BASE_SUBJECT, WILDCARD_COUNT, partitionIndex);
         String durableName = DURABLE_PREFIX + partitionIndex;
         try {
@@ -140,8 +137,6 @@ public class HistoryProjectionConsumerBootstrap implements InitializingBean, Dis
                 log.warn("Error draining history projection consumer dispatcher", e);
             }
         }
-        for (HistoryProjectionConsumer consumer : consumers) {
-            consumer.shutdown();
-        }
+        consumers.clear();
     }
 }

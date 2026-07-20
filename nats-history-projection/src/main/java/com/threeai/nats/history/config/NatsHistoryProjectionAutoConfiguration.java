@@ -10,6 +10,9 @@ import com.threeai.nats.core.history.PseudonymTokenGenerator;
 import com.threeai.nats.core.jetstream.JetStreamKvManager;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import com.threeai.nats.core.resilience.DlqBridgeCircuitBreakerFactory;
+import com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties;
+import com.threeai.nats.core.vault.PseudonymizationVaultClient;
+import com.threeai.nats.core.vault.VaultAccessAuditor;
 import com.threeai.nats.history.cutover.ClassCutoverStateStore;
 import com.threeai.nats.history.cutover.CutoverControlPlane;
 import com.threeai.nats.history.cutover.CutoverRollback;
@@ -33,9 +36,6 @@ import com.threeai.nats.history.query.HistoryQueryApi;
 import com.threeai.nats.history.query.HistoryQueryAuthzSpi;
 import com.threeai.nats.history.query.HistoryQueryController;
 import com.threeai.nats.history.query.PiiMaskingService;
-import com.threeai.nats.history.vault.PseudonymVaultDataSourceProperties;
-import com.threeai.nats.history.vault.PseudonymizationVaultClient;
-import com.threeai.nats.history.vault.VaultAccessAuditor;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -215,10 +215,9 @@ public class NatsHistoryProjectionAutoConfiguration {
     @ConditionalOnBean(name = "projectionDataSource")
     public HistoryProjectionConsumerBootstrap historyProjectionConsumerBootstrap(JetStream jetStream,
             Connection connection, ProjectionStore projectionStore, HistoryDlqConsumer dlqConsumer,
-            @Autowired(required = false) PseudonymizationVaultClient vaultClient,
             @Autowired(required = false) NatsChannelMetrics metrics, HistoryProjectionProperties properties) {
         return new HistoryProjectionConsumerBootstrap(jetStream, connection, projectionStore, dlqConsumer,
-                vaultClient, metrics, properties);
+                metrics, properties);
     }
 
     // --- Query API (ARCH-Q4: embeddable + optional standalone REST) ---

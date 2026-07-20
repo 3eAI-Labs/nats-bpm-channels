@@ -28,6 +28,13 @@
             <artifactId>micrometer-core</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- CQ-1: builds the engine-side pseudonym-vault DataSource pool, ARCH-Q2 isolation
+             (own pool, never Spring Boot's single auto-configured DataSource; same discipline
+             nats-history-projection already applies to its projection/vault pools). -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.camunda.bpm</groupId>
             <artifactId>camunda-engine</artifactId>

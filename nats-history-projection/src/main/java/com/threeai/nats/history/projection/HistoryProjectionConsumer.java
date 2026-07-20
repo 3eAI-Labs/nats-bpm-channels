@@ -6,14 +6,12 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.Executors;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.threeai.nats.core.dlq.DlqReason;
 import com.threeai.nats.core.history.HistoryClassNames;
 import com.threeai.nats.core.history.HistoryHeaders;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
-import com.threeai.nats.history.vault.PseudonymizationVaultClient;
 import io.nats.client.JetStream;
 import io.nats.client.Message;
 import org.slf4j.Logger;
@@ -32,6 +30,16 @@ import org.slf4j.LoggerFactory;
  * is 4; this consumer needs that budget to implement the delivery-count-exceeded → DLQ escalation
  * the asyncapi {@code consumeHistoryEvent} operation describes ("deliveryCount &gt; maxDeliver →
  * dlq.history.&lt;...&gt;"), which the LLD's method-only sketch does not otherwise carry.
+ *
+ * <p><b>CQ-1 (Levent, önerilen — pseudonym-vault write ownership):</b> this consumer previously
+ * carried a {@code PseudonymizationVaultClient} dependency for an enqueue-only stub that could
+ * never actually call {@code persistMapping(...)} with a real value — it only ever sees the
+ * pseudonym TOKEN on the wire (BA-Q5/DP-1: the raw value is removed from {@code fields} before the
+ * outbox row is even built, engine-side). That dependency and the stub have been REMOVED; the
+ * vault WRITE now happens engine-side, at the point the token is actually computed (see {@code
+ * CompactHistoryOutboxWriter.applyPseudonymizationIfApplicable}, `camunda-nats-channel`/{@code
+ * cadenzaflow-nats-channel} mirror) — this class stays entirely vault-unaware, consistent with
+ * ARCH-Q2's DB isolation (it never needs a vault {@code DataSource} at all).
  */
 public class HistoryProjectionConsumer {
 
@@ -43,20 +51,15 @@ public class HistoryProjectionConsumer {
     private final JetStream jetStream;
     private final ProjectionStore projectionStore;
     private final HistoryDlqConsumer dlqConsumer;
-    private final PseudonymizationVaultClient vaultClient;
     private final NatsChannelMetrics metrics;
     private final int maxDeliver;
 
-    private final java.util.concurrent.ExecutorService vaultWriteExecutor = Executors.newVirtualThreadPerTaskExecutor();
-
     public HistoryProjectionConsumer(int partitionIndex, JetStream jetStream, ProjectionStore projectionStore,
-            HistoryDlqConsumer dlqConsumer, PseudonymizationVaultClient vaultClient, NatsChannelMetrics metrics,
-            int maxDeliver) {
+            HistoryDlqConsumer dlqConsumer, NatsChannelMetrics metrics, int maxDeliver) {
         this.partitionIndex = partitionIndex;
         this.jetStream = jetStream;
         this.projectionStore = projectionStore;
         this.dlqConsumer = dlqConsumer;
-        this.vaultClient = vaultClient;
         this.metrics = metrics;
         this.maxDeliver = maxDeliver;
     }
@@ -77,7 +80,6 @@ public class HistoryProjectionConsumer {
             if (outcome == UpsertOutcome.STALE_DISCARDED) {
                 recordStaleDiscardedMetric(parsed.historyClass);
             }
-            enqueueVaultWriteIfApplicable(parsed);
             msg.ack();
         } catch (Exception transientFailure) {
             // SYS_PROJECTION_WRITE_FAILED
@@ -119,31 +121,6 @@ public class HistoryProjectionConsumer {
     private void routeToDlqThenAck(Message msg, DlqReason reason) {
         dlqConsumer.routeToDlq(msg, reason);
         msg.ack(); // custody-transfer complete once handed to DLQ (IR-4)
-    }
-
-    /** BA-Q5: async, best-effort — never blocks ack, never re-throws into the caller. */
-    private void enqueueVaultWriteIfApplicable(ParsedEnvelope parsed) {
-        if (vaultClient == null || !HistoryClassNames.OP_LOG.equals(parsed.historyClass)) {
-            return;
-        }
-        Object token = parsed.fields.get("pseudonymToken");
-        if (!(token instanceof String pseudonymToken) || pseudonymToken.isBlank()) {
-            return;
-        }
-        Object versionObj = parsed.fields.get("tenantKeyVersion");
-        int tenantKeyVersion = versionObj instanceof Number n ? n.intValue() : 1;
-        vaultWriteExecutor.submit(() -> {
-            try {
-                // Real value is NOT available downstream (only the token is) -- persistMapping's
-                // realUserId argument is populated by the engine-side write path in a full
-                // deployment via a companion channel; this consumer only forwards what the wire
-                // envelope carries. See CODER-QUESTIONS in the phase-5 return report.
-                log.debug("Pseudonym token observed in projected OP_LOG row — vault sync deferred to engine-side write",
-                        kv("tenant_key_version", tenantKeyVersion));
-            } catch (Exception e) {
-                log.warn("Async vault write enqueue failed — non-blocking, ack already applied", e);
-            }
-        });
     }
 
     private ParsedEnvelope parseEnvelope(Message msg) {
@@ -231,10 +208,6 @@ public class HistoryProjectionConsumer {
         if (metrics != null) {
             metrics.historyProjectionStaleDiscardedCount(historyClass).increment();
         }
-    }
-
-    public void shutdown() {
-        vaultWriteExecutor.shutdown();
     }
 
     private record ParsedEnvelope(String engineId, String historyClass, String eventType, String eventId,

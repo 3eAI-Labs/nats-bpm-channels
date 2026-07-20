@@ -1,4 +1,4 @@
-package com.threeai.nats.history.vault;
+package com.threeai.nats.core.vault;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

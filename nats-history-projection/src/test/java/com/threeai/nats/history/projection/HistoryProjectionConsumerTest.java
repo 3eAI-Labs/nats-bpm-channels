@@ -95,7 +95,7 @@ class HistoryProjectionConsumerTest {
     }
 
     private HistoryProjectionConsumer newConsumer() {
-        return new HistoryProjectionConsumer(3, jetStream, projectionStore, dlqConsumer, null, null, 4);
+        return new HistoryProjectionConsumer(3, jetStream, projectionStore, dlqConsumer, null, 4);
     }
 
     private Message publishAndFetch(String subject, Headers headers, String jsonBody, String durable) throws Exception {

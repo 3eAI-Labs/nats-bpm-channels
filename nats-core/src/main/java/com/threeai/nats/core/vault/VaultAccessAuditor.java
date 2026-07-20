@@ -1,4 +1,4 @@
-package com.threeai.nats.history.vault;
+package com.threeai.nats.core.vault;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

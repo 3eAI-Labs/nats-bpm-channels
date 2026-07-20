@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 
 import javax.sql.DataSource;
 
+import com.threeai.nats.core.vault.PseudonymizationVaultClient;
 import com.threeai.nats.history.cutover.CutoverControlPlane;
 import com.threeai.nats.history.cutover.CutoverRollback;
 import com.threeai.nats.history.cutover.ReconciliationJob;
@@ -21,7 +22,6 @@ import com.threeai.nats.history.query.HistoryQueryController;
 import com.threeai.nats.history.query.PiiMaskingService;
 import com.threeai.nats.history.query.QueryContext;
 import com.threeai.nats.history.query.QueryOperation;
-import com.threeai.nats.history.vault.PseudonymizationVaultClient;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.junit.jupiter.api.Test;

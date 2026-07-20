@@ -1,4 +1,4 @@
-package com.threeai.nats.history.vault;
+package com.threeai.nats.core.vault;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
