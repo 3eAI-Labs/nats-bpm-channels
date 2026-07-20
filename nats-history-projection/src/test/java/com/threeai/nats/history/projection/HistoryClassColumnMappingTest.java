@@ -62,4 +62,48 @@ class HistoryClassColumnMappingTest {
         assertThat(HistoryClassColumnMapping.camelToSnake("state")).isEqualTo("state");
         assertThat(HistoryClassColumnMapping.camelToSnake("processDefinitionKey")).isEqualTo("process_definition_key");
     }
+
+    // --- [BLOCKING] SQL-injection allowlist regression tests (security review, commit 03439e1) ---
+
+    @Test
+    void columnFor_sqlInjectionAttempt_viaFieldKey_rejected() {
+        // A malicious/unexpected wire-payload field key must NEVER resolve to a usable column --
+        // camelToSnake() alone would pass punctuation through verbatim into a dynamic column list.
+        assertThatThrownBy(() -> HistoryClassColumnMapping.columnFor(HistoryClassNames.PROCINST,
+                "x = 1; DROP TABLE process_instance_history; --"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> HistoryClassColumnMapping.columnFor(HistoryClassNames.PROCINST,
+                "state) VALUES ('x'); DROP TABLE process_instance_history; --"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> HistoryClassColumnMapping.columnFor(HistoryClassNames.PROCINST, "1=1 OR '1'='1"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void columnFor_unknownButSyntacticallySafeFieldKey_stillRejected_notOnAllowlist() {
+        // A syntactically clean camelCase key with NO corresponding real column must also be
+        // rejected -- the allowlist is authoritative, not just the identifier-shape regex.
+        assertThatThrownBy(() -> HistoryClassColumnMapping.columnFor(HistoryClassNames.PROCINST, "notARealField"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void columnFor_everyKnownEngineExtractedField_isOnItsClassAllowlist() {
+        // Regression guard: every field key the engine-side HistoryEventFieldExtractor actually
+        // emits (04_interfaces/1_wire_contract_refs.md) must resolve successfully -- the allowlist
+        // fix must not silently break legitimate, currently-populated fields.
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.PROCINST, "processDefinitionKey"))
+                .isEqualTo("process_definition_key");
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.ACTINST, "taskAssignee"))
+                .isEqualTo("task_assignee");
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.INCIDENT, "incidentMessage"))
+                .isEqualTo("incident_message");
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.CASEINST, "businessKey"))
+                .isEqualTo("business_key");
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.EXT_TASK_LOG, "errorDetailsRef"))
+                .isEqualTo("error_details_ref");
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.DECINST, "decisionDefinitionId"))
+                .isEqualTo("decision_definition_id");
+        assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.BATCH, "batchId")).isEqualTo("batch_id");
+    }
 }

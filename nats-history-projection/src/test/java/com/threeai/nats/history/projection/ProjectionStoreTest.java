@@ -103,6 +103,35 @@ class ProjectionStoreTest {
     }
 
     @Test
+    void upsertEntity_maliciousFieldKey_sqlInjectionAttempt_columnDroppedRowStillInsertedSafely() {
+        // [BLOCKING] security-review regression (commit 03439e1 follow-up): a wire-payload field
+        // key shaped like a SQL-injection payload must be silently dropped (not interpolated into
+        // the dynamic column list) -- the row is still written using only the legitimate fields.
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("businessKey", "biz-safe");
+        fields.put("state) VALUES ('x'); DROP TABLE process_instance_history; --", "ACTIVE");
+        EntityHistoryRecord record = new EntityHistoryRecord("camunda", "proc-injection", "proc-injection",
+                1, Instant.now(), fields);
+
+        UpsertOutcome outcome = store.upsertEntity(HistoryClassNames.PROCINST, record);
+
+        assertThat(outcome).isEqualTo(UpsertOutcome.APPLIED);
+        assertThat(countRows("process_instance_history", "proc-injection")).isEqualTo(1); // table still exists, exactly 1 row
+        // The legitimate field was still written; the malicious "column" was dropped, not applied.
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement stmt = c.prepareStatement(
+                     "SELECT business_key FROM process_instance_history WHERE process_instance_id = ?")) {
+            stmt.setString(1, "proc-injection");
+            try (ResultSet rs = stmt.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isEqualTo("biz-safe");
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
     void upsertEntity_actinstClass_mapsToCorrectTable() {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("activityId", "task1");
