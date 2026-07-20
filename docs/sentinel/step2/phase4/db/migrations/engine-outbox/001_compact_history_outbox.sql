@@ -33,7 +33,15 @@ CREATE TABLE compact_history_outbox (
     -- case (typically EXT_TASK_LOG.errorDetails stack traces).
     payload_scalar      JSONB        NOT NULL,
     payload_large_ref   UUID,
-    event_time          TIMESTAMPTZ  NOT NULL,           -- source HistoryEvent timestamp (display only, ADR-0012)
+    -- FINDING-001 (faz-5 review, 2026-07-20)/NEW-002 (2026-07-21): the engine's authoritative
+    -- HistoryEvent timestamp, relayed to NATS verbatim (never recomputed at relay time) and
+    -- written by HistoryProjectionConsumer into the projection DB, where -- for append-log
+    -- classes (OP_LOG/EXT_TASK_LOG/etc, V2__append_log_tables.sql) -- it becomes LOAD-BEARING:
+    -- a dedup unique-key component AND the range-partition anchor. For entity-lifecycle classes
+    -- (V1 merge-upsert tables) stream_sequence remains the sole tie-break authority, not
+    -- event_time (ADR-0012 unchanged there). NOT "display only" here -- do not recompute this
+    -- value or treat it as freely mutable in transit.
+    event_time          TIMESTAMPTZ  NOT NULL,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
     CONSTRAINT unq_compact_history_outbox_event UNIQUE (history_event_id, event_type)
 );
