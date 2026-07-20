@@ -1,6 +1,7 @@
 package com.threeai.nats.cadenzaflow.history;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -32,8 +33,17 @@ final class HistoryWireMessageFactory {
     private HistoryWireMessageFactory() {
     }
 
+    /**
+     * @param eventTime the ENGINE's real history-event timestamp (FINDING-001, faz-5 review,
+     *                  Levent kararı 2026-07-20) — carried on the wire as {@link
+     *                  HistoryHeaders#EVENT_TIME} (epoch-millis), NEVER the publish/consume-time
+     *                  clock. Required (non-null) — every concrete {@code HistoryEvent} this
+     *                  basamak classifies resolves one via {@code HistoryEventFieldExtractor
+     *                  .eventTimeOf}.
+     */
     static NatsMessage build(String engineId, String historyClass, String historyEventId, String eventType,
-            String processInstanceId, String businessKey, Map<String, Object> fields, byte[] largePayloadOrNull) {
+            String processInstanceId, String businessKey, Map<String, Object> fields, byte[] largePayloadOrNull,
+            Instant eventTime) {
         String subject = "history." + engineId + "." + historyClass + "." + processInstanceId;
         String dedupId = historyEventId + ":" + eventType;
 
@@ -44,6 +54,7 @@ final class HistoryWireMessageFactory {
         headers.add(HistoryHeaders.EVENT_TYPE, eventType);
         headers.add(HistoryHeaders.EVENT_ID, historyEventId);
         headers.add(HistoryHeaders.PROCESS_INSTANCE_ID, processInstanceId);
+        headers.add(HistoryHeaders.EVENT_TIME, String.valueOf(eventTime.toEpochMilli()));
         if (businessKey != null && !businessKey.isBlank()) {
             headers.add(BpmHeaders.BUSINESS_KEY, businessKey);
         }

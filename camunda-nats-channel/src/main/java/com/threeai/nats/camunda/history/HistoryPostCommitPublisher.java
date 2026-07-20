@@ -38,9 +38,11 @@ public class HistoryPostCommitPublisher {
             Map<String, Object> fields = HistoryEventFieldExtractor.extractFields(historyEvent);
             String businessKey = HistoryEventFieldExtractor.businessKeyOf(historyEvent);
             byte[] largePayload = HistoryEventFieldExtractor.extractLargePayload(historyEvent, historyClass).orElse(null);
+            java.time.Instant eventTime = HistoryEventFieldExtractor.eventTimeOf(historyEvent);
 
             NatsMessage msg = HistoryWireMessageFactory.build(engineId, historyClass, historyEvent.getId(),
-                    historyEvent.getEventType(), historyEvent.getProcessInstanceId(), businessKey, fields, largePayload);
+                    historyEvent.getEventType(), historyEvent.getProcessInstanceId(), businessKey, fields,
+                    largePayload, eventTime);
             jetStream.publish(msg); // Nats-Msg-Id dedup, same subject/dedup schema as the relay path (NFR-M3)
 
             if (metrics != null) {

@@ -3,6 +3,7 @@ package com.threeai.nats.camunda.history;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -14,13 +15,15 @@ import org.junit.jupiter.api.Test;
 
 class HistoryWireMessageFactoryTest {
 
+    private static final Instant EVENT_TIME = Instant.parse("2026-07-20T10:15:30Z");
+
     @Test
     void build_setsSubjectHeadersAndDedupId() {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("userId", "u1");
 
         NatsMessage msg = HistoryWireMessageFactory.build("camunda", "OP_LOG", "hist-evt-1", "create",
-                "proc-1", "biz-1", fields, null);
+                "proc-1", "biz-1", fields, null, EVENT_TIME);
 
         assertThat(msg.getSubject()).isEqualTo("history.camunda.OP_LOG.proc-1");
         assertThat(msg.getHeaders().getFirst(NatsJetStreamConstants.MSG_ID_HDR)).isEqualTo("hist-evt-1:create");
@@ -29,6 +32,7 @@ class HistoryWireMessageFactoryTest {
         assertThat(msg.getHeaders().getFirst(HistoryHeaders.EVENT_TYPE)).isEqualTo("create");
         assertThat(msg.getHeaders().getFirst(HistoryHeaders.EVENT_ID)).isEqualTo("hist-evt-1");
         assertThat(msg.getHeaders().getFirst(HistoryHeaders.PROCESS_INSTANCE_ID)).isEqualTo("proc-1");
+        assertThat(msg.getHeaders().getFirst(HistoryHeaders.EVENT_TIME)).isEqualTo(String.valueOf(EVENT_TIME.toEpochMilli()));
         assertThat(msg.getHeaders().getFirst(BpmHeaders.BUSINESS_KEY)).isEqualTo("biz-1");
         assertThat(new String(msg.getData(), StandardCharsets.UTF_8)).contains("\"userId\":\"u1\"");
     }
@@ -36,7 +40,7 @@ class HistoryWireMessageFactoryTest {
     @Test
     void build_blankBusinessKey_headerOmitted() {
         NatsMessage msg = HistoryWireMessageFactory.build("camunda", "ACTINST", "hist-evt-2", "start",
-                "proc-2", null, Map.of(), null);
+                "proc-2", null, Map.of(), null, EVENT_TIME);
 
         assertThat(msg.getHeaders().getFirst(BpmHeaders.BUSINESS_KEY)).isNull();
     }

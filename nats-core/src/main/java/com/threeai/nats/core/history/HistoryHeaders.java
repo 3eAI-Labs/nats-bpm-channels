@@ -25,6 +25,15 @@ public final class HistoryHeaders {
     /** Process-instance id (PSEUDONYMOUS; partition/sıra anahtarı). Required. */
     public static final String PROCESS_INSTANCE_ID = "X-Cadenzaflow-History-Process-Instance-Id";
 
+    /**
+     * Motorun GERÇEK history-event zaman damgası (INTERNAL; NOT ingest/consume zamanı) —
+     * epoch-millis, UTC, string-encoded uzun tamsayı. Required (FINDING-001, faz-5 review,
+     * Levent kararı 2026-07-20): append-log dedup unique-key bileşeni, range-partition ANCHOR'ı
+     * (PARTITION BY RANGE(event_time)) ve PK bileşeni olan projeksiyon {@code event_time}
+     * kolonunu doldurur — consumer'ın kendi saatiyle DOLDURULMAZ.
+     */
+    public static final String EVENT_TIME = "X-Cadenzaflow-History-Event-Time";
+
     private HistoryHeaders() {
     }
 }

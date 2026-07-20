@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -62,6 +63,13 @@ class HistoryProjectionConsumerTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V1__entity_lifecycle_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
+        // FINDING-001 (faz-5 review): a dated partition (rather than relying on the catch-all
+        // _default) so the redelivery test below can prove the row's PARTITION ANCHOR is driven
+        // by the engine's real event_time header, not the consumer's ingest-time clock.
+        try (Connection c = dataSource.getConnection(); java.sql.Statement stmt = c.createStatement()) {
+            stmt.execute("CREATE TABLE operation_log_history_2020_01 PARTITION OF operation_log_history "
+                    + "FOR VALUES FROM ('2020-01-01') TO ('2020-02-01')");
+        }
         projectionStore = new ProjectionStore(dataSource);
 
         natsContainer = new GenericContainer<>("nats:2.10-alpine").withCommand("--jetstream").withExposedPorts(4222);
@@ -114,6 +122,11 @@ class HistoryProjectionConsumerTest {
 
     private Headers historyHeaders(String engineId, String historyClass, String eventType, String eventId,
             String processInstanceId, String businessKey) {
+        return historyHeaders(engineId, historyClass, eventType, eventId, processInstanceId, businessKey, Instant.now());
+    }
+
+    private Headers historyHeaders(String engineId, String historyClass, String eventType, String eventId,
+            String processInstanceId, String businessKey, Instant eventTime) {
         Headers headers = new Headers();
         headers.add(NatsJetStreamConstants.MSG_ID_HDR, eventId + ":" + eventType);
         headers.add(HistoryHeaders.ENGINE_ID, engineId);
@@ -121,6 +134,7 @@ class HistoryProjectionConsumerTest {
         headers.add(HistoryHeaders.EVENT_TYPE, eventType);
         headers.add(HistoryHeaders.EVENT_ID, eventId);
         headers.add(HistoryHeaders.PROCESS_INSTANCE_ID, processInstanceId);
+        headers.add(HistoryHeaders.EVENT_TIME, String.valueOf(eventTime.toEpochMilli()));
         if (businessKey != null) {
             headers.add(BpmHeaders.BUSINESS_KEY, businessKey);
         }
@@ -153,6 +167,38 @@ class HistoryProjectionConsumerTest {
         newConsumer().onMessage(msg);
 
         assertThat(countOpLogRows(eventId)).isEqualTo(1);
+    }
+
+    /**
+     * FINDING-001 (faz-5 review, Levent kararı 2026-07-20): redelivery e2e on an audit-critical
+     * append-log class (OP_LOG). Before this fix, {@code event_time} was {@code Instant.now()} at
+     * CONSUME time — two deliveries of the SAME message would carry two DIFFERENT {@code
+     * event_time} values, so the append-only dedup unique key ({@code engine_id,
+     * history_event_id, event_type, event_time}) would NOT match and the ON CONFLICT would MISS,
+     * producing a duplicate audit row. This test proves: (1) two deliveries of the identical
+     * message -> exactly ONE row (dedup held), (2) the row's {@code event_time} equals the
+     * ENGINE's real event time (a fixed historic instant carried on the wire header), never the
+     * consume-time clock, and (3) that value correctly anchors the row into the matching
+     * range-partition (not the {@code _default} catch-all).
+     */
+    @Test
+    void onMessage_redeliveredOpLogEvent_dedupsToSingleRow_eventTimeIsEngineTimeAndCorrectPartition() throws Exception {
+        Instant engineEventTime = Instant.parse("2020-01-15T10:00:00Z"); // matches operation_log_history_2020_01
+        String eventId = UUID.randomUUID().toString();
+        String processInstanceId = "proc-" + UUID.randomUUID();
+        Headers headers = historyHeaders("camunda", HistoryClassNames.OP_LOG, "create", eventId, processInstanceId,
+                null, engineEventTime);
+        Message msg = publishAndFetch("history.camunda.OP_LOG." + processInstanceId, headers,
+                "{\"operationType\":\"Complete\",\"userId\":\"user-1\"}", "consumer-redelivery-" + UUID.randomUUID());
+
+        HistoryProjectionConsumer consumer = newConsumer();
+        consumer.onMessage(msg); // 1st delivery attempt
+        consumer.onMessage(msg); // 2nd delivery attempt (redelivery simulation, SAME underlying message)
+
+        assertThat(countOpLogRows(eventId)).isEqualTo(1); // ON CONFLICT held -- no duplicate audit row
+        assertThat(eventTimeOfOpLogRow(eventId)).isEqualTo(engineEventTime);
+        assertThat(countOpLogRowsInPartition("operation_log_history_2020_01", eventId)).isEqualTo(1);
+        assertThat(countOpLogRowsInPartition("operation_log_history_default", eventId)).isZero();
     }
 
     @Test
@@ -196,6 +242,35 @@ class HistoryProjectionConsumerTest {
         try (Connection c = dataSource.getConnection();
              PreparedStatement stmt = c.prepareStatement(
                      "SELECT count(*) FROM operation_log_history WHERE history_event_id = ?")) {
+            stmt.setString(1, eventId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Instant eventTimeOfOpLogRow(String eventId) {
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement stmt = c.prepareStatement(
+                     "SELECT event_time FROM operation_log_history WHERE history_event_id = ?")) {
+            stmt.setString(1, eventId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return rs.getTimestamp(1).toInstant();
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Queries the NAMED partition table directly (not the parent) to prove partition-anchor placement. */
+    private long countOpLogRowsInPartition(String partitionTableName, String eventId) {
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement stmt = c.prepareStatement(
+                     "SELECT count(*) FROM " + partitionTableName + " WHERE history_event_id = ?")) {
             stmt.setString(1, eventId);
             try (ResultSet rs = stmt.executeQuery()) {
                 rs.next();

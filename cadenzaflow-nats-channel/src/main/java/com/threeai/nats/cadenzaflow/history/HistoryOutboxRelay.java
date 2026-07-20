@@ -201,6 +201,11 @@ public class HistoryOutboxRelay {
         headers.add(com.threeai.nats.core.history.HistoryHeaders.EVENT_TYPE, row.eventType());
         headers.add(com.threeai.nats.core.history.HistoryHeaders.EVENT_ID, row.historyEventId());
         headers.add(com.threeai.nats.core.history.HistoryHeaders.PROCESS_INSTANCE_ID, row.processInstanceId());
+        // FINDING-001 (faz-5 review, Levent kararı 2026-07-20): the outbox row's OWN event_time
+        // column is already the engine's real event timestamp (CompactHistoryOutboxWriter ->
+        // HistoryEventFieldExtractor.eventTimeOf, set at tx-write time) -- relayed verbatim, not
+        // recomputed at relay/publish time.
+        headers.add(com.threeai.nats.core.history.HistoryHeaders.EVENT_TIME, String.valueOf(row.eventTime().toEpochMilli()));
         if (row.businessKey() != null && !row.businessKey().isBlank()) {
             headers.add(com.threeai.nats.core.headers.BpmHeaders.BUSINESS_KEY, row.businessKey());
         }

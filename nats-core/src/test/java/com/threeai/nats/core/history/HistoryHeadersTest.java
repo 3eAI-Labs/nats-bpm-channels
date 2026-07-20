@@ -13,5 +13,6 @@ class HistoryHeadersTest {
         assertThat(HistoryHeaders.EVENT_TYPE).isEqualTo("X-Cadenzaflow-History-Event-Type");
         assertThat(HistoryHeaders.EVENT_ID).isEqualTo("X-Cadenzaflow-History-Event-Id");
         assertThat(HistoryHeaders.PROCESS_INSTANCE_ID).isEqualTo("X-Cadenzaflow-History-Process-Instance-Id");
+        assertThat(HistoryHeaders.EVENT_TIME).isEqualTo("X-Cadenzaflow-History-Event-Time");
     }
 }

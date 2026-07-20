@@ -132,6 +132,7 @@ public class HistoryProjectionConsumer {
         String eventType = requireHeader(msg, HistoryHeaders.EVENT_TYPE);
         String eventId = requireHeader(msg, HistoryHeaders.EVENT_ID);
         String processInstanceId = requireHeader(msg, HistoryHeaders.PROCESS_INSTANCE_ID);
+        java.time.Instant eventTime = requireEventTimeHeader(msg);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> fields = new LinkedHashMap<>((Map<String, Object>) parseBody(msg));
@@ -141,10 +142,27 @@ public class HistoryProjectionConsumer {
         }
 
         long streamSequence = streamSequenceOf(msg);
-        java.time.Instant eventTime = java.time.Instant.now(); // display-only field; wire payload carries no separate timestamp key
 
         return new ParsedEnvelope(engineId, historyClass, eventType, eventId, processInstanceId,
                 streamSequence, eventTime, fields);
+    }
+
+    /**
+     * FINDING-001 (faz-5 review, Levent kararı 2026-07-20): {@code event_time} is a range-partition
+     * ANCHOR and an append-log dedup unique-key component — it MUST be the engine's real event
+     * timestamp, never this consumer's own clock. A missing/malformed {@link
+     * HistoryHeaders#EVENT_TIME} header is therefore a WIRE-CONTRACT VIOLATION (the header is
+     * {@code required} in {@code asyncapi.yaml} as of this fix), routed to DLQ exactly like any
+     * other missing required header — NEVER silently defaulted to {@code Instant.now()}.
+     */
+    private java.time.Instant requireEventTimeHeader(Message msg) {
+        String raw = requireHeader(msg, HistoryHeaders.EVENT_TIME);
+        try {
+            return java.time.Instant.ofEpochMilli(Long.parseLong(raw));
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException(
+                    "Malformed " + HistoryHeaders.EVENT_TIME + " header (expected epoch-millis): " + raw, e);
+        }
     }
 
     private void applyLargePayload(String historyClass, Map<String, Object> fields, byte[] payload) {
