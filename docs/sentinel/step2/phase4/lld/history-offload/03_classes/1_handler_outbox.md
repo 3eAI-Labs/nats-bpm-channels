@@ -15,7 +15,9 @@ package com.threeai.nats.camunda.history;
  *  enableDefaultDbHistoryEventHandler is ALWAYS set to false at bootstrap (this class owns its own
  *  internal DbHistoryEventHandler delegate -- see §1.4 fork-evidence rationale, 01_overview.md
  *  "Hot-reconfigure" closure). */
-public class NatsHistoryEventHandler implements org.cadenzaflow.bpm.engine.impl.history.handler.HistoryEventHandler {
+public class NatsHistoryEventHandler implements org.camunda.bpm.engine.impl.history.handler.HistoryEventHandler {
+// (camunda-nats-channel modülü org.camunda.* hedefler — mevcut modül desenine uygun [phase4-review F-001];
+//  cadenzaflow-nats-channel byte-aynası org.cadenzaflow.* FQN'ini kullanır, ADR-0007)
 
     public NatsHistoryEventHandler(
             ClassCutoverStateRegistry cutoverRegistry,          // §1.4 -- per-class DB-write routing
@@ -47,7 +49,7 @@ public class NatsHistoryEventHandler implements org.cadenzaflow.bpm.engine.impl.
 
 ### 1.4 Neden `internalDbDelegate` bizim tarafımızdan tutuluyor (fork'un `CompositeDbHistoryEventHandler`'ı DEĞİL) — fork-kanıtlı gerekçe
 
-`01_overview.md` "Phase3'ün devrettiği doğrulamalar #1" bu kararın TAM kanıt zincirini taşır (`ProcessEngineConfigurationImpl.java:1134-1141,2788-2796`, `CompositeDbHistoryEventHandler.java:70-72`, `DbHistoryEventHandler.java:39`, `HistoryEventProcessor.java:74-75`). Özet: fork'un `enableDefaultDbHistoryEventHandler` bayrağı motor-genel + tek-seferlik-boot'tur, sınıf-başına DEĞİLDİR — bu yüzden per-class cutover (BR-CUT-002) yalnız BİZİM composite'imizin İÇİNDE gerçekleşebilir. `DbHistoryEventHandler`'ın public no-arg constructor'ı (`DbHistoryEventHandler.java:39`) bunu mümkün kılar.
+`01_overview.md` "Phase3'ün devrettiği doğrulamalar #1" bu kararın TAM kanıt zincirini taşır (`ProcessEngineConfigurationImpl.java:1134-1141,2788-2796`, `CompositeDbHistoryEventHandler.java:70-72`, `DbHistoryEventHandler.java:40`, `HistoryEventProcessor.java:74-75`). Özet: fork'un `enableDefaultDbHistoryEventHandler` bayrağı motor-genel + tek-seferlik-boot'tur, sınıf-başına DEĞİLDİR — bu yüzden per-class cutover (BR-CUT-002) yalnız BİZİM composite'imizin İÇİNDE gerçekleşebilir. `DbHistoryEventHandler`'ın implicit public no-arg constructor'ı (sınıf bildirimi `DbHistoryEventHandler.java:40`; açık ctor yok) bunu mümkün kılar.
 
 **Bağımlılık:** BR-HDL-001/002/005/007, FR-A1/A2/A3/A6, US-A1/A2/A5, ADR-0009. `ClassCutoverStateRegistry`: `03_classes/4_cutover_reconciliation.md` §2.2, `08_config.md` §2.
 

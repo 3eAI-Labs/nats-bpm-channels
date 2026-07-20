@@ -1,8 +1,8 @@
 # LLD Manifest — history-offload (Basamak-2)
 
 **Owning modules:** `nats-core`, `camunda-nats-channel`, `cadenzaflow-nats-channel`, `nats-bpm-bench` (basamak-1 modülleri, genişler), **`nats-history-projection`** (yeni modül).
-**Last touched:** 2026-07-20 (LLD-Q1…5 karar kaydı işlendi)
-**Durum:** LLD-Q1…5 KARARA BAĞLANDI (2026-07-20, 5/5 önerilen — `01_overview.md` karar kaydı) — phase-review bekliyor.
+**Last touched:** 2026-07-20 (phase4-review F-001…004 kapanışı: handler FQN, bileşen 22, fork atıf düzeltmeleri)
+**Durum:** Faz-4 kapısı GEÇİLDİ (2026-07-20) — LLD-Q1…5 karara bağlı; phase-review koşullu-onay bulguları kapalı (`../../PHASE4_REVIEW.md`); phase5 (implementasyon) girdisi HAZIR.
 **Sentinel fazı:** Phase 4 — Developer (LLD). Girdi: `docs/sentinel/step2/phase3/` (HLD, API_CONTRACTS, INTEGRATION_MAP, DATA_OWNERSHIP.yaml, 11 ADR — hepsi Kabul).
 
 ---

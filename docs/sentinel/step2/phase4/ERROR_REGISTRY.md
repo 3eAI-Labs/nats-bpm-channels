@@ -158,7 +158,7 @@ Diğer 39 kod için ayrı exception sınıfı YOK — her biri ilgili sınıfın
 | `AUTH_` | 2 | 16,41 |
 | **Toplam** | **42** | 7+15+4+14+2=42 ✓ |
 
-**Bulgu (kaynak-belge tutarlılık notu, DEĞİŞTİRİLMEDİ — yalnız kaydedildi):** `EXCEPTION_CODES.md §12`'nin kendi kategori-özeti tablosu `RES_ = 3` yazar (7+15+3+14+2=41) — bu, `RES_HISTORY_INSTANCE_NOT_FOUND`'ın phase3-review F-001 ile **eklendiği** (`EXCEPTION_CODES.md §12` alt notu: "RES_HISTORY_INSTANCE_NOT_FOUND phase3-review F-001 ile eklendi") ama kategori-özeti tablosunun bu eklemeyi yansıtacak şekilde güncellenmediği bir **1-birimlik drift**tir (toplam "42" doğru, kategori kırılımı bir eksik). Bu belge (`ERROR_REGİSTRY.md`), phase2'nin kilitli deliverable'ını **DEĞİŞTİRMEDEN**, doğru kırılımı (RES_=4) yukarıdaki tabloda taşır — phase-review'a not: bu bir basamak-2 LLD hatası DEĞİL, phase2 kaynağının kendi iç-tutarlılık notudur (kozmetik, `§13` izlenebilirlik tablosu ve toplam "42" zaten doğru).
+**Not (ÇÖZÜLDÜ 2026-07-20):** `EXCEPTION_CODES.md §12` kategori-özeti tablosundaki `RES_ = 3` drift'i (bu registry'nin ilk yazımında tespit edilmişti) kaynağında düzeltildi — `EXCEPTION_CODES.md §12` artık `RES_ = 4` taşır; iki belge kırılımda da hemfikir (phase4-review F-003 kapanışı).
 
 **3 CRITICAL kod:** `SYS_RETENTION_AUDIT_LOG_WRITE_FAILED`, `RES_ERASURE_VERIFICATION_FAILED`, `AUTH_PSEUDONYM_VAULT_ACCESS_DENIED` — basamak-1 `SYS_SENTINEL_WORKER_CONFLICT` ciddiyet sınıfıyla eşdeğer, hepsi `10_metrics.md`'de `for: 0m` (anında sayfalama) alarmıyla eşleşir.
 
