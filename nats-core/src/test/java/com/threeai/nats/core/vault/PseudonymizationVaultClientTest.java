@@ -100,6 +100,49 @@ class PseudonymizationVaultClientTest {
         assertThat(result).isEmpty();
     }
 
+    /**
+     * Phase 5.5 (QA) — kasa (vault) unreachable/error paths ({@code
+     * SYS_PSEUDONYM_VAULT_UNAVAILABLE}) had zero test coverage before this: {@code persistMapping}
+     * never blocks/fails the audit-critical caller (ADR-0016 "kasa erişilemezse AUDIT akışı
+     * ENGELLENMEZ"), but it must still surface the failure to ITS OWN caller as documented.
+     */
+    @Test
+    void persistMapping_vaultUnreachable_throwsIllegalStateException() {
+        PseudonymizationVaultClient unreachable = new PseudonymizationVaultClient(
+                unreachableDataSource(), auditor, "test-column-key");
+
+        assertThatThrownBy(() -> unreachable.persistMapping("tok-x", "camunda", "user-1", 1, "OP_LOG"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_PSEUDONYM_VAULT_UNAVAILABLE");
+    }
+
+    @Test
+    void deleteMapping_vaultUnreachable_throwsIllegalStateException() {
+        PseudonymizationVaultClient unreachable = new PseudonymizationVaultClient(
+                unreachableDataSource(), auditor, "test-column-key");
+
+        assertThatThrownBy(() -> unreachable.deleteMapping("tok-x", "erasure-pipeline"))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void reidentify_vaultUnreachable_authorized_throwsIllegalStateException() {
+        PseudonymizationVaultClient unreachable = new PseudonymizationVaultClient(
+                unreachableDataSource(), auditor, "test-column-key");
+
+        // authorized=true -- past the AUTH_PSEUDONYM_VAULT_ACCESS_DENIED gate, into the SQL path.
+        assertThatThrownBy(() -> unreachable.reidentify("tok-x", "compliance-officer-1", "KVKK request", true))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    private PGSimpleDataSource unreachableDataSource() {
+        PGSimpleDataSource broken = new PGSimpleDataSource();
+        broken.setUrl("jdbc:postgresql://127.0.0.1:1/nonexistent"); // port 1 -- connection refused, fast/deterministic
+        broken.setUser("nobody");
+        broken.setPassword("nobody");
+        return broken;
+    }
+
     private long countMapRows(String token) {
         try (Connection c = dataSource.getConnection();
              PreparedStatement stmt = c.prepareStatement("SELECT count(*) FROM pseudonym_map WHERE pseudonym_token = ?")) {
