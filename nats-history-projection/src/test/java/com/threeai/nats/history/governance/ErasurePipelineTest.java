@@ -35,6 +35,7 @@ class ErasurePipelineTest {
     private static PGSimpleDataSource dataSource;
     private static ProjectionStore projectionStore;
     private static ErasurePipeline pipeline;
+    private static ErasureAuditLogger auditLogger;
 
     private static final HistoryQueryAuthzSpi ALLOW_ALL = new HistoryQueryAuthzSpi() {
         public boolean isAuthorized(QueryContext ctx, QueryOperation operation) {
@@ -59,7 +60,7 @@ class ErasurePipelineTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         projectionStore = new ProjectionStore(dataSource);
         ErasureScopeResolver scopeResolver = new ErasureScopeResolver(dataSource);
-        ErasureAuditLogger auditLogger = new ErasureAuditLogger(dataSource);
+        auditLogger = new ErasureAuditLogger(dataSource);
         HistoryQueryApi verificationQuery = new HistoryQueryApi(dataSource, new PiiMaskingService(), ALLOW_ALL);
         pipeline = new ErasurePipeline(dataSource, scopeResolver, auditLogger, verificationQuery);
     }
@@ -190,6 +191,86 @@ class ErasurePipelineTest {
         assertThat(taskDescriptionOf("task-1")).isNull();
         assertThat(commentMessageOf(processInstanceId)).isNull();
         assertThat(detailValueTextOf(processInstanceId)).isNull();
+    }
+
+    /**
+     * FINDING-002 (faz-5 review, MINOR): proves {@code verifyErasure} actually DETECTS a still-
+     * populated CQ-3 surface, one class at a time, not just ACTINST assignee. Seeds a row whose
+     * anonymization column is still populated (bypassing the normal anonymize step, simulating a
+     * regression), calls {@code verifyErasure} directly (test-seam, {@code protected}), and
+     * asserts {@code ErasureVerificationFailedException} fires + {@code erasure_audit_log}
+     * records a FAILED verification.
+     */
+    @Test
+    void verifyErasure_varinstValueStillPopulated_throwsAndRecordsFailure() throws Exception {
+        String processInstanceId = "proc-verify-varinst";
+        Map<String, Object> varinstFields = new LinkedHashMap<>();
+        varinstFields.put("variableName", "ssn");
+        varinstFields.put("variableValueText", "still-here-real-value"); // NOT anonymized -- regression simulation
+        projectionStore.upsertEntity(HistoryClassNames.VARINST,
+                new EntityHistoryRecord("camunda", "var-verify-1", processInstanceId, 1, Instant.now(), varinstFields));
+
+        java.util.UUID requestId = java.util.UUID.randomUUID();
+        auditLogger.record(requestId, "msisdn-verify-varinst", "variable_instance_history", "ANONYMIZE", 1, "test seed");
+        var scope = java.util.List.of(new ScopeResolution.CandidateInstance(processInstanceId, Instant.now(), Instant.now()));
+
+        assertThatThrownByVerification(requestId, scope, Set.of(HistoryClassNames.VARINST));
+        assertThat(verificationStatusOf(requestId)).isEqualTo("FAILED");
+    }
+
+    @Test
+    void verifyErasure_commentMessageStillPopulated_throwsAndRecordsFailure() throws Exception {
+        String processInstanceId = "proc-verify-comment";
+        Map<String, Object> commentFields = new LinkedHashMap<>();
+        commentFields.put("message", "still-here-real-message"); // NOT anonymized -- regression simulation
+        projectionStore.insertLogEvent(HistoryClassNames.COMMENT,
+                new LogHistoryRecord("camunda", processInstanceId, "evt-verify-comment", "COMMENT_CREATE", 1, Instant.now(), commentFields));
+
+        java.util.UUID requestId = java.util.UUID.randomUUID();
+        auditLogger.record(requestId, "msisdn-verify-comment", "comment_history", "ANONYMIZE", 1, "test seed");
+        var scope = java.util.List.of(new ScopeResolution.CandidateInstance(processInstanceId, Instant.now(), Instant.now()));
+
+        assertThatThrownByVerification(requestId, scope, Set.of(HistoryClassNames.COMMENT));
+        assertThat(verificationStatusOf(requestId)).isEqualTo("FAILED");
+    }
+
+    /** {@code bulkClasses} deliberately does NOT include VARINST here -- an un-anonymized VARINST
+     *  row for the SAME instance must NOT fail verification when VARINST was never targeted
+     *  (TASKINST is the in-scope class instead, with no rows at all for this instance -- an
+     *  in-scope class with nothing to find is the OTHER trivially-passing case this proves). */
+    @Test
+    void verifyErasure_columnOutOfRequestedScope_notChecked_passes() throws Exception {
+        String processInstanceId = "proc-verify-out-of-scope";
+        Map<String, Object> varinstFields = new LinkedHashMap<>();
+        varinstFields.put("variableValueText", "irrelevant-untouched-value");
+        projectionStore.upsertEntity(HistoryClassNames.VARINST,
+                new EntityHistoryRecord("camunda", "var-out-of-scope", processInstanceId, 1, Instant.now(), varinstFields));
+
+        java.util.UUID requestId = java.util.UUID.randomUUID();
+        auditLogger.record(requestId, "msisdn-out-of-scope", "task_instance_history", "ANONYMIZE", 0, "test seed");
+        var scope = java.util.List.of(new ScopeResolution.CandidateInstance(processInstanceId, Instant.now(), Instant.now()));
+
+        pipeline.verifyErasure(requestId, scope, Set.of(HistoryClassNames.TASKINST)); // does not throw
+        assertThat(verificationStatusOf(requestId)).isEqualTo("PASSED");
+    }
+
+    private void assertThatThrownByVerification(java.util.UUID requestId,
+            java.util.List<ScopeResolution.CandidateInstance> scope, Set<String> bulkClasses) {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> pipeline.verifyErasure(requestId, scope, bulkClasses))
+                .isInstanceOf(com.threeai.nats.core.history.exception.ErasureVerificationFailedException.class);
+    }
+
+    private String verificationStatusOf(java.util.UUID requestId) throws Exception {
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement stmt = c.prepareStatement(
+                     "SELECT verification_status FROM erasure_audit_log WHERE request_id = ? "
+                   + "ORDER BY performed_at DESC LIMIT 1")) {
+            stmt.setObject(1, requestId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                return rs.getString(1);
+            }
+        }
     }
 
     private void linkVarinstToLargePayload(String variableInstanceId, java.util.UUID payloadId) throws Exception {

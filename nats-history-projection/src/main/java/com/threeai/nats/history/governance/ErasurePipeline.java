@@ -4,6 +4,7 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
@@ -96,9 +97,9 @@ public class ErasurePipeline {
      * Soft-delete → anonymize on the resolved (confirmed) scope, per bulk class table
      * ({@code deleted_at}/{@code anonymized_at} columns, {@code DB_SCHEMA.md §2.6}). Writes
      * {@code erasure_audit_log}. On SQL failure → {@code SYS_ERASURE_PIPELINE_FAILED} (retry +
-     * alert). After completion, calls {@code verificationQuery} to confirm the subject's PII no
-     * longer surfaces via {@code HistoryQueryApi} — failure → {@code RES_ERASURE_VERIFICATION_FAILED}
-     * (CRITICAL, KVKK 30d SLA).
+     * alert). After completion, calls {@link #verifyErasure} to confirm every column actually
+     * anonymized for THIS request is genuinely clean (FINDING-002: not just ACTINST assignee) —
+     * failure → {@code RES_ERASURE_VERIFICATION_FAILED} (CRITICAL, KVKK 30d SLA).
      */
     protected void executeAnonymization(UUID requestId, List<CandidateInstance> confirmedScope,
             Set<String> bulkClasses, String subjectKey) {
@@ -118,7 +119,7 @@ public class ErasurePipeline {
                 throw new IllegalStateException("SYS_ERASURE_PIPELINE_FAILED: failed to anonymize " + table, e);
             }
         }
-        verifyErasure(requestId, confirmedScope);
+        verifyErasure(requestId, confirmedScope, bulkClasses);
     }
 
     /**
@@ -207,18 +208,99 @@ public class ErasurePipeline {
         return configured;
     }
 
-    private void verifyErasure(UUID requestId, List<CandidateInstance> confirmedScope) {
+    /**
+     * FINDING-002 (faz-5 review, MINOR): previously only re-checked {@code
+     * activity_instance_history.task_assignee} via {@link HistoryQueryApi} — the OTHER CQ-3
+     * primary surfaces (VARINST/DETAIL value, TASKINST name/description, COMMENT message) were
+     * anonymized but never re-verified, so {@code RES_ERASURE_VERIFICATION_FAILED} could not
+     * actually catch a regression in any of them. Two complementary checks per confirmed
+     * instance now run: (1) the EXISTING {@code HistoryQueryApi}-facing check for ACTINST
+     * assignee (proves the tenant-facing QUERY surface — not just the raw column — no longer
+     * leaks, when ACTINST was in scope), and (2) a NEW raw-column check, direct against the
+     * projection DB, for every {@code ANONYMIZATION_COLUMNS} entry of every class actually
+     * targeted by THIS request ({@code bulkClasses} — classes NOT in scope are correctly left
+     * unchecked, since their data was never anonymized and a real value there is not a
+     * regression). The raw-column check exists because {@code HistoryQueryApi} has no query
+     * surface at all for COMMENT or VARINST, and {@code listTaskHistory}'s {@code
+     * TaskInstanceHistory} openapi schema does not carry {@code description} — this basamak does
+     * not add columns to a locked contract merely to widen an internal verification check.
+     */
+    /** {@code protected} — same test-seam rationale as {@link #executeAnonymization}: lets
+     *  {@code ErasurePipelineTest} exercise the FAILURE path directly (seed a still-populated
+     *  column, bypassing the normal anonymize step) without needing a mid-pipeline injection hook. */
+    protected void verifyErasure(UUID requestId, List<CandidateInstance> confirmedScope, Set<String> bulkClasses) {
         QueryContext systemCtx = new QueryContext("system:erasure-pipeline", Set.of(), true);
         for (CandidateInstance instance : confirmedScope) {
-            var activities = verificationQuery.listActivityHistory(instance.processInstanceId(), new PageRequest(0, 1), systemCtx);
-            boolean stillVisible = activities.map(page -> !page.data().isEmpty()).orElse(false)
-                    && activities.get().data().stream().anyMatch(a -> a.assignee() != null && !a.assignee().equals(PiiMaskingService.MASK_PLACEHOLDER));
-            if (stillVisible) {
-                auditLogger.recordVerification(requestId, "FAILED", Instant.now());
-                throw new ErasureVerificationFailedException(
-                        "Erasure completed but PII still surfaces for instance " + instance.processInstanceId());
+            if (bulkClasses.contains(HistoryClassNames.ACTINST) && actinstAssigneeStillVisible(instance, systemCtx)) {
+                failVerification(requestId, instance, "activity_instance_history.task_assignee still visible via HistoryQueryApi");
+            }
+            for (String historyClass : bulkClasses) {
+                String populatedColumn = firstStillPopulatedColumn(historyClass, instance.processInstanceId());
+                if (populatedColumn != null) {
+                    failVerification(requestId, instance, historyClass + "." + populatedColumn + " still populated");
+                }
             }
         }
         auditLogger.recordVerification(requestId, "PASSED", Instant.now());
+    }
+
+    private boolean actinstAssigneeStillVisible(CandidateInstance instance, QueryContext systemCtx) {
+        var activities = verificationQuery.listActivityHistory(instance.processInstanceId(), new PageRequest(0, 1), systemCtx);
+        return activities.map(page -> !page.data().isEmpty()).orElse(false)
+                && activities.get().data().stream().anyMatch(a -> a.assignee() != null && !a.assignee().equals(PiiMaskingService.MASK_PLACEHOLDER));
+    }
+
+    /**
+     * @return the name of the first {@code ANONYMIZATION_COLUMNS} column (or, for VARINST, the
+     *         large-payload {@code variable_value_ref} FK) still non-NULL for this instance in
+     *         this class's table, or {@code null} if fully clean.
+     */
+    private String firstStillPopulatedColumn(String historyClass, String processInstanceId) {
+        List<String> columns = allowlistedAnonymizationColumns(historyClass);
+        List<String> checkedColumns = HistoryClassNames.VARINST.equals(historyClass)
+                ? concatWithVariableValueRef(columns)
+                : columns;
+        if (checkedColumns.isEmpty()) {
+            return null;
+        }
+        String table = ProjectionStore.tableNameFor(historyClass);
+        // No LIMIT: scoped to ONE instance via the SAME idx_*_process_instance index every other
+        // per-instance query in this module already relies on -- an artificial cap here would
+        // risk a false-negative PASS on a high-volume append-only class (e.g. DETAIL) if any row
+        // beyond the cap were still populated.
+        StringBuilder sql = new StringBuilder("SELECT ").append(String.join(", ", checkedColumns))
+                .append(" FROM ").append(table).append(" WHERE process_instance_id = ?");
+        try (Connection connection = projectionDataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(sql.toString())) {
+            stmt.setString(1, processInstanceId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    for (int i = 0; i < checkedColumns.size(); i++) {
+                        if (rs.getObject(i + 1) != null) {
+                            return checkedColumns.get(i);
+                        }
+                    }
+                }
+            }
+            return null;
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "Failed to verify erasure for " + historyClass + " / " + processInstanceId, e);
+        }
+    }
+
+    private List<String> concatWithVariableValueRef(List<String> columns) {
+        List<String> withRef = new java.util.ArrayList<>(columns);
+        withRef.add("variable_value_ref");
+        return withRef;
+    }
+
+    private void failVerification(UUID requestId, CandidateInstance instance, String reason) {
+        auditLogger.recordVerification(requestId, "FAILED", Instant.now());
+        log.error("Erasure verification failed", kv("request_id", requestId),
+                kv("process_instance_id", instance.processInstanceId()), kv("reason", reason));
+        throw new ErasureVerificationFailedException(
+                "Erasure completed but PII still surfaces for instance " + instance.processInstanceId()
+                        + " (" + reason + ")");
     }
 }
