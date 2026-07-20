@@ -19,6 +19,7 @@
         <module>camunda-nats-channel</module>
         <module>cadenzaflow-nats-channel</module>
         <module>nats-bpm-bench</module>
+        <module>nats-history-projection</module>
     </modules>
 
     <licenses>

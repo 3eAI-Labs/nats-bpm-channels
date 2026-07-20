@@ -21,7 +21,11 @@ public enum DlqReason {
      * not one of {@code SUCCESS|BPMN_ERROR|TRANSIENT}. {@code A2ReplyPayloadDecoder} reads this
      * field instead of the old errorCode-presence heuristic.
      */
-    INVALID_REPLY_TYPE("VAL_INVALID_REPLY_TYPE");
+    INVALID_REPLY_TYPE("VAL_INVALID_REPLY_TYPE"),
+    /** Basamak-2, `ERROR_REGISTRY.md` §3.3 row 12 — {@code HistoryProjectionConsumer} deliveryCount &gt; maxDeliver. */
+    HISTORY_DELIVERY_BUDGET_EXCEEDED("BUS_HISTORY_DELIVERY_BUDGET_EXCEEDED"),
+    /** Basamak-2, `ERROR_REGISTRY.md` §3.3 row 11 — envelope does not match the asyncapi contract. */
+    HISTORY_SCHEMA_DRIFT("SYS_PROJECTION_SCHEMA_DRIFT");
 
     private final String exceptionCode;
 
