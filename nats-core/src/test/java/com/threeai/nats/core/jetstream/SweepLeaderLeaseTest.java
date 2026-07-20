@@ -49,6 +49,23 @@ class SweepLeaderLeaseTest {
     }
 
     @Test
+    void basamak2Overload_usesCustomBucketAndKeyPrefix_notDefault() throws Exception {
+        // history-relay-leader reuse (08_config.md §3) -- separate bucket/key namespace from
+        // a2-sweep-leader, verifying the two lease families never collide.
+        when(connection.keyValue("history-relay-leader")).thenReturn(keyValue);
+        when(keyValue.create(eq("relay-leader.camunda"), any(byte[].class))).thenReturn(1L);
+
+        SweepLeaderLease historyRelayLease = new SweepLeaderLease(jetStream, kvManager, connection,
+                "history-relay-leader", "relay-leader.", "camunda", "pod-1", Duration.ofSeconds(60));
+
+        assertThat(historyRelayLease.getKey()).isEqualTo("relay-leader.camunda");
+        assertThat(historyRelayLease.tryAcquireOrRenew()).isTrue();
+        assertThat(historyRelayLease.isLeader()).isTrue();
+        // a2-sweep-leader's KV handle (stubbed in setUp) must NOT have been touched by this lease.
+        org.mockito.Mockito.verify(connection, org.mockito.Mockito.never()).keyValue("a2-sweep-leader");
+    }
+
+    @Test
     void tryAcquireOrRenew_keyDoesNotExist_createsAndBecomesLeader() throws Exception {
         when(keyValue.create(eq("sweep-leader.camunda"), any(byte[].class))).thenReturn(1L);
         SweepLeaderLease lease = newLease("camunda", "pod-1");

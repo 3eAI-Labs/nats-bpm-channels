@@ -111,4 +111,72 @@ class NatsChannelMetricsTest {
         ageSeconds.set(99);
         assertThat(gauge.value()).isEqualTo(99.0);
     }
+
+    @Test
+    void historyCounters_registeredAndIncrementCorrectly() {
+        Counter written = metrics.historyOutboxWrittenCount("OP_LOG", "camunda");
+        Counter relayed = metrics.historyOutboxRelayedCount("OP_LOG", "published");
+        Counter postCommit = metrics.historyPostCommitPublishedCount("ACTINST");
+        Counter consumed = metrics.historyProjectionConsumedCount("ACTINST", "3");
+        Counter staleDiscarded = metrics.historyProjectionStaleDiscardedCount("ACTINST");
+        Counter dlqRouted = metrics.historyDlqRoutedCount("ACTINST", "schema_drift");
+        Counter retentionDeleted = metrics.historyRetentionDeletedRowsCount("DETAIL", "drop");
+        Counter erasureProcessed = metrics.historyErasureProcessedCount("PROCINST", "anonymize");
+        Counter vaultAccess = metrics.historyVaultAccessCount("WRITE", true);
+
+        written.increment();
+        relayed.increment();
+        postCommit.increment();
+        consumed.increment();
+        staleDiscarded.increment();
+        dlqRouted.increment();
+        retentionDeleted.increment();
+        erasureProcessed.increment();
+        vaultAccess.increment();
+
+        assertThat(written.count()).isEqualTo(1.0);
+        assertThat(written.getId().getName()).isEqualTo("nats.history.outbox.written");
+        assertThat(written.getId().getTag("history_class")).isEqualTo("OP_LOG");
+        assertThat(written.getId().getTag("engine_id")).isEqualTo("camunda");
+        assertThat(relayed.getId().getName()).isEqualTo("nats.history.outbox.relayed");
+        assertThat(relayed.getId().getTag("outcome")).isEqualTo("published");
+        assertThat(postCommit.getId().getName()).isEqualTo("nats.history.postcommit.published");
+        assertThat(consumed.getId().getName()).isEqualTo("nats.history.projection.consumed");
+        assertThat(consumed.getId().getTag("partition")).isEqualTo("3");
+        assertThat(staleDiscarded.getId().getName()).isEqualTo("nats.history.projection.stale_discarded");
+        assertThat(dlqRouted.getId().getName()).isEqualTo("nats.history.dlq.routed");
+        assertThat(dlqRouted.getId().getTag("reason")).isEqualTo("schema_drift");
+        assertThat(retentionDeleted.getId().getName()).isEqualTo("nats.history.retention.deleted_rows");
+        assertThat(retentionDeleted.getId().getTag("action")).isEqualTo("drop");
+        assertThat(erasureProcessed.getId().getName()).isEqualTo("nats.history.erasure.processed");
+        assertThat(vaultAccess.getId().getName()).isEqualTo("nats.history.vault.access");
+        assertThat(vaultAccess.getId().getTag("operation")).isEqualTo("WRITE");
+        assertThat(vaultAccess.getId().getTag("granted")).isEqualTo("true");
+    }
+
+    @Test
+    void historyGauges_reflectSupplierValues() {
+        java.util.concurrent.atomic.AtomicLong oldestRowAge = new java.util.concurrent.atomic.AtomicLong(10);
+        java.util.concurrent.atomic.AtomicLong diffCount = new java.util.concurrent.atomic.AtomicLong(2);
+        java.util.concurrent.atomic.AtomicLong cleanStreak = new java.util.concurrent.atomic.AtomicLong(3);
+        java.util.concurrent.atomic.AtomicLong cutoverState = new java.util.concurrent.atomic.AtomicLong(0);
+        java.util.concurrent.atomic.AtomicLong lagSeconds = new java.util.concurrent.atomic.AtomicLong(5);
+
+        metrics.registerHistoryOutboxOldestRowAgeGauge("camunda", oldestRowAge::get);
+        metrics.registerHistoryReconciliationDiffCountGauge("OP_LOG", diffCount::get);
+        metrics.registerHistoryReconciliationCleanStreakGauge("OP_LOG", cleanStreak::get);
+        metrics.registerHistoryCutoverStateGauge("OP_LOG", cutoverState::get);
+        metrics.registerHistoryProjectionLagGauge("ACTINST", "3", lagSeconds::get);
+
+        assertThat(registry.find("nats.history.outbox.oldest_row_age_seconds").tag("engine_id", "camunda").gauge().value())
+                .isEqualTo(10.0);
+        assertThat(registry.find("nats.history.reconciliation.diff_count").tag("history_class", "OP_LOG").gauge().value())
+                .isEqualTo(2.0);
+        assertThat(registry.find("nats.history.reconciliation.clean_streak_days").tag("history_class", "OP_LOG").gauge().value())
+                .isEqualTo(3.0);
+        assertThat(registry.find("nats.history.cutover.state").tag("history_class", "OP_LOG").gauge().value())
+                .isEqualTo(0.0);
+        assertThat(registry.find("nats.history.projection.lag_seconds").tag("history_class", "ACTINST")
+                .tag("partition", "3").gauge().value()).isEqualTo(5.0);
+    }
 }
