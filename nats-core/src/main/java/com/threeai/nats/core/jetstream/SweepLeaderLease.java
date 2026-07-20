@@ -87,11 +87,12 @@ public class SweepLeaderLease {
         } catch (IOException connectionFailure) {
             log.warn("Sweep-leader lease unavailable — could not obtain KV handle",
                     kv("key", key), connectionFailure);
+            markNotLeader();
             return false;
         }
         try {
             long rev = kv.create(key, nodeId.getBytes(StandardCharsets.UTF_8));
-            this.heldRevision = rev;
+            markLeader(rev);
             return true;
         } catch (Exception createFailed) {
             return tryRenewExisting(kv);
@@ -104,18 +105,37 @@ public class SweepLeaderLease {
             entry = kv.get(key);
         } catch (Exception getFailed) {
             log.warn("Sweep-leader lease lookup failed", kv("key", key), getFailed);
+            markNotLeader();
             return false;
         }
         if (entry == null || !nodeId.equals(new String(entry.getValue(), StandardCharsets.UTF_8))) {
+            markNotLeader();
             return false;
         }
         try {
             long rev = kv.update(key, nodeId.getBytes(StandardCharsets.UTF_8), entry.getRevision());
-            this.heldRevision = rev;
+            markLeader(rev);
             return true;
         } catch (Exception renewRace) {
+            markNotLeader();
             return false;
         }
+    }
+
+    /** Records that this node holds the lease as of {@code revision}. */
+    private void markLeader(long revision) {
+        this.heldRevision = revision;
+    }
+
+    /**
+     * Records that this node does NOT hold the lease. Called on every acquire/renew failure path
+     * so that {@link #isLeader()} reflects current reality rather than a stale prior success —
+     * without this, a node that HELD the lease and then lost it on a later renew would keep
+     * reporting {@code isLeader() == true} forever, since {@code heldRevision} was only ever
+     * written on success.
+     */
+    private void markNotLeader() {
+        this.heldRevision = null;
     }
 
     public boolean isLeader() {
