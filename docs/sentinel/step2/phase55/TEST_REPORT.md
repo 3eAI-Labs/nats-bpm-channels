@@ -3,6 +3,8 @@
 **Sentinel fazı:** 5.5 — Tester (QA). **Branch:** `feature/step2-history-offload`. **Ortam:** JAVA_HOME=temurin-21, Docker OK (Testcontainers gerçek Postgres 16 + NATS 2.10-alpine).
 **Tarih:** 2026-07-21. **Girdi:** Phase 5 kapanışı (`PHASE5_REVIEW.md`, HAS-CONCERNS-NEEDING-ACK, 0 MAJOR/0 açık MINOR, sadece belgeli NIT'ler).
 
+**Revizyon (phase-review turu):** FINDING-001 sonucu +1 test (`RetentionEnforcementJobTest`, retention audit-log atomikliği) eklendi — sayılar aşağıda güncellendi.
+
 ---
 
 ## 1. Özet — test sayıları (modül-başına, gerçek koşum)
@@ -15,20 +17,21 @@ Her modül **ayrı `mvn test` koşusuyla** doğrulandı (tam reactor'ı tek `mvn
 | `camunda-nats-channel` | 148 | **151** | +3 (custody-transfer) | ✅ 151/151 |
 | `cadenzaflow-nats-channel` | 156 | **159** | +3 (custody-transfer, ayna) | ✅ 159/159 |
 | `flowable-nats-channel` | 59 | 59 | 0 | ✅ 59/59 |
-| `nats-history-projection` | 88 | **96** | +8 (DLQ-inspection ×6, cutover-apply-failed ×2) | ✅ 96/96 |
+| `nats-history-projection` | 88 | **97** | +9 (DLQ-inspection ×6, cutover-apply-failed ×2, retention-audit-atomicity ×1 [phase-review FINDING-001]) | ✅ 97/97 |
 | `nats-bpm-bench` (varsayılan, `bench` hariç) | 5 | **4** | −1 (eski `RelayFailoverBenchScenarioTest` placeholder → `@Tag("bench")`'e taşındı) | ✅ 4/4 |
-| **Varsayılan toplam** | **564** | **580** | **+16** | ✅ **580/580** |
+| **Varsayılan toplam** | **564** | **581** | **+17** | ✅ **581/581** |
 | `nats-bpm-bench` (`@Tag("bench")`, nightly/manual, `-Dbench.excludedGroups=`) | 2 | **4** | +2 (relay-failover GERÇEK ölçüm) | ⚠️ 3/4 (bkz. §4) |
-| **Genel toplam** | **566** | **584** | **+18** | **583/584** (1 pre-existing, bkz. §4) |
+| **Genel toplam** | **566** | **585** | **+19** | **584/585** (1 pre-existing, bkz. §4) |
 
 **Yeni eklenen test dosyaları (3):**
 - `nats-history-projection/.../projection/HistoryDlqInspectionConsumerTest.java` (6 test)
 - `camunda-nats-channel/.../history/HistoryOutboxCustodyTransferTest.java` (3 test)
 - `cadenzaflow-nats-channel/.../history/HistoryOutboxCustodyTransferTest.java` (3 test, camunda↔cadenzaflow ayna — `diff` sonrası engine-adı hariç BYTE-AYNI, mekanik doğrulandı)
 
-**Genişletilen mevcut test dosyaları (2):**
+**Genişletilen mevcut test dosyaları (3):**
 - `nats-core/.../vault/PseudonymizationVaultClientTest.java` (+3: `SYS_PSEUDONYM_VAULT_UNAVAILABLE` yolları)
 - `nats-history-projection/.../cutover/CutoverControlPlaneTest.java` (+2: `SYS_CUTOVER_CONFIG_APPLY_FAILED` — KV-yazım ve state-store yolları ayrı ayrı)
+- `nats-history-projection/.../governance/RetentionEnforcementJobTest.java` (+1: phase-review FINDING-001 — `SYS_RETENTION_AUDIT_LOG_WRITE_FAILED` atomiklik fault-injection testi, bkz. §5)
 
 **Yeniden yazılan (davranış GERÇEK ölçüme çevrildi, TEST_SPEC h):**
 - `nats-bpm-bench/.../history/RelayFailoverBenchScenario.java` (production, `UnsupportedOperationException` placeholder → gerçek çok-replika KV-lease failover ölçümü)
@@ -70,6 +73,14 @@ Her modül **ayrı `mvn test` koşusuyla** doğrulandı (tam reactor'ı tek `mvn
 TTL-expiry temelli devir mekanizması NEDENİYLE bir standby, çökmüş liderin SON yenilemesinden itibaren **TAM 60 saniye geçmeden** lease'i asla devralamaz (NATS KV bucket TTL'i budur — daha erken devralma yapısal olarak İMKANSIZ). Ölçülen 60.376s bu yapısal alt-sınırı + bu test-harness'in kendi poll-granülerlerliğini (500ms) yansıtıyor. Yani **"RTO≤60s" iddiası "genelde çok daha hızlı, en kötü durumda 60s" değil — "yaklaşık HER ZAMAN ~60s" anlamına gelir** (üretimde gerçek standby'lar kendi 30s döngüsünde poll ettiği için gerçek-dünya RTO'su 60-90s aralığına da çıkabilir, döngü hizalanmasına bağlı). Bu, mimari/PO'nun on-call runbook beklentisini kalibre etmesi için önemli bir netleştirme — kod DEĞİŞİKLİĞİ gerektirmiyor (tasarım kasıtlı ve DP/NFR-R1 açısından güvenli — RPO=0 korunuyor, yalnız RTO'nun "iyimser" okunmaması gerekiyor). Detay: `RelayFailoverBenchScenario.java` sınıf Javadoc'unda belgelendi.
 
 **Koşum notu:** bu test `@Tag("bench")` (nightly/manual, `BR-OBS-003` deseni) — gerçek ~67s sürüyor (env boot + 60s TTL bekleme + drenaj), varsayılan `mvn test`'i yavaşlatmamak için.
+
+---
+
+## 5. Retention audit-log atomikliği — GERÇEK fault-injection testi (phase-review FINDING-001)
+
+Faz5.5 ilk turunda `SYS_RETENTION_AUDIT_LOG_WRITE_FAILED` (CRITICAL, on-call-page) hiçbir testle örneklenmiyordu — retention-silme ↔ audit-log yazımı atomikliği (`DATA_GOVERNANCE.md §4.4`) yalnız `RetentionEnforcementJob`'ın tasarım-argümanıyla (CODER-NOTE) varsayılıyordu. Phase-review turunda gerçek-PG + fault-injection testi eklendi.
+
+**Sonuç: ATOMİKLİK TUTTU — production bug bulunmadı.** Audit-log yazımı (bilinçli olarak ulaşılamaz bir `DataSource`'a bağlanarak) fault-inject edildiğinde: (a) `RetentionAuditLogWriteFailedException` bozulmadan yükseliyor, (b) `DROP TABLE` (henüz commit edilmemiş, aynı işlemin kendi connection'ında) `rollback()` ile geri alınıyor — partition test-ortamında GERÇEKTEN hayatta kalıyor, öksüz-silme oluşmuyor. Detaylı mekanizma analizi + bir 🟢 NIT (CODER-NOTE'un "aynı transaction" iddiası literal olarak yanlış, gerçek mekanizma farklı ama sonuç aynı) — bkz. `SECURITY_SCAN.md §6` ve `QA_FINDINGS.md` (FINDING-001 çözümü + QA-F6).
 
 ---
 

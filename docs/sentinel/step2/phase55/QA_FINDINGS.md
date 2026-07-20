@@ -3,9 +3,31 @@
 Severity ölçeği: 🔴 CRITICAL (bloklar) · 🟠 HIGH (bloklar) · 🟡 MEDIUM/gözlem (yazılı-ack veya backlog) · 🟢 LOW/NIT (bilgilendirici).
 **🔴/🟠 sayısı: 0.** Tüm bulgular 🟡/🟢 — faz geçişini bloklamıyor.
 
+**Revizyon (2026-07-21, phase-review turu):** phase-review'ın 2 bulgusu ele alındı — FINDING-001 (retention audit-log atomiklik testi eksikliği) test yazılıp KAPANDI (atomiklik TUTTU, production bug yok, bkz. QA-F6 yeni gözlem + `SECURITY_SCAN.md §6`). FINDING-002 (`SECURITY_SCAN.md §2` tamlık iddiası) düzeltildi (bkz. `SECURITY_SCAN.md §2.1`, tam 11-nokta envanteri).
+
 ---
 
-## Yeni QA-FINDINGS (bu turda üretildi)
+## Phase-review turu sonuçları (bu bölüm YENİ)
+
+### ✅ FINDING-001 [MEDIUM] — ÇÖZÜLDÜ: retention audit-log atomikliği TEST EDİLDİ ve TUTTUĞU KANITLANDI (production bug DEĞİL)
+- **Test:** `RetentionEnforcementJobTest.enforceRetention_auditLogWriteFails_dropRolledBack_noOrphanDeletion_throwsCriticalException` (gerçek-PG + fault-injection: `RetentionAuditLogger` ulaşılamaz `DataSource`'a bağlı, `RetentionEnforcementJob` sağlıklı gerçek `DataSource`'u kullanıyor).
+- **Sonuç:** (a) `RetentionAuditLogWriteFailedException` bozulmadan (`SYS_RETENTION_JOB_FAILED`'e yutulmadan) yükseliyor — ✅; (b) DROP TABLE, audit-yazım başarısız olduğunda `connection.rollback()` ile GERİ ALINIYOR — partition HAYATTA kalıyor, öksüz-silme YOK — ✅. **Atomiklik invariant'ı (`DATA_GOVERNANCE.md §4.4`) TUTUYOR.**
+- **RetentionAuditLogger coverage:** 89.5% (17/19) → **100% (19/19)**. `RetentionEnforcementJob`: 79.5% (66/83) → 88.0% (73/83).
+- Detay: `SECURITY_SCAN.md §6`.
+
+### ✅ FINDING-002 [MEDIUM] — ÇÖZÜLDÜ: `SECURITY_SCAN.md §2` tamlık iddiası düzeltildi
+- Önceki sürüm yalnız SpotBugs'ın yakaladığı 5 noktayı "TÜM dinamik-SQL" diye sundu — yanlıştı. Reviewer'ın işaret ettiği 4 ek nokta (`RetentionEnforcementJob:110,138`, `ReconciliationJob:147,160`, `ProjectionStore:146`, `HistoryQueryApi:251`) + kod-taramasıyla bulunan 1 ek nokta (`ProjectionStore.selectExisting:146-147`, reviewer'ınkiyle aynı satır) dahil TAM 11 üretim-kodu noktası (+1 bench-altyapısı) kaynak-okumasıyla doğrulandı ve kategorize edildi (allowlist+regex / sabit-map / sistem-katalog / HTTP-yüzeyi sabit-parça+bind). **Kod değişikliği YOK** — hepsi zaten güvenli, yalnız tarama-belgesi tamlığı düzeltildi.
+- Detay: `SECURITY_SCAN.md §2.1`.
+
+### 🟢 QA-F6 (NIT, FINDING-001 incelemesinden doğan yeni gözlem) — `RetentionEnforcementJob` CODER-NOTE'u atomiklik mekanizmasını yanlış tanımlıyor + ters-yönlü "phantom audit" riski test-edilmedi
+- **Kanıt:** `RetentionEnforcementJob.java:32-41` CODER-NOTE'u "DROP + audit INSERT AYNI transaction'da, birlikte commit" diyor — bu YANLIŞ: `RetentionAuditLogger.record()` KENDİ AYRI `projectionDataSource.getConnection()`'ını açıyor (satır 30), `dropPartitionWithAudit`'in kendi `connection`'ıyla (satır 105) AYNI transaction'da DEĞİL. Atomiklik GERÇEKTE audit-yazım başarısız olduğunda AÇIKÇA `connection.rollback()` çağrılmasıyla (satır 119, compensating-action deseni) sağlanıyor — sonuç aynı (atomiklik tutuyor, QA-F6'nın ana bulgusu FINDING-001 testinde KANITLANDI) ama dokümantasyon yanıltıcı.
+- **Ek risk (test edilmedi, ters yön):** eğer audit-INSERT BAŞARILI olur (durable commit, ayrı connection) ama SONRASINDA `connection.commit()` (DROP tarafı) başarısız olursa — audit-log "silindi" diye kayıt düşer ama DROP hiç commit edilmemiş olabilir ("phantom audit" — yanlış-pozitif silme iddiası, veri-kaybı DEĞİL ama audit-doğruluğu sorunu). Bu senaryo bu turda test edilmedi (nadir race window, `connection.commit()`'in kendisinin başarısız olmasını fault-inject etmek gerekir).
+- **Gerçek risk:** DÜŞÜK (nadir race, veri-kaybı değil, yalnız audit-doğruluk).
+- **Öneri:** phase6/backlog — (1) CODER-NOTE Javadoc düzeltmesi (mekanizma açıklaması), (2) isteğe bağlı ek test (commit-fail senaryosu).
+
+---
+
+## Yeni QA-FINDINGS (Phase 5.5 ilk turunda üretildi)
 
 ### 🟡 QA-F1 — Relay-failover "RTO≤60s" bound'u iyimser okunmamalı (ölçüm-türevi netleştirme, kod hatası DEĞİL)
 - **Kanıt:** `TEST_REPORT.md §3` — gerçek koşum `timeToRecover=60.376s`, `leaseTtl=60s`. TTL-expiry mekanizması nedeniyle bir standby SON yenilemeden itibaren TAM TTL geçmeden ASLA devralamaz — bu yapısal bir ALT-SINIR, "en kötü durum" değil.
@@ -59,6 +81,6 @@ Severity ölçeği: 🔴 CRITICAL (bloklar) · 🟠 HIGH (bloklar) · 🟡 MEDIU
 
 ## Onay için insan aksiyonu
 
-Bu QA turunda **0 CRITICAL, 0 HIGH** bulgu. 4× 🟡 (QA-F1…F4) yazılı-ack veya backlog kararı bekliyor (hiçbiri bloklayıcı değil, hepsi ya gözlem-türü netleştirme ya da düşük-riskli bağımlılık/altyapı borcu). 1× 🟢 (QA-F5) backlog önerisi.
+Bu QA turunda (ilk tur + phase-review turu) **0 CRITICAL, 0 HIGH** bulgu. 4× 🟡 (QA-F1…F4) yazılı-ack veya backlog kararı bekliyor (hiçbiri bloklayıcı değil, hepsi ya gözlem-türü netleştirme ya da düşük-riskli bağımlılık/altyapı borcu). 2× 🟢 (QA-F5, QA-F6) backlog önerisi. FINDING-001/002 (phase-review) KAPANDI — ikisi de production bug/gerçek-güvenlik-açığı DEĞİL, biri test-boşluğu (kapandı, atomiklik tuttu), diğeri belge-tamlığı (düzeltildi).
 
 **"Phase 5.5 deliverables are ready. Do you approve to proceed to Phase 6?"**
