@@ -12,7 +12,7 @@ class JetStreamSubjectPartitionerTest {
     void buildPartitionTransform_historyDefault_matchesLldMechanism() {
         SubjectTransform transform = JetStreamSubjectPartitioner.buildPartitionTransform("history", 3, 3, 8);
 
-        assertThat(transform.getSource()).isEqualTo("history.>");
+        assertThat(transform.getSource()).isEqualTo("history.*.*.*");
         assertThat(transform.getDestination())
                 .isEqualTo("history.{{wildcard(1)}}.{{wildcard(2)}}.{{wildcard(3)}}.part.{{Partition(8,3)}}");
     }

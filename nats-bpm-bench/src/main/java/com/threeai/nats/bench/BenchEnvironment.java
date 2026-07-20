@@ -81,11 +81,18 @@ public class BenchEnvironment implements AutoCloseable {
 
         this.dataSource = buildDataSource(postgres);
         createPgStatStatementsExtension(dataSource);
+        // Basamak-2: compact_history_outbox must exist regardless of which BenchMode a given
+        // HistoryBenchScenario.run() call uses (DB_HISTORY_BASELINE never writes to it, but the
+        // table still needs to exist for the COUNT(*) read to succeed either way).
+        com.threeai.nats.core.db.SqlMigrationRunner.applyClasspathScript(
+                dataSource, "db/migration/history/V1__compact_history_outbox.sql");
 
         this.natsConnection = Nats.connect(
                 "nats://" + natsContainer.getHost() + ":" + natsContainer.getMappedPort(4222));
         this.jetStream = natsConnection.jetStream();
         ensureStreams(natsConnection);
+        new com.threeai.nats.bench.history.HistoryStreamProvisioner()
+                .ensureHistoryStreams(new com.threeai.nats.core.jetstream.JetStreamStreamManager(), natsConnection);
 
         NatsChannelMetrics metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
         DlqPublisher dlqPublisher = new DlqPublisher(jetStream, natsConnection, metrics);
@@ -153,6 +160,30 @@ public class BenchEnvironment implements AutoCloseable {
         return dataSource;
     }
 
+    /** Basamak-2: {@code HistoryBenchScenario} needs its OWN Postgres database on this SAME
+     *  container (its baseline/offload engines each pin the schema's {@code historyLevel} on
+     *  first build — Camunda rejects a later engine build against an already-initialized schema
+     *  whose stored {@code historyLevel} differs, and this fixture's OWN A2 engine has already
+     *  claimed {@code dataSource()}'s schema at whatever level Camunda defaults to). Exposing the
+     *  container (rather than duplicating host/port plumbing) lets that scenario provision a
+     *  sibling database via {@code CREATE DATABASE}. */
+    public PostgreSQLContainer<?> postgresContainer() {
+        return postgres;
+    }
+
+    /** Basamak-2: {@code HistoryBenchScenario} builds its own mode-specific engine(s) against
+     *  this SAME NATS connection/JetStream (Camunda's {@code HistoryEventHandler} chain is
+     *  boot-time-fixed — fork-verified, `03_classes/2_relay_projection.md` — so a single shared
+     *  engine cannot flip between DB_HISTORY_BASELINE/HISTORY_OFFLOAD; see that class's
+     *  CODER-NOTE). */
+    public io.nats.client.Connection natsConnection() {
+        return natsConnection;
+    }
+
+    public JetStream jetStream() {
+        return jetStream;
+    }
+
     private static DataSource buildDataSource(PostgreSQLContainer<?> postgres) {
         PGSimpleDataSource ds = new PGSimpleDataSource();
         ds.setUrl(postgres.getJdbcUrl());
@@ -199,7 +230,11 @@ public class BenchEnvironment implements AutoCloseable {
                 .build());
         jsm.addStream(StreamConfiguration.builder()
                 .name("BENCH-DLQ")
-                .subjects("dlq.>")
+                // Narrowed from "dlq.>" to "dlq.jobs.>" (the only DLQ subject this A2 fixture
+                // ever publishes to, see replyConfig.setDlqSubject above) so it no longer
+                // overlaps basamak-2's separately-provisioned "dlq.history.>" (DLQ_HISTORY,
+                // HistoryStreamProvisioner) — JetStream rejects overlapping stream subjects.
+                .subjects("dlq.jobs.>")
                 .retentionPolicy(RetentionPolicy.Limits)
                 .storageType(StorageType.File)
                 .duplicateWindow(Duration.ofSeconds(120))

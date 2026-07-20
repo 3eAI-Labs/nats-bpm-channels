@@ -19,6 +19,16 @@ import io.nats.client.api.SubjectTransform;
  * final token). This class implements the semantically-equivalent, syntactically-valid form
  * {@code history.*.*.*.part.<i>} (one {@code *} per wildcard token before the {@code .part.<i>}
  * suffix) which matches exactly the same set of post-transform subjects.
+ *
+ * <p><b>CODER-NOTE (production bug found + fixed via `nats-bpm-bench`'s real-NATS slice test,
+ * module 5):</b> {@link #buildPartitionTransform}'s SOURCE originally used the same {@code
+ * baseSubject + ".>"} catch-all shape as the CONSUMER filter above. A real {@code nats-server}
+ * rejects that as the transform's SOURCE with {@code invalid subject (10049)} — {@code
+ * {{wildcard(N)}}} destination tokens require the source to declare that many EXPLICIT {@code *}
+ * wildcard positions (verified directly against a live {@code nats:2.10-alpine} server; NATS
+ * docs' own partitioning example uses {@code "bar.*.*"}, never {@code "bar.>"}, as a transform
+ * source). Fixed: source is now {@code baseSubject + ".*".repeat(wildcardCount)} (e.g. {@code
+ * history.*.*.*}), matching the destination's wildcard-token count exactly.
  */
 public final class JetStreamSubjectPartitioner {
 
@@ -44,14 +54,17 @@ public final class JetStreamSubjectPartitioner {
             throw new IllegalArgumentException(
                     "partitionTokenIndex must be within [1, wildcardCount] — got " + partitionTokenIndex);
         }
-        String source = baseSubject + ".>";
+        StringBuilder source = new StringBuilder(baseSubject);
+        for (int i = 0; i < wildcardCount; i++) {
+            source.append(".*");
+        }
         StringBuilder destination = new StringBuilder(baseSubject);
         for (int i = 1; i <= wildcardCount; i++) {
             destination.append('.').append("{{wildcard(").append(i).append(")}}");
         }
         destination.append(PARTITION_TOKEN)
                 .append("{{Partition(").append(partitionCount).append(',').append(partitionTokenIndex).append(")}}");
-        return new SubjectTransform(source, destination.toString());
+        return new SubjectTransform(source.toString(), destination.toString());
     }
 
     /**
