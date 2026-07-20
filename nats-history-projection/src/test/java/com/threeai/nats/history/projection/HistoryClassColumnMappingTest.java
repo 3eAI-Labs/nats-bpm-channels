@@ -106,4 +106,19 @@ class HistoryClassColumnMappingTest {
                 .isEqualTo("decision_definition_id");
         assertThat(HistoryClassColumnMapping.columnFor(HistoryClassNames.BATCH, "batchId")).isEqualTo("batch_id");
     }
+
+    /**
+     * CQ-3: {@code ProjectionStore.allowedColumnsFor} is the cross-package accessor {@code
+     * ErasurePipeline} validates its {@code ANONYMIZATION_COLUMNS} entries against — verifies it
+     * delegates to the SAME allowlist this class enforces for the write path, not a copy.
+     */
+    @Test
+    void allowedColumnsFor_delegatesToSameAllowlist_asColumnFor() {
+        assertThat(ProjectionStore.allowedColumnsFor(HistoryClassNames.VARINST))
+                .contains("variable_value_text", "variable_value_ref");
+        assertThat(ProjectionStore.allowedColumnsFor(HistoryClassNames.TASKINST))
+                .contains("task_name", "task_description", "assignee", "owner");
+        assertThat(ProjectionStore.allowedColumnsFor(HistoryClassNames.COMMENT)).contains("message");
+        assertThat(ProjectionStore.allowedColumnsFor(HistoryClassNames.DETAIL)).contains("variable_value_text");
+    }
 }

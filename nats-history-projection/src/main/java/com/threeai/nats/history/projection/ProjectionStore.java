@@ -40,6 +40,18 @@ public class ProjectionStore {
     }
 
     /**
+     * The exact set of non-structural DB columns a class's table exposes (`04_interfaces/2
+     * _projection_dtos.md` §2 allowlist — same [BLOCKING] SQL-injection defense-in-depth source
+     * of truth {@link #upsertEntity}/{@link #insertLogEvent} already use via {@code
+     * appendMappedFields}). Exposed for {@code ErasurePipeline} (CQ-3) so its anonymization
+     * column list is validated against the SAME allowlist rather than a second, independently
+     * hand-maintained set that could silently drift out of sync with the schema.
+     */
+    public static java.util.Set<String> allowedColumnsFor(String historyClass) {
+        return HistoryClassColumnMapping.tableFor(historyClass).allowedColumns();
+    }
+
+    /**
      * Entity-lifecycle merge-upsert (process_instance_history, activity_instance_history,
      * variable_instance_history, task_instance_history, incident_history, case_instance_history).
      */
