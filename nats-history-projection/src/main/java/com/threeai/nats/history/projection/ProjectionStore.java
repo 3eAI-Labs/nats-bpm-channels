@@ -34,6 +34,11 @@ public class ProjectionStore {
         this.projectionDataSource = projectionDataSource;
     }
 
+    /** Table name for a given ACT_HI class — used by {@code ReconciliationJob}'s row-count comparison. */
+    public static String tableNameFor(String historyClass) {
+        return HistoryClassColumnMapping.tableFor(historyClass).tableName();
+    }
+
     /**
      * Entity-lifecycle merge-upsert (process_instance_history, activity_instance_history,
      * variable_instance_history, task_instance_history, incident_history, case_instance_history).
