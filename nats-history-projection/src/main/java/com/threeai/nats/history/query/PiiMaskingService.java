@@ -8,7 +8,9 @@ package com.threeai.nats.history.query;
  */
 public class PiiMaskingService {
 
-    static final String MASK_PLACEHOLDER = "***";
+    /** Public: {@code ErasurePipeline}'s post-erasure verification compares against this marker
+     *  to confirm a masked field, not a still-visible raw value. */
+    public static final String MASK_PLACEHOLDER = "***";
 
     @SuppressWarnings("unchecked")
     public <T> T mask(T responseDto, QueryContext ctx) {
