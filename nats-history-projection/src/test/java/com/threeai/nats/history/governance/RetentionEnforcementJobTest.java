@@ -117,6 +117,69 @@ class RetentionEnforcementJobTest {
         assertThatCode(() -> newJob(properties).validateRetentionOverrides(properties)).doesNotThrowAnyException();
     }
 
+    /**
+     * Phase 5.5 QA (phase-review FINDING-001) — {@code SYS_RETENTION_AUDIT_LOG_WRITE_FAILED} had
+     * no test proving the DATA_GOVERNANCE.md §4.4 atomicity invariant ("every retention deletion
+     * MUST be audit-logged — an orphan delete is a compliance violation") actually holds under a
+     * REAL audit-log write failure, as opposed to being assumed from the
+     * {@link RetentionEnforcementJob} class Javadoc's design argument alone.
+     *
+     * <p><b>Fault injection:</b> {@link RetentionAuditLogger} is backed by a deliberately
+     * UNREACHABLE {@code DataSource} (connection-refused, fast/deterministic — same technique as
+     * {@code PseudonymizationVaultClientTest}), while {@link RetentionEnforcementJob} itself keeps
+     * the REAL, healthy Testcontainers {@code dataSource} for the {@code DROP TABLE} side.
+     * Production wiring shares ONE {@code projectionDataSource} bean between both
+     * ({@code NatsHistoryProjectionAutoConfiguration}) — splitting them here isolates exactly
+     * which side fails, the same technique {@code HistoryProjectionConsumerDlqRoutingTest} uses
+     * for a dual-failure scenario a single real dependency cannot easily force on its own.
+     *
+     * <p><b>Result of this empirical run: the atomicity invariant HOLDS.</b> {@code
+     * dropPartitionWithAudit}'s {@code DROP TABLE} runs on the job's OWN connection with
+     * autocommit disabled; when {@code auditLogger.record(...)} throws (its own SEPARATE
+     * connection failing to even connect), the surrounding catch block calls {@code
+     * connection.rollback()} BEFORE re-throwing — Postgres's transactional DDL means the
+     * uncommitted {@code DROP TABLE} is undone. The partition survives, zero audit rows are
+     * written, and {@link RetentionAuditLogWriteFailedException} propagates uncaught through
+     * {@code enforceRetention()} (its own {@code catch (RetentionAuditLogWriteFailedException)}
+     * re-throws rather than swallowing it, unlike the generic {@code SYS_RETENTION_JOB_FAILED}
+     * log-and-continue path for other exception types) -- confirmed CRITICAL-page behavior, not
+     * silently downgraded to a WARN/retry.
+     */
+    @Test
+    void enforceRetention_auditLogWriteFails_dropRolledBack_noOrphanDeletion_throwsCriticalException() throws Exception {
+        RetentionProperties properties = new RetentionProperties();
+        properties.setBulkDefaultDays(90); // 2020 partition is eligible for drop
+
+        // Baseline BEFORE this test's own attempt -- `retention_audit_log` is not truncated
+        // between test methods in this class (unlike the partition table itself, recreated fresh
+        // by @BeforeEach), so other passing tests in this class that also legitimately drop+audit
+        // a "variable_detail_history_2020_01"-named partition leave rows behind. The correct
+        // atomicity assertion is therefore "this fault-injected attempt added zero rows", not
+        // "the table is empty" -- an absolute-zero assertion would be a test-isolation artifact,
+        // not evidence of (or against) the atomicity property under test.
+        long auditRowsBefore = auditLogCount("variable_detail_history_2020_01");
+
+        RetentionAuditLogger failingAuditLogger = new RetentionAuditLogger(unreachableDataSource());
+        RetentionEnforcementJob job = new RetentionEnforcementJob(dataSource, failingAuditLogger, properties, "camunda");
+
+        assertThatThrownBy(job::enforceRetention)
+                .isInstanceOf(com.threeai.nats.core.history.exception.RetentionAuditLogWriteFailedException.class);
+
+        // CRITICAL atomicity assertion (FINDING-001): no orphan delete -- the partition must
+        // still exist, and THIS attempt must not have added any audit row (DATA_GOVERNANCE.md
+        // §4.4 -- a delete without a matching audit entry is a compliance violation).
+        assertThat(partitionExists("variable_detail_history_2020_01")).isTrue();
+        assertThat(auditLogCount("variable_detail_history_2020_01")).isEqualTo(auditRowsBefore);
+    }
+
+    private PGSimpleDataSource unreachableDataSource() {
+        PGSimpleDataSource broken = new PGSimpleDataSource();
+        broken.setUrl("jdbc:postgresql://127.0.0.1:1/nonexistent"); // port 1 -- connection refused, fast/deterministic
+        broken.setUser("nobody");
+        broken.setPassword("nobody");
+        return broken;
+    }
+
     private boolean partitionExists(String partitionName) throws Exception {
         try (Connection c = dataSource.getConnection();
              PreparedStatement stmt = c.prepareStatement(
