@@ -72,13 +72,17 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * {@link ErasurePipeline}, which needs it for post-anonymization verification) only activates once
  * the tenant supplies their own authz SPI bean (ARCH-Q4, SRS §4.7), never silently open.
  *
- * <p><b>CODER-QUESTION (multi-engine reconciliation/retention):</b> {@link ReconciliationJob} and
- * {@link RetentionEnforcementJob} each bind to exactly ONE {@code engineId}
- * ({@code history.engine-id}, default {@code "camunda"} — a property {@code 08_config.md} does not
- * itself define). A deployment running BOTH {@code camunda-nats-channel} and {@code
- * cadenzaflow-nats-channel} against the SAME projection store would need the embedding application
- * to declare a second pair of beans with an overridden {@code engineId} — this module does not
- * attempt that fan-out automatically. Flagged for the phase-5 return report.
+ * <p><b>CQ-2/CQ-5 (Levent, önerilen 2026-07-20 — multi-engine scope, resolved):</b> {@link
+ * ReconciliationJob} and {@link RetentionEnforcementJob} each bind to exactly ONE {@code
+ * engineId} ({@code history.engine-id}, default {@code "camunda"} — a property {@code
+ * 08_config.md} does not itself define). This stays AS-IS by design — the default auto-config
+ * targets the primary single-engine deployment shape. A deployment running BOTH {@code
+ * camunda-nats-channel} and {@code cadenzaflow-nats-channel} simultaneously against the SAME
+ * projection store declares a SECOND pair of beans with an overridden {@code engineId} in its own
+ * {@code @Configuration} — this module does not attempt that fan-out automatically, by decision,
+ * not oversight. Full recipe: {@code nats-history-projection/README.md} "çoklu-motor dağıtım
+ * reçetesi" (CQ-2/CQ-5). The related engineId-not-in-query-API constraint is a SEPARATE, also
+ * explicitly accepted limitation — see {@code HistoryQueryApi}'s own CODER-NOTE.
  */
 @AutoConfiguration
 @EnableScheduling

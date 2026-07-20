@@ -20,14 +20,18 @@ import com.threeai.nats.history.projection.ProjectionStore;
  * (REST). Authz is delegated to {@link HistoryQueryAuthzSpi} (pluggable). Kontrat: {@code
  * api/openapi.yaml} (tek doğruluk kaynağı, inline şema burada TEKRARLANMAZ).
  *
- * <p><b>CODER-NOTE (no explicit engineId parameter):</b> the openapi contract's çekirdek-4
- * endpoints carry no {@code engineId} query parameter, and the LLD method signatures mirror that
- * (`String processInstanceId`, not {@code (engineId, processInstanceId)}). Queries here are
- * therefore NOT filtered by {@code engine_id} — correct/unambiguous for the common single-engine
- * deployment this basamak targets; a genuinely multi-engine deployment sharing one projection
- * store could see id collisions across engines. This is a fixed-contract limitation (the openapi
- * spec cannot be changed per task instructions), not something this class can unilaterally fix —
- * flagged in the phase-5 return report CODER-QUESTIONS.
+ * <p><b>CODER-NOTE (no explicit engineId parameter — CQ-2, Levent KABUL EDİLDİ 2026-07-20):</b>
+ * the openapi contract's çekirdek-4 endpoints carry no {@code engineId} query parameter, and the
+ * LLD method signatures mirror that (`String processInstanceId`, not {@code (engineId,
+ * processInstanceId)}). Queries here are therefore NOT filtered by {@code engine_id} — correct/
+ * unambiguous for the single-engine deployment this basamak primarily targets; a genuinely
+ * multi-engine deployment sharing one projection store (see {@code
+ * nats-history-projection/README.md} "çoklu-motor dağıtım reçetesi" for how reconciliation/
+ * retention DO support that case) could in theory see id collisions across engines. This was
+ * reviewed and explicitly ACCEPTED as a fixed-contract limitation (the openapi spec is locked,
+ * not changed by this basamak) rather than left as an open question — a future basamak could add
+ * an optional {@code engineId} filter param without breaking the existing contract if the risk
+ * is ever realized in practice.
  *
  * <p><b>CODER-NOTE (constructor takes DataSource, not ProjectionStore):</b> the LLD sketch is
  * {@code HistoryQueryApi(ProjectionStore projectionStore, ...)}, but {@code ProjectionStore}'s own
