@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.time.Duration;
+import java.time.Instant;
 
 import com.threeai.nats.core.db.SqlMigrationRunner;
 import com.threeai.nats.core.history.HistoryClassNames;
@@ -113,5 +114,57 @@ class CutoverControlPlaneTest {
     @Test
     void volumePriorityOrder_returnsConfiguredDefault() {
         assertThat(newControlPlane().volumePriorityOrder()).contains("DETAIL", "OP_LOG");
+    }
+
+    /**
+     * Phase 5.5 (QA) — {@code SYS_CUTOVER_CONFIG_APPLY_FAILED} (KV-write branch) had zero test
+     * coverage: a genuinely unreachable NATS connection must yield {@code APPLY_FAILED} and leave
+     * the DB state untouched (fail-safe — dual-run continues, `CutoverControlPlane` class Javadoc).
+     */
+    @Test
+    void requestCutover_kvConnectionUnreachable_returnsApplyFailed_stateUnchanged() throws Exception {
+        stateStore.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
+        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+
+        io.nats.client.Connection deadConnection =
+                Nats.connect("nats://" + natsContainer.getHost() + ":" + natsContainer.getMappedPort(4222));
+        deadConnection.close(); // simulates a broker/connection outage at the moment of the KV write
+
+        CutoverControlPlane controlPlane =
+                new CutoverControlPlane(stateStore, kvManager, new HistoryCutoverProperties(), deadConnection);
+        CutoverOutcome outcome = controlPlane.requestCutover("camunda", HistoryClassNames.OP_LOG);
+
+        assertThat(outcome).isEqualTo(CutoverOutcome.APPLY_FAILED);
+        assertThat(stateStore.find("camunda", HistoryClassNames.OP_LOG).orElseThrow().state())
+                .isEqualTo(CutoverState.N_GUN_TEMIZ); // never transitioned -- dual-run continues
+    }
+
+    /**
+     * {@code SYS_CUTOVER_CONFIG_APPLY_FAILED} (state-store branch, AFTER the KV write already
+     * succeeded) — the class Javadoc documents this as a distinct failure mode from the KV-write
+     * branch above; the KV flag is left {@code true} even though the outcome is APPLY_FAILED
+     * (the DB write, not the KV write, is what failed).
+     */
+    @Test
+    void requestCutover_stateStoreWriteFailsAfterKvSucceeded_returnsApplyFailed_kvStillWritten() {
+        ClassCutoverState gateOpenState = new ClassCutoverState("camunda", HistoryClassNames.OP_LOG,
+                ConsistencyPath.AUDIT_CRITICAL, CutoverState.N_GUN_TEMIZ, 7, 7, Instant.now(), 0, null, 0, null);
+        ClassCutoverStateStore failingStore = org.mockito.Mockito.mock(ClassCutoverStateStore.class);
+        org.mockito.Mockito.when(failingStore.find("camunda", HistoryClassNames.OP_LOG))
+                .thenReturn(java.util.Optional.of(gateOpenState));
+        org.mockito.Mockito.doThrow(new RuntimeException("db write failed"))
+                .when(failingStore).markCutoverRequested("camunda", HistoryClassNames.OP_LOG);
+
+        CutoverControlPlane controlPlane =
+                new CutoverControlPlane(failingStore, kvManager, new HistoryCutoverProperties(), natsConnection);
+        CutoverOutcome outcome = controlPlane.requestCutover("camunda", HistoryClassNames.OP_LOG);
+
+        assertThat(outcome).isEqualTo(CutoverOutcome.APPLY_FAILED);
+        try {
+            KeyValue kv = natsConnection.keyValue("history-cutover-state");
+            assertThat(new String(kv.get("cutover.camunda.OP_LOG").getValue(), StandardCharsets.UTF_8)).isEqualTo("true");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }
