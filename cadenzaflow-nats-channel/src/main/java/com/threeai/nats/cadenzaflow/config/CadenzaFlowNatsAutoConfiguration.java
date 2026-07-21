@@ -1,6 +1,13 @@
 package com.threeai.nats.cadenzaflow.config;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import javax.sql.DataSource;
 
 import com.threeai.nats.cadenzaflow.a2.A2BpmnParseListener;
 import com.threeai.nats.cadenzaflow.a2.A2PostCommitPublisher;
@@ -9,12 +16,23 @@ import com.threeai.nats.cadenzaflow.a2.A2SubscriptionRegistrar;
 import com.threeai.nats.cadenzaflow.a2.A2TopicConfig;
 import com.threeai.nats.cadenzaflow.a2.UmbrellaLockResolver;
 import com.threeai.nats.cadenzaflow.a2.UmbrellaLockValidator;
+import com.threeai.nats.cadenzaflow.history.ClassCutoverStateRegistry;
+import com.threeai.nats.cadenzaflow.history.CompactHistoryOutboxWriter;
+import com.threeai.nats.cadenzaflow.history.HistoryBootstrapValidator;
+import com.threeai.nats.cadenzaflow.history.HistoryClassificationProperties;
+import com.threeai.nats.cadenzaflow.history.HistoryOutboxProperties;
+import com.threeai.nats.cadenzaflow.history.HistoryOutboxRelay;
+import com.threeai.nats.cadenzaflow.history.HistoryOutboxRelayScheduler;
+import com.threeai.nats.cadenzaflow.history.HistoryPostCommitPublisher;
+import com.threeai.nats.cadenzaflow.history.NatsHistoryEventHandler;
 import com.threeai.nats.core.NatsConnectionFactory;
 import com.threeai.nats.core.NatsProperties;
 import com.threeai.nats.core.config.NatsTransportSecurityGuard;
 import com.threeai.nats.core.dlq.DlqPublisher;
+import com.threeai.nats.core.history.PseudonymTokenGenerator;
 import com.threeai.nats.core.jetstream.JetStreamKvManager;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
+import com.threeai.nats.core.jetstream.SweepLeaderLease;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.nats.client.Connection;
@@ -25,6 +43,8 @@ import org.cadenzaflow.bpm.engine.RuntimeService;
 import org.cadenzaflow.bpm.engine.impl.cfg.AbstractProcessEnginePlugin;
 import org.cadenzaflow.bpm.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.cadenzaflow.bpm.engine.impl.cfg.ProcessEnginePlugin;
+import org.cadenzaflow.bpm.engine.impl.history.handler.DbHistoryEventHandler;
+import org.cadenzaflow.bpm.engine.impl.history.handler.HistoryEventHandler;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -36,8 +56,15 @@ import org.springframework.core.env.Environment;
 
 @AutoConfiguration
 @ConditionalOnClass(org.cadenzaflow.bpm.engine.ProcessEngine.class)
-@EnableConfigurationProperties({NatsProperties.class, CadenzaFlowNatsProperties.class, A2Properties.class})
+@EnableConfigurationProperties({NatsProperties.class, CadenzaFlowNatsProperties.class, A2Properties.class,
+        HistoryClassificationProperties.class, HistoryOutboxProperties.class,
+        com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties.class})
 public class CadenzaFlowNatsAutoConfiguration {
+
+    private static final String ENGINE_ID = "cadenzaflow";
+    private static final String RELAY_LEADER_BUCKET = "history-relay-leader";
+    private static final String RELAY_LEADER_KEY_PREFIX = "relay-leader.";
+    private static final String CUTOVER_STATE_BUCKET = "history-cutover-state";
 
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
@@ -150,5 +177,147 @@ public class CadenzaFlowNatsAutoConfiguration {
             UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager) {
         return new A2SubscriptionRegistrar(a2Properties, connection, jetStream, externalTaskService, dlqPublisher,
                 metrics, meterRegistry, processEngine, lockResolver, topicConfig, lockValidator, kvManager);
+    }
+
+    // --- History Offload (basamak-2) ---
+
+    @Bean
+    @ConditionalOnMissingBean
+    public PseudonymTokenGenerator pseudonymTokenGenerator() {
+        return new PseudonymTokenGenerator();
+    }
+
+    /**
+     * CQ-1: engine-side pseudonym-vault write path (ADR-0016 "persist downstream/async").
+     * Physically SEPARATE Postgres pool (ARCH-Q2) — never shares {@code dataSource} (the engine
+     * DB). Gated on {@code history.vault.datasource.jdbc-url} being configured at all:
+     * pseudonymization opt-in without a configured vault is a valid (if unusual) tenant choice
+     * (see {@code CompactHistoryOutboxWriter}'s CODER-NOTE) — this bean simply does not exist in
+     * that case, and {@code compactHistoryOutboxWriter} below falls back to its
+     * vault-less constructor.
+     */
+    @Bean(name = "pseudonymVaultDataSource", destroyMethod = "close")
+    @ConditionalOnMissingBean(name = "pseudonymVaultDataSource")
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            prefix = "history.vault.datasource", name = "jdbc-url")
+    public DataSource pseudonymVaultDataSource(com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties props) {
+        com.zaxxer.hikari.HikariConfig config = new com.zaxxer.hikari.HikariConfig();
+        config.setJdbcUrl(props.getJdbcUrl());
+        config.setUsername(props.getUsername());
+        config.setPassword(props.getPassword());
+        config.setPoolName("cadenzaflow-pseudonym-vault-pool");
+        return new com.zaxxer.hikari.HikariDataSource(config);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(name = "pseudonymVaultDataSource")
+    public com.threeai.nats.core.vault.VaultAccessAuditor vaultAccessAuditor(
+            @org.springframework.beans.factory.annotation.Qualifier("pseudonymVaultDataSource") DataSource vaultDataSource) {
+        return new com.threeai.nats.core.vault.VaultAccessAuditor(vaultDataSource);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(name = "pseudonymVaultDataSource")
+    public com.threeai.nats.core.vault.PseudonymizationVaultClient pseudonymizationVaultClient(
+            @org.springframework.beans.factory.annotation.Qualifier("pseudonymVaultDataSource") DataSource vaultDataSource,
+            com.threeai.nats.core.vault.VaultAccessAuditor auditor,
+            com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties props) {
+        return new com.threeai.nats.core.vault.PseudonymizationVaultClient(
+                vaultDataSource, auditor, props.getVaultColumnEncryptionKeyRef());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DataSource.class)
+    public CompactHistoryOutboxWriter compactHistoryOutboxWriter(DataSource dataSource,
+            PseudonymTokenGenerator pseudonymGenerator, HistoryClassificationProperties classification,
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            @Autowired(required = false) com.threeai.nats.core.vault.PseudonymizationVaultClient vaultClient) {
+        return new CompactHistoryOutboxWriter(dataSource, pseudonymGenerator, classification, metrics, vaultClient);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public HistoryPostCommitPublisher historyPostCommitPublisher(JetStream jetStream,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new HistoryPostCommitPublisher(jetStream, metrics);
+    }
+
+    /**
+     * Ensures {@code history-cutover-state} and loads it ONCE at bean-creation time (LLD-Q3,
+     * boot-read). {@code @ConditionalOnBean(DataSource.class)}: without an engine DataSource
+     * there is no {@code compact_history_outbox} either, so cutover-state has nothing to route
+     * (mirrors {@link #compactHistoryOutboxWriter} / {@link #historyOutboxRelay} gating).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DataSource.class)
+    public ClassCutoverStateRegistry classCutoverStateRegistry(JetStreamKvManager kvManager, Connection connection) {
+        kvManager.ensureBucket(CUTOVER_STATE_BUCKET, Duration.ZERO, 3, connection);
+        ClassCutoverStateRegistry registry = new ClassCutoverStateRegistry(kvManager, connection, ENGINE_ID);
+        registry.loadAtBootstrap();
+        return registry;
+    }
+
+    /** Ensures {@code history-relay-leader} — separate bucket/key namespace from {@code a2-sweep-leader}. */
+    @Bean
+    @ConditionalOnMissingBean(name = "historyRelayLeaderLease")
+    @ConditionalOnBean(DataSource.class)
+    public SweepLeaderLease historyRelayLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
+            Connection connection, HistoryOutboxProperties outboxProperties) {
+        Duration ttl = Duration.ofSeconds(2 * outboxProperties.getRelayCyclePeriodSeconds());
+        kvManager.ensureBucket(RELAY_LEADER_BUCKET, ttl, 3, connection);
+        return new SweepLeaderLease(jetStream, kvManager, connection, RELAY_LEADER_BUCKET,
+                RELAY_LEADER_KEY_PREFIX, ENGINE_ID, resolveNodeId(), ttl);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DataSource.class)
+    public HistoryOutboxRelay historyOutboxRelay(DataSource dataSource, JetStream jetStream,
+            SweepLeaderLease historyRelayLeaderLease, HistoryOutboxProperties outboxProperties,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new HistoryOutboxRelay(dataSource, jetStream, historyRelayLeaderLease, outboxProperties, metrics, ENGINE_ID);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DataSource.class)
+    public HistoryOutboxRelayScheduler historyOutboxRelayScheduler(HistoryOutboxRelay historyOutboxRelay,
+            HistoryOutboxProperties outboxProperties) {
+        return new HistoryOutboxRelayScheduler(historyOutboxRelay, outboxProperties.getRelayCyclePeriodSeconds(), ENGINE_ID);
+    }
+
+    /** Requires {@link ClassCutoverStateRegistry}, which is itself gated on a DataSource bean. */
+    @Bean
+    @ConditionalOnBean(DataSource.class)
+    public ProcessEnginePlugin historyProcessEnginePlugin(ClassCutoverStateRegistry cutoverStateRegistry,
+            HistoryClassificationProperties classification,
+            @Autowired(required = false) CompactHistoryOutboxWriter outboxWriter,
+            HistoryPostCommitPublisher postCommitPublisher) {
+        return new AbstractProcessEnginePlugin() {
+            @Override
+            public void preInit(ProcessEngineConfigurationImpl configuration) {
+                HistoryBootstrapValidator.validate(configuration, classification, ENGINE_ID);
+                NatsHistoryEventHandler handler = new NatsHistoryEventHandler(cutoverStateRegistry, classification,
+                        outboxWriter, postCommitPublisher, new DbHistoryEventHandler(), ENGINE_ID);
+                // enableDefaultDbHistoryEventHandler ALWAYS false -- our composite owns its own
+                // internalDbDelegate (01_overview.md "Phase3'ün devrettiği doğrulamalar #1").
+                configuration.setEnableDefaultDbHistoryEventHandler(false);
+                List<HistoryEventHandler> customHandlers = new ArrayList<>(configuration.getCustomHistoryEventHandlers());
+                customHandlers.add(handler);
+                configuration.setCustomHistoryEventHandlers(customHandlers);
+            }
+        };
+    }
+
+    private static String resolveNodeId() {
+        try {
+            return InetAddress.getLocalHost().getHostName();
+        } catch (UnknownHostException e) {
+            return "node-" + UUID.randomUUID();
+        }
     }
 }

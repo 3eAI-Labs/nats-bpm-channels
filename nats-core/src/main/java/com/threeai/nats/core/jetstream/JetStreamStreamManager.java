@@ -11,6 +11,7 @@ import io.nats.client.JetStreamManagement;
 import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
+import io.nats.client.api.SubjectTransform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -76,6 +77,18 @@ public class JetStreamStreamManager {
      */
     public void ensureStream(String streamName, String subject, Connection connection, Duration maxAge,
             RetentionPolicy retentionPolicy) {
+        ensureStream(streamName, subject, connection, maxAge, retentionPolicy, null);
+    }
+
+    /**
+     * @param subjectTransform basamak-2 subject-mapped partitioning (ARCH-Q3/LLD-Q2,
+     *                         {@link com.threeai.nats.core.jetstream.JetStreamSubjectPartitioner}) —
+     *                         {@code null} = no transform (basamak-1 default, unchanged). Ignored
+     *                         if the stream already exists — existing streams are never
+     *                         reconfigured here.
+     */
+    public void ensureStream(String streamName, String subject, Connection connection, Duration maxAge,
+            RetentionPolicy retentionPolicy, SubjectTransform subjectTransform) {
         try {
             JetStreamManagement jsm = connection.jetStreamManagement();
             try {
@@ -92,10 +105,14 @@ public class JetStreamStreamManager {
                     if (maxAge != null && !maxAge.isZero()) {
                         configBuilder.maxAge(maxAge);
                     }
+                    if (subjectTransform != null) {
+                        configBuilder.subjectTransform(subjectTransform);
+                    }
                     jsm.addStream(configBuilder.build());
                     log.info("Stream created", kv("stream", streamName), kv("subject", subject),
                             kv("retention_policy", resolvedRetention),
-                            kv("max_age_seconds", maxAge != null ? maxAge.toSeconds() : null));
+                            kv("max_age_seconds", maxAge != null ? maxAge.toSeconds() : null),
+                            kv("subject_transform", subjectTransform != null));
                 } else {
                     throw new IllegalStateException("Failed to check stream '" + streamName + "'", e);
                 }

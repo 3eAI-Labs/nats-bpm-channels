@@ -212,6 +212,20 @@ components:
         X-Cadenzaflow-History-Process-Instance-Id:
           type: string
           description: Process-instance id (PSEUDONYMOUS; partition/sıra anahtarı).
+        X-Cadenzaflow-History-Event-Time:
+          type: string
+          description: >
+            Motorun GERÇEK history-event zaman damgası (INTERNAL; NOT ingest/consume zamanı) —
+            epoch-millis (UTC, string-encoded uzun tamsayı, ör. "1737331200000"). Append-log
+            dedup unique-key bileşeni, range-partition ANCHOR'ı (PARTITION BY RANGE(event_time))
+            ve PK bileşeni olan projeksiyon `event_time` kolonunu doldurur — consumer'ın kendi
+            saatiyle (`Instant.now()`) DOLDURULMAZ (FINDING-001, faz-5 review, Levent kararı
+            2026-07-20). Hem audit-kritik (compact_history_outbox → relay) hem bulk
+            (post-commit publish) yolunda taşınır; motor tarafında zaten hesaplı olan
+            {@code HistoryEvent} zaman alanından türetilir (sınıfa göre timestamp/endTime/
+            createTime — bkz. `HistoryEventFieldExtractor.eventTimeOf`). Epoch-millis seçildi
+            (ISO-8601 değil): tek bir `Long.parseLong` ile ayrıştırılır, saat dilimi/format
+            belirsizliği taşımaz, mevcut header'ların hepsi gibi düz string.
         X-Cadenzaflow-Trace-Id:
           type: string
           description: Dağıtık izleme kimliği (PSEUDONYMOUS; devralınan). Okuma X-Trace-Id fallback (basamak-1 FR-C7).
@@ -228,6 +242,7 @@ components:
         - X-Cadenzaflow-History-Event-Type
         - X-Cadenzaflow-History-Event-Id
         - X-Cadenzaflow-History-Process-Instance-Id
+        - X-Cadenzaflow-History-Event-Time
 
     HistoryDlqHeaders:
       type: object

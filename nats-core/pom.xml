@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.3eai</groupId>
         <artifactId>nats-channel-parent</artifactId>
-        <version>0.2.0</version>
+        <version>0.3.0</version>
     </parent>
 
     <artifactId>nats-core</artifactId>
@@ -63,6 +63,17 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Basamak-2 SqlMigrationRunnerTest: real Postgres slice test (Testcontainers). -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

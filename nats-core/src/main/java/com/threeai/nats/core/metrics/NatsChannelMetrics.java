@@ -117,4 +117,80 @@ public class NatsChannelMetrics {
         Gauge.builder("nats.a2.sweep.oldest_orphan_age_seconds", ageSecondsSupplier)
                 .tag("topic", topic).register(registry);
     }
+
+    // --- History Offload (basamak-2, 10_metrics.md §1) ---
+
+    public Counter historyOutboxWrittenCount(String historyClass, String engineId) {
+        return Counter.builder("nats.history.outbox.written")
+                .tag("history_class", historyClass).tag("engine_id", engineId).register(registry);
+    }
+
+    public Counter historyOutboxRelayedCount(String historyClass, String outcome) {
+        return Counter.builder("nats.history.outbox.relayed")
+                .tag("history_class", historyClass).tag("outcome", outcome).register(registry);
+    }
+
+    /** {@code SYS_OUTBOX_ROW_STUCK} signal source — updated by {@code HistoryOutboxRelay.checkStuckRows()}. */
+    public void registerHistoryOutboxOldestRowAgeGauge(String engineId, Supplier<Number> ageSecondsSupplier) {
+        Gauge.builder("nats.history.outbox.oldest_row_age_seconds", ageSecondsSupplier)
+                .tag("engine_id", engineId).register(registry);
+    }
+
+    public Counter historyPostCommitPublishedCount(String historyClass) {
+        return Counter.builder("nats.history.postcommit.published")
+                .tag("history_class", historyClass).register(registry);
+    }
+
+    public Counter historyProjectionConsumedCount(String historyClass, String partition) {
+        return Counter.builder("nats.history.projection.consumed")
+                .tag("history_class", historyClass).tag("partition", partition).register(registry);
+    }
+
+    public Counter historyProjectionStaleDiscardedCount(String historyClass) {
+        return Counter.builder("nats.history.projection.stale_discarded")
+                .tag("history_class", historyClass).register(registry);
+    }
+
+    /** NFR-P3 SLI — event-to-query-store lag, p95. */
+    public void registerHistoryProjectionLagGauge(String historyClass, String partition, Supplier<Number> lagSecondsSupplier) {
+        Gauge.builder("nats.history.projection.lag_seconds", lagSecondsSupplier)
+                .tag("history_class", historyClass).tag("partition", partition).register(registry);
+    }
+
+    public Counter historyDlqRoutedCount(String historyClass, String reason) {
+        return Counter.builder("nats.history.dlq.routed")
+                .tag("history_class", historyClass).tag("reason", reason).register(registry);
+    }
+
+    public void registerHistoryReconciliationDiffCountGauge(String historyClass, Supplier<Number> diffCountSupplier) {
+        Gauge.builder("nats.history.reconciliation.diff_count", diffCountSupplier)
+                .tag("history_class", historyClass).register(registry);
+    }
+
+    public void registerHistoryReconciliationCleanStreakGauge(String historyClass, Supplier<Number> streakDaysSupplier) {
+        Gauge.builder("nats.history.reconciliation.clean_streak_days", streakDaysSupplier)
+                .tag("history_class", historyClass).register(registry);
+    }
+
+    /** Enum-encoded cutover state (ordinal of {@code class_cutover_state.state}). */
+    public void registerHistoryCutoverStateGauge(String historyClass, Supplier<Number> stateSupplier) {
+        Gauge.builder("nats.history.cutover.state", stateSupplier)
+                .tag("history_class", historyClass).register(registry);
+    }
+
+    public Counter historyRetentionDeletedRowsCount(String historyClass, String action) {
+        return Counter.builder("nats.history.retention.deleted_rows")
+                .tag("history_class", historyClass).tag("action", action).register(registry);
+    }
+
+    public Counter historyErasureProcessedCount(String historyClass, String action) {
+        return Counter.builder("nats.history.erasure.processed")
+                .tag("history_class", historyClass).tag("action", action).register(registry);
+    }
+
+    /** DP-16 — {@code pseudonym_token}/real value NEVER appear as tag values. */
+    public Counter historyVaultAccessCount(String operation, boolean granted) {
+        return Counter.builder("nats.history.vault.access")
+                .tag("operation", operation).tag("granted", String.valueOf(granted)).register(registry);
+    }
 }
