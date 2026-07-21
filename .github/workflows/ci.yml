@@ -21,4 +21,8 @@ jobs:
           cache: 'maven'
 
       - name: Build and Test
-        run: mvn verify --batch-mode --no-transfer-progress
+        # cadenzaflow-nats-channel'ı ATLA: fork motoru (org.cadenzaflow.bpm:cadenzaflow-engine,
+        # provided) Maven Central'da yok, CI temiz checkout'ta çözülemez. -DskipCadenzaflow parent
+        # pom'daki `cadenzaflow-mirror` profile'ını devre dışı bırakır (bkz. pom.xml <profiles>).
+        # camunda-nats-channel byte-aynası olduğundan davranış CI'da yine kapsanır.
+        run: mvn verify --batch-mode --no-transfer-progress -DskipCadenzaflow

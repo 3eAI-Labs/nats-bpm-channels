@@ -13,11 +13,15 @@
     <description>NATS.io channel adapters for BPM engines: Flowable, Camunda 7, and CadenzaFlow</description>
     <url>https://github.com/3eAI-Labs/nats-bpm-channels</url>
 
+    <!-- cadenzaflow-nats-channel yaprak modüldür (hiçbir modül ona bağımlı değil) ve fork
+         motoruna (org.cadenzaflow.bpm:cadenzaflow-engine, provided) bağımlıdır; bu artifact
+         Maven Central'da YOK, yalnız yerel ~/.m2'de. Bu yüzden cadenzaflow modülü aşağıdaki
+         `cadenzaflow-mirror` profile'ında tutulur (skipCadenzaflow tanımlı DEĞİLKEN aktif).
+         CI (Central-only) `-DskipCadenzaflow` ile onu ATLAR; yerel/tam build tümünü içerir. -->
     <modules>
         <module>nats-core</module>
         <module>flowable-nats-channel</module>
         <module>camunda-nats-channel</module>
-        <module>cadenzaflow-nats-channel</module>
         <module>nats-bpm-bench</module>
         <module>nats-history-projection</module>
     </modules>
@@ -193,6 +197,21 @@
     </build>
 
     <profiles>
+        <!-- cadenzaflow-nats-channel'ı reaktöre ekler. `skipCadenzaflow` özelliği TANIMLI
+             DEĞİLKEN aktiftir (yerel/tam build varsayılanı). CI/Central ortamında fork motoru
+             (cadenzaflow-engine, Central'da yok) çözülemediğinden `mvn ... -DskipCadenzaflow`
+             ile bu profile devre dışı kalır ve modül reaktörden çıkar. -->
+        <profile>
+            <id>cadenzaflow-mirror</id>
+            <activation>
+                <property>
+                    <name>!skipCadenzaflow</name>
+                </property>
+            </activation>
+            <modules>
+                <module>cadenzaflow-nats-channel</module>
+            </modules>
+        </profile>
         <profile>
             <id>release</id>
             <build>

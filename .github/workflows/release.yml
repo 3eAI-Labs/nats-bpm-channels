@@ -24,7 +24,11 @@ jobs:
           gpg-passphrase: GPG_PASSPHRASE
 
       - name: Publish to Maven Central
-        run: mvn deploy --batch-mode --no-transfer-progress -P release -DskipTests
+        # cadenzaflow-nats-channel ATLANIR (-DskipCadenzaflow): fork motoru Maven Central'da
+        # olmadığından hem CI'da çözülemez hem de Central'a yayınlanamaz (tüketici resolve edemez).
+        # Yayınlanabilir artefaktlar: nats-core, flowable/camunda-nats-channel, nats-bpm-bench,
+        # nats-history-projection. (Bu adım ayrıca OSSRH+GPG secret'ları gerektirir — repo settings.)
+        run: mvn deploy --batch-mode --no-transfer-progress -P release -DskipTests -DskipCadenzaflow
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
