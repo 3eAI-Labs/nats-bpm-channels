@@ -43,7 +43,9 @@ public class OutboundBenchScenario implements AutoCloseable {
     private static final String PROCESS_ID = "outboundBenchProcess";
     private static final String ENGINE_ID = "camunda";
     private static final String OUTBOUND_BENCH_DATABASE = "outboundbench";
-    private static final String MESSAGE_NAME = "bench.outbound.message";
+    // Phase-review FINDING-003: underscore-only -- a dotted messageType would fail
+    // OutboundSubjectBuilder's subject-token safety validation.
+    private static final String MESSAGE_NAME = "bench_outbound_message";
 
     private final BenchEnvironment env;
     private final PgStatStatementsSnapshotter snapshotter;

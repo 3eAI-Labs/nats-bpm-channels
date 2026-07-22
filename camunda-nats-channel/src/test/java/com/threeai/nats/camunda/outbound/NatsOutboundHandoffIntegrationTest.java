@@ -90,7 +90,7 @@ class NatsOutboundHandoffIntegrationTest {
                 .build());
 
         OutboundClassificationProperties classification = new OutboundClassificationProperties();
-        classification.setCriticalTypes(Set.of("payment.requested"));
+        classification.setCriticalTypes(Set.of("payment_requested"));
         OutboundMessageOutboxWriter outboxWriter = new OutboundMessageOutboxWriter(null);
         OutboundPostCommitPublisher postCommitPublisher = new OutboundPostCommitPublisher(jetStream, null);
         NatsOutboundPublisher publisher = new NatsOutboundPublisher(classification, outboxWriter, postCommitPublisher, "camunda");
@@ -121,8 +121,8 @@ class NatsOutboundHandoffIntegrationTest {
                         <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
                                      xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
                                      targetNamespace="http://threeai.com/outbound-handoff-test">
-                          <message id="paymentRequestedMessage" name="payment.requested" />
-                          <message id="orderCreatedMessage" name="order.created" />
+                          <message id="paymentRequestedMessage" name="payment_requested" />
+                          <message id="orderCreatedMessage" name="order_created" />
 
                           <process id="criticalOutboundProcess" isExecutable="true" camunda:historyTimeToLive="180">
                             <startEvent id="start" />
@@ -191,11 +191,11 @@ class NatsOutboundHandoffIntegrationTest {
 
         assertThat(countOutboxRows(processInstanceId)).isZero();
 
-        String subject = "events.camunda.payment.requested." + processInstanceId;
+        String subject = "events.camunda.payment_requested." + processInstanceId;
         List<Message> messages = fetchMessages(subject, "OUTBOUND_E2E_TEST");
         assertThat(messages).hasSize(1);
         assertThat(new String(messages.get(0).getData(), java.nio.charset.StandardCharsets.UTF_8))
-                .contains("\"messageType\":\"payment.requested\"").contains("\"processInstanceId\":\"" + processInstanceId + "\"");
+                .contains("\"messageType\":\"payment_requested\"").contains("\"processInstanceId\":\"" + processInstanceId + "\"");
     }
 
     @Test
@@ -207,11 +207,11 @@ class NatsOutboundHandoffIntegrationTest {
         // returns, the top-level command has already committed and the listener has already run.
         assertThat(countOutboxRows(processInstanceId)).isZero();
 
-        String subject = "events.camunda.order.created." + processInstanceId;
+        String subject = "events.camunda.order_created." + processInstanceId;
         List<Message> messages = fetchMessages(subject, "OUTBOUND_E2E_TEST");
         assertThat(messages).hasSize(1);
         assertThat(new String(messages.get(0).getData(), java.nio.charset.StandardCharsets.UTF_8))
-                .contains("\"messageType\":\"order.created\"");
+                .contains("\"messageType\":\"order_created\"");
     }
 
     private static List<Message> fetchMessages(String subject, String streamName) throws Exception {

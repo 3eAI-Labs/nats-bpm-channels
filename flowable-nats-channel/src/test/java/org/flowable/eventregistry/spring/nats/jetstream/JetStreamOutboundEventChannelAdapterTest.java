@@ -18,6 +18,8 @@ import java.util.Map;
 import com.threeai.nats.core.dlq.DlqPublishOutcome;
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.dlq.DlqReason;
+import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.Message;
@@ -112,5 +114,44 @@ class JetStreamOutboundEventChannelAdapterTest {
         assertThatThrownBy(() -> hardenedAdapter.sendEvent("{\"orderId\":123}", Collections.emptyMap()))
                 .isInstanceOf(FlowableException.class)
                 .hasMessageContaining("order.completed");
+    }
+
+    // --- Phase-review FINDING-002 (MINOR — observability): flowableOutbound* metrics wired ---
+
+    @Test
+    void sendEvent_publishSucceeds_incrementsFlowableOutboundPublishedCount() throws Exception {
+        PublishAck ack = mock(PublishAck.class);
+        when(ack.getSeqno()).thenReturn(1L);
+        when(jetStream.publish(any(Message.class))).thenReturn(ack);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        NatsChannelMetrics metrics = new NatsChannelMetrics(registry);
+        JetStreamOutboundEventChannelAdapter metricAdapter = new JetStreamOutboundEventChannelAdapter(
+                jetStream, "order.completed", metrics, "orderChannel");
+
+        metricAdapter.sendEvent("{\"orderId\":123}", Collections.emptyMap());
+
+        assertThat(registry.find("nats.flowable.outbound.published")
+                .tag("subject", "order.completed").tag("channel", "orderChannel").counter().count())
+                .isEqualTo(1.0);
+        assertThat(registry.find("nats.flowable.outbound.dlq_routed").counter()).isNull();
+    }
+
+    @Test
+    void sendEvent_dlqRoutedSuccessfully_incrementsFlowableOutboundDlqRoutedCount_notPublishedCount() throws Exception {
+        when(jetStream.publish(any(Message.class))).thenThrow(new IOException("connection lost"));
+        DlqPublisher dlqPublisher = mock(DlqPublisher.class);
+        when(dlqPublisher.publish(any(Message.class), anyString(), any(DlqReason.class), anyString(), anyString()))
+                .thenReturn(DlqPublishOutcome.PUBLISHED_JETSTREAM);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        NatsChannelMetrics metrics = new NatsChannelMetrics(registry);
+        JetStreamOutboundEventChannelAdapter metricAdapter = new JetStreamOutboundEventChannelAdapter(
+                jetStream, "order.completed", metrics, "orderChannel", dlqPublisher, "dlq.order.completed");
+
+        metricAdapter.sendEvent("{\"orderId\":123}", Collections.emptyMap());
+
+        assertThat(registry.find("nats.flowable.outbound.dlq_routed")
+                .tag("subject", "order.completed").tag("channel", "orderChannel").counter().count())
+                .isEqualTo(1.0);
+        assertThat(registry.find("nats.flowable.outbound.published").counter()).isNull();
     }
 }

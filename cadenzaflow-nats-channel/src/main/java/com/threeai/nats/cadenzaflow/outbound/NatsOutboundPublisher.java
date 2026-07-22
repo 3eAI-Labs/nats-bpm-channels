@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.threeai.nats.core.exception.InvalidOutboundMessageTypeException;
 import com.threeai.nats.core.outbound.OutboundClassification;
 import com.threeai.nats.core.outbound.OutboundClassificationProperties;
 import com.threeai.nats.core.outbound.OutboundMessageDraft;
@@ -80,7 +81,20 @@ public class NatsOutboundPublisher implements ExecutionListener {
         String processInstanceId = execution.getProcessInstanceId();
         String businessKey = execution.getProcessBusinessKey();
         String traceId = UUID.randomUUID().toString();
-        String subject = OutboundSubjectBuilder.build(engineId, type, processInstanceId);
+        String subject;
+        try {
+            subject = OutboundSubjectBuilder.build(engineId, type, processInstanceId);
+        } catch (InvalidOutboundMessageTypeException e) {
+            // Phase-review FINDING-003 (MINOR) -- an unsafe messageType (contains '.', '*', '>',
+            // or whitespace) would otherwise silently build a malformed/wildcard-colliding
+            // subject. Fail-safe skip (same VAL_-consistent pattern as the unsupported-element
+            // branch above) -- messageType itself is not PII (a tenant business identifier), safe
+            // to log; no variable/business-key content is ever included.
+            log.warn("Outbound message type failed subject-token validation — publish skipped",
+                    kv("message_type", type), kv("process_instance_id", processInstanceId),
+                    kv("code", e.getCode()));
+            return;
+        }
 
         Map<String, Object> variables = captureAllowlistedVariables(execution, classification.variableAllowlistFor(type));
         byte[] payload = OutboundWireMessageFactory.buildPayload(engineId, type, processInstanceId, businessKey, variables);

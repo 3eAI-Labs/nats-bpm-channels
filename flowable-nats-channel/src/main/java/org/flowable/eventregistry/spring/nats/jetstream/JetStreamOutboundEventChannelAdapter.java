@@ -64,6 +64,9 @@ public class JetStreamOutboundEventChannelAdapter implements OutboundEventChanne
             PublishAck ack = jetStream.publish(message);
             if (metrics != null) {
                 metrics.jsPublishCount(subject, channelKey).increment();
+                // Phase-review FINDING-002: generic D-G' publish-outcome metric shared by both
+                // Flowable outbound adapters (jsPublishCount above is JetStream-specific/pre-existing).
+                metrics.flowableOutboundPublishedCount(subject, channelKey).increment();
             }
             log.debug("Published to JetStream",
                     kv("channel", channelKey),
@@ -94,6 +97,9 @@ public class JetStreamOutboundEventChannelAdapter implements OutboundEventChanne
         if (routed) {
             log.warn("Outbound JetStream publish failed — message custody-transferred to DLQ",
                     kv("channel", channelKey), kv("subject", subject), kv("dlq_subject", dlqSubject));
+            if (metrics != null) {
+                metrics.flowableOutboundDlqRoutedCount(subject, channelKey).increment();
+            }
         }
         return routed;
     }

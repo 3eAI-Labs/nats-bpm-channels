@@ -153,7 +153,7 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
 
         String dlqSubject = resolveDlqSubject(model);
         NatsOutboundEventChannelAdapter adapter = new NatsOutboundEventChannelAdapter(
-                connection, model.getSubject(), model.getKey(), dlqPublisher, dlqSubject);
+                connection, model.getSubject(), model.getKey(), dlqPublisher, dlqSubject, metrics);
         model.setOutboundEventChannelAdapter(adapter);
     }
 

@@ -9,6 +9,7 @@ import com.threeai.nats.core.NatsHeaderUtils;
 import com.threeai.nats.core.dlq.DlqPublishOutcome;
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.dlq.DlqReason;
+import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
 import io.nats.client.impl.NatsMessage;
 import org.flowable.common.engine.api.FlowableException;
@@ -47,18 +48,28 @@ public class NatsOutboundEventChannelAdapter implements OutboundEventChannelAdap
     private final String channelKey;
     private final DlqPublisher dlqPublisher;
     private final String dlqSubject;
+    private final NatsChannelMetrics metrics;
 
     public NatsOutboundEventChannelAdapter(Connection connection, String subject) {
-        this(connection, subject, subject, null, null);
+        this(connection, subject, subject, null, null, null);
     }
 
     public NatsOutboundEventChannelAdapter(Connection connection, String subject, String channelKey,
             DlqPublisher dlqPublisher, String dlqSubject) {
+        this(connection, subject, channelKey, dlqPublisher, dlqSubject, null);
+    }
+
+    /** Phase-review FINDING-002: {@code metrics} wires {@code flowableOutboundPublishedCount}/
+     *  {@code flowableOutboundDlqRoutedCount} (both nullable-safe, matching the rest of this module's
+     *  {@code @Autowired(required = false) NatsChannelMetrics} convention). */
+    public NatsOutboundEventChannelAdapter(Connection connection, String subject, String channelKey,
+            DlqPublisher dlqPublisher, String dlqSubject, NatsChannelMetrics metrics) {
         this.connection = connection;
         this.subject = subject;
         this.channelKey = channelKey;
         this.dlqPublisher = dlqPublisher;
         this.dlqSubject = dlqSubject;
+        this.metrics = metrics;
     }
 
     @Override
@@ -83,6 +94,9 @@ public class NatsOutboundEventChannelAdapter implements OutboundEventChannelAdap
         }
         try {
             connection.publish(message);
+            if (metrics != null) {
+                metrics.flowableOutboundPublishedCount(subject, channelKey).increment();
+            }
         } catch (Exception e) {
             log.error("Core NATS publish failed", kv("subject", subject), e);
             if (dlqPublisher != null && routeToDlq(message)) {
@@ -101,6 +115,9 @@ public class NatsOutboundEventChannelAdapter implements OutboundEventChannelAdap
         if (routed) {
             log.warn("Outbound core-NATS publish failed — message custody-transferred to DLQ",
                     kv("subject", subject), kv("dlq_subject", dlqSubject));
+            if (metrics != null) {
+                metrics.flowableOutboundDlqRoutedCount(subject, channelKey).increment();
+            }
         }
         return routed;
     }

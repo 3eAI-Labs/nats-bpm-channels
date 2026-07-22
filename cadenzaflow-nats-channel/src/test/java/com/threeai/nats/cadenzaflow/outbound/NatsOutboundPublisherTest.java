@@ -101,13 +101,13 @@ class NatsOutboundPublisherTest {
         DelegateExecution execution = mock(DelegateExecution.class);
         SendTask sendTask = mock(SendTask.class);
         Message message = mock(Message.class);
-        when(message.getName()).thenReturn("payment.requested");
+        when(message.getName()).thenReturn("payment_requested");
         when(sendTask.getMessage()).thenReturn(message);
         when(execution.getBpmnModelElementInstance()).thenReturn(sendTask);
         when(execution.getProcessInstanceId()).thenReturn("proc-1");
 
         OutboundClassificationProperties classification = new OutboundClassificationProperties();
-        classification.setCriticalTypes(Set.of("payment.requested"));
+        classification.setCriticalTypes(Set.of("payment_requested"));
         OutboundPostCommitPublisher postCommitPublisher = mock(OutboundPostCommitPublisher.class);
         // outboxWriter == null -- DataSource-less deployment (auto-config gating, see class Javadoc).
         NatsOutboundPublisher publisher = new NatsOutboundPublisher(classification, null, postCommitPublisher, "camunda");
@@ -116,8 +116,31 @@ class NatsOutboundPublisherTest {
         // unit-testable without mocking CadenzaFlow's static command-context machinery.
         assertThatThrownBy(() -> publisher.notify(execution))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("payment.requested")
+                .hasMessageContaining("payment_requested")
                 .hasMessageContaining("CRITICAL");
         verifyNoInteractions(postCommitPublisher);
+    }
+
+    // --- Phase-review FINDING-003 (MINOR — messageType subject-token safety) ---
+
+    @Test
+    void notify_messageTypeUnsafeForSubjectToken_skipsPublish_doesNotThrow_neverTouchesWriterOrPublisher() throws Exception {
+        DelegateExecution execution = mock(DelegateExecution.class);
+        SendTask sendTask = mock(SendTask.class);
+        Message message = mock(Message.class);
+        when(message.getName()).thenReturn("payment.requested"); // dotted -- unsafe subject token
+        when(sendTask.getMessage()).thenReturn(message);
+        when(execution.getBpmnModelElementInstance()).thenReturn(sendTask);
+        when(execution.getProcessInstanceId()).thenReturn("proc-1");
+
+        OutboundClassificationProperties classification = new OutboundClassificationProperties();
+        OutboundMessageOutboxWriter outboxWriter = mock(OutboundMessageOutboxWriter.class);
+        OutboundPostCommitPublisher postCommitPublisher = mock(OutboundPostCommitPublisher.class);
+        NatsOutboundPublisher publisher =
+                new NatsOutboundPublisher(classification, outboxWriter, postCommitPublisher, "camunda");
+
+        // This branch also returns BEFORE ever touching Context.getCommandContext().
+        assertThatCode(() -> publisher.notify(execution)).doesNotThrowAnyException();
+        verifyNoInteractions(outboxWriter, postCommitPublisher);
     }
 }
