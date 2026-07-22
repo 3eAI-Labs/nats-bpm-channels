@@ -174,11 +174,15 @@ phase1 VISION = "max DB-offload on existing engine". Derinlik (D1) phase1'de net
 | **1** | **Dispatch push** (external-task polling → NATS push) | fetchAndLock + acquire-lock | SPI/channel | düşük | — |
 | **2** | **History offload** (custom `HistoryEventHandler` → NATS → async query-store) | `ACT_HI_*` (en büyük hacim) | SPI | orta (fork doğrula §10) | — |
 | **3** | **Büyük değişken externalization** (Object Store/KV + referans) | `ACT_RU_VARIABLE`/`ACT_HI_DETAIL` hacmi | SPI | düşük-orta | — |
-| **4** | **Outbound handoff** (önce post-commit/handoff → sonra log-projeksiyon) | dual-write riski | SPI→core | orta | **burada yaşar; 6'da çözülür** |
-| **5** | **DB sharding + NATS router** (N engine+DB, business-key route) | completion-lock **contention domeni** | app-level | orta | — |
+| **4** | **Outbound handoff** (önce post-commit/handoff → sonra log-projeksiyon) | dual-write riski | SPI→core | orta | **burada yaşar; 6'da çözülür** ✅ **v0.5.0** |
+| **5** | **DB sharding + NATS router** (N engine+DB, business-key route) | completion-lock **contention domeni** | app-level | orta | ⏸️ **TALEP-GÜDÜMLÜ (karar 2026-07-22)** |
 | **6** | **State/completion core** (fork-modify: state-transition'lar log'a, single-writer) | **token-move transaction'ın kendisi** | **fork core** | **yüksek** | **burada buharlaşır** |
 
-Basamak 1–5 **pişmanlıksız**: çoğu SPI/çevresel, motoru gutting etmeden ciddi DB yükü kaldırır (2-history devasa), sürekli ship edilir.
+> **Sürüm izi:** basamak 1 v0.2.0 ✅ · 2 v0.3.0 ✅ · 3 v0.4.0 ✅ · 4 v0.5.0 ✅ (hepsi GitHub'da; Maven Central publish OSSRH+GPG secret bekliyor).
+
+**Basamak-5 = TALEP-GÜDÜMLÜ opsiyonel scale-out (KARAR 2026-07-22).** Gerekçe: bu bir **açık-kaynak kütüphane** (herkes farklı amaçla kullanır; bottleneck bilinmez). Basamak 1–4 evrensel/opt-in/şeffaf DB-offload — adopte eden herkese, bottleneck'inden bağımsız fayda eder ve NATS-taşınmış işler NATS/JetStream ile ölçeklenir. Basamak-5 ise **NATS işlerini hızlandırmaz**; yalnız basamak-1-4 sonrası DB'de kalan token-move/completion **contention'ını** ~lineer shard'lar (N engine+DB, cross-shard router). Bu **deployment-topolojisi/ops kalıbıdır**, kütüphane-özelliği değil — kullanıcıların çoğunluğu tek engine+DB koşar ve gerek duymaz. Bu yüzden **zorunlu bir halka DEĞİL, talep gelince (gerçek kullanıcı token-move DB-tavanını aştığında) yapılacak/değerlendirilecek opsiyonel bir kalıp.** Kütüphane kullanıcıya kendi bottleneck'ini ölçme aracını zaten veriyor (per-basamak SLI/metrik + `nats-bpm-bench`). Signal/escalation cross-shard propagasyonu da (basamak-4'te kapsam-dışı bırakıldı) bu talep-güdümlü router işine bağlıdır.
+
+Basamak 1–4 **pişmanlıksız**: çoğu SPI/çevresel, motoru gutting etmeden ciddi DB yükü kaldırır (2-history devasa), sürekli ship edilir. Basamak-5 talep-güdümlü (yukarı); basamak-6 ayrı bahis (native motor).
 
 **Başlangıç sırası — KARAR (2026-06-21): dispatch (1) önce.** Gerekçe ("vurucu" değil, kritik-yol):
 - **Bağımlılıksız + contract-kurucu:** Dispatch ortak wire-contract'ı (§7) kurar; sonraki her basamak onu yeniden kullanır (P5). History bir query-store + fork doğrulaması (§10) bekler → bağımlılık taşır.
