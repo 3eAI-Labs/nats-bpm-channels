@@ -4,6 +4,50 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.5.0] — 2026-07-22 — Basamak-4: Outbound Handoff
+
+Sentinel-governed lean track (evidence-first design doc `docs/09-outbound-handoff.md`
+with 6 locked decisions D-A'..D-G'; direct implementation + one consolidated fresh-context review
+`docs/sentinel/step4/PHASE_REVIEW.md`). Additive, pure-SPI, no fork change.
+
+### Added
+
+- **Outbound message handoff (BPMN message-throw + send-task)** — `NatsOutboundPublisher`, a shared
+  `ExecutionListener` (D-A', the transactionally-safe successor to the deleted outbound
+  JavaDelegates) that a tenant wires via `camunda:executionListener event="end"
+  delegateExpression="${natsOutboundPublisher}"`. It classifies the message and either writes a
+  tx-local outbox row (critical) or registers a post-commit publish (best-effort) — it never
+  publishes inline, so the engine command critical path is never blocked. The `ExecutionListener ->
+  Context.getCommandContext()` seam was fork-source + end-to-end verified (D-A' foundation).
+- **Critical outbound = at-least-once** — `outbound_message_outbox` (tx-local) + `OutboundMessageRelay`
+  (leader-elected via basamak-1 `SweepLeaderLease`, PubAck-after-delete custody-transfer),
+  transplanting basamak-2's compact-outbox+relay pattern (D-C'/D-F'). Best-effort = post-commit
+  at-most-once (3rd reuse of the post-commit `TransactionListener` pattern).
+- **Outbound wire contract** — subject `events.<engineId>.<type>.<processInstanceId>` (instance-keyed,
+  ordered; D-E'), `events.*`/`dlq.events.*` reserved in the namespace guard (`jobs.*` stays A2's).
+  `messageType` is validated against `^[A-Za-z0-9_-]+$` so a tenant type can never build a
+  malformed/wildcard subject (review FINDING-003).
+- **Config-split criticality** — `OutboundClassificationProperties` (tenant marks message types
+  critical vs best-effort; default empty = best-effort, since outbound types are fully
+  tenant-defined) (D-C').
+- **Flowable outbound hardening (D-G')** — `NatsOutboundEventChannelAdapter` /
+  `JetStreamOutboundEventChannelAdapter` gain DLQ custody on publish failure + outbound metrics
+  wiring + `events.*` namespace-guard integration.
+- **`nats-bpm-bench`** outbound DB-write-op scenario (best-effort = 0 extra writes, critical = ≤1
+  row/tx).
+- Scope note: Signal/Escalation throws are **out of scope** (engine-internal, DB-local); their
+  cross-shard propagation belongs to basamak-5. `nats-core` gains an engine-neutral `outbound`
+  package (`OutboundMessageOutboxWriter`/`OutboundMessageRelay`/`OutboundPostCommitPublisher` live
+  once, only `NatsOutboundPublisher`/`OutboundMessageTypeResolver` are engine-mirrored).
+
+### Known limitations
+
+- **Flowable critical outbound is DLQ-on-failure only, not outbox-backed at-least-once**
+  (review FINDING-001, written-acknowledged): within the locked D-G' scope ("harden" = DLQ);
+  full Flowable at-least-once outbox is tracked debt, pending verification of whether Flowable's
+  `sendEvent` runs inside the engine command transaction (Flowable engine source not available in
+  this workspace). Camunda/CadenzaFlow critical outbound **does** retain at-least-once (outbox+relay).
+
 ## [0.4.0] — 2026-07-22 — Basamak-3: Large Variable Externalization
 
 Sentinel-governed lean track (evidence-first design doc `docs/08-large-variable-externalization.md`
