@@ -75,3 +75,18 @@
 | `DlqPublisher` (nats-core, motor-agnostik) | Aynen — DLQ yolu |
 | Wire-contract (`BpmHeaders`, subject aile deseni) | `events.<engineId>.<type>.<processInstanceId>` (basamak-2 history subject izdüşümü) |
 | Ayna disiplini (camunda↔cadenzaflow byte-ayna) | Aynen — outbound sınıfları da aynalanır |
+
+---
+
+## 6. Yalın-yol implementasyon + konsolide review kapanışı (2026-07-22)
+
+Basamak-4 "hızlı" yalın yürütüldü (phase1/3/4 atlandı; bu belge SPEC). Implementasyon 6 commit (`db49832`…`2499014`). **ADIM-0 (D-A' dikiş-temeli) TUTTU + çift-doğrulandı:** ExecutionListener.notify non-null CommandContext ile koşar (`CommandContextInterceptor` set-before/remove-finally; `AbstractEventAtomicOperation:59` aynı call-frame) + gerçek-engine integration testi. docs/09 §2.2 ⚠️ ve §4#2 (EndEvent extends ThrowEvent) kapandı. TEK konsolide fresh-context review (`docs/sentinel/step4/PHASE_REVIEW.md`): 🔴0 🟠1 🟡2 🟢2; ADIM-0 + 778/778 regresyon + güvenlik bağımsız teyitli. Kapanış:
+
+| Bulgu | Karar/Kapanış |
+|---|---|
+| 🟠 **F-001** Flowable outbound (D-G') yalnız-DLQ, outbox yok → Camunda kritik-yolunun at-least-once garantisiyle asimetri | **YAZILI ACK (bilinen sınırlama):** kilitli D-G' kapsamı zaten "sağlamlaştırma=DLQ" (tam outbox-destekli at-least-once değil; 4b-erteleme reddedilmişti). Flowable kritik-outbound'un Camunda ile eşit dual-write garantisi, Flowable engine-source tx-boundary teyidini (§4#3; kaynak lokalde yok) önkoşul kılar. İzlenen borç; Camunda/CadenzaFlow kritik-outbound at-least-once GARANTİLİ (outbox+relay). |
+| 🟡 **F-002** Flowable outbound metrikleri bağlanmamış | **DÜZELTİLDİ** (`2499014`): `flowableOutboundPublishedCount`/`DlqRoutedCount` publish-success/DLQ-route noktalarına bağlandı (subject/channelKey etiketi, düşük-kardinalite korundu). |
+| 🟡 **F-003** messageType NATS subject-token'larına karşı doğrulanmıyor (bozuk/wildcard subject riski) | **DÜZELTİLDİ** (`2499014`): `OutboundSubjectBuilder` messageType'ı `^[A-Za-z0-9_-]+$`'e doğrular (`VAL_OUTBOUND_MESSAGE_TYPE_INVALID`); `.`/`*`/`>`/whitespace RED, publisher fail-safe skip+WARN (PII'siz). Noktalı örnekler (order.created→order_created vb.) düzeltildi. Test 18/18. |
+| 🟢 **F-004/F-005** traceId taze-UUID (basamak-1 emsali, regresyon değil) + integration-test rollback-assert yok (atomiklik yapısal) | **İZLENİR** (NIT, aksiyon yok). |
+
+**Güvenlik (review):** TEMİZ — dinamik-SQL yok (sabit-identifier+parametreli; tek interpolasyon BATCH_SIZE int); DP-1 PII-log yok (subject/type/id/hash); `events.*`/`dlq.events.*` namespace-guard'a eklendi, `jobs.*` A2-rezerve dokunulmadı; ayna byte-özdeş. **Reactor 778/778.**
