@@ -25,6 +25,7 @@ import com.threeai.nats.camunda.history.HistoryOutboxRelay;
 import com.threeai.nats.camunda.history.HistoryOutboxRelayScheduler;
 import com.threeai.nats.camunda.history.HistoryPostCommitPublisher;
 import com.threeai.nats.camunda.history.NatsHistoryEventHandler;
+import com.threeai.nats.camunda.outbound.NatsOutboundPublisher;
 import com.threeai.nats.camunda.variable.LargeVariableExternalizationSweep;
 import com.threeai.nats.camunda.variable.LargeVariablePostCommitExternalizer;
 import com.threeai.nats.camunda.variable.LargeVariableSerializer;
@@ -41,6 +42,12 @@ import com.threeai.nats.core.largepayload.LargeVariableExternalizationProperties
 import com.threeai.nats.core.largepayload.LargeVariableProjectionDataSourceProperties;
 import com.threeai.nats.core.largepayload.LargeVariableSerializerNames;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import com.threeai.nats.core.outbound.OutboundClassificationProperties;
+import com.threeai.nats.core.outbound.OutboundMessageOutboxProperties;
+import com.threeai.nats.core.outbound.OutboundMessageOutboxWriter;
+import com.threeai.nats.core.outbound.OutboundMessageRelay;
+import com.threeai.nats.core.outbound.OutboundMessageRelayScheduler;
+import com.threeai.nats.core.outbound.OutboundPostCommitPublisher;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
@@ -71,12 +78,14 @@ import org.springframework.core.env.Environment;
 @EnableConfigurationProperties({NatsProperties.class, CamundaNatsProperties.class, A2Properties.class,
         HistoryClassificationProperties.class, HistoryOutboxProperties.class,
         com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties.class,
-        LargeVariableExternalizationProperties.class, LargeVariableProjectionDataSourceProperties.class})
+        LargeVariableExternalizationProperties.class, LargeVariableProjectionDataSourceProperties.class,
+        OutboundClassificationProperties.class, OutboundMessageOutboxProperties.class})
 public class CamundaNatsAutoConfiguration {
 
     private static final String ENGINE_ID = "camunda";
     private static final String RELAY_LEADER_BUCKET = "history-relay-leader";
     private static final String LARGE_VARIABLE_LEADER_BUCKET = "large-variable-sweep-leader";
+    private static final String OUTBOUND_RELAY_LEADER_BUCKET = "outbound-relay-leader";
     private static final String RELAY_LEADER_KEY_PREFIX = "relay-leader.";
     private static final String CUTOVER_STATE_BUCKET = "history-cutover-state";
 
@@ -424,6 +433,80 @@ public class CamundaNatsAutoConfiguration {
             LargeVariableExternalizationProperties properties) {
         return new LargeVariableExternalizationSweep(dataSource, largeVariableSweepLeaderLease,
                 largeVariablePostCommitExternalizer, largeVariablePayloadStore, properties, ENGINE_ID);
+    }
+
+    // --- Outbound Handoff (basamak-4) ---
+
+    /**
+     * ALWAYS available (no {@code @ConditionalOnBean(DataSource.class)}) — unlike {@code
+     * CompactHistoryOutboxWriter}, {@code OutboundMessageOutboxWriter} takes the live engine
+     * transaction {@link Connection} as a per-call PARAMETER (resolved via {@code
+     * Context.getCommandContext()} at {@code notify()} time), not a Spring-managed {@code
+     * DataSource} field — so this bean itself never needs one. It is still only USEFUL when a
+     * relay drains the table it writes into, which is why {@code natsOutboundPublisher} (below)
+     * only wires it when the relay's own {@code DataSource} gate is also satisfied — see that
+     * bean's Javadoc CODER-NOTE.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public OutboundMessageOutboxWriter outboundMessageOutboxWriter(
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new OutboundMessageOutboxWriter(metrics);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public OutboundPostCommitPublisher outboundPostCommitPublisher(JetStream jetStream,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new OutboundPostCommitPublisher(jetStream, metrics);
+    }
+
+    /**
+     * D-A' — tenant BPMN references this bean via {@code delegateExpression="${natsOutboundPublisher}"}
+     * on a message-throw event or send-task (opt-in: a tenant that never adds the extension element
+     * simply never invokes this listener). {@code outboxWriter} is deliberately passed as {@code
+     * null} when no engine {@link DataSource} bean is present (CODER-NOTE, class Javadoc) — kept in
+     * lock-step with {@link #outboundMessageRelay} so a writer never exists without a relay to
+     * drain it (operational hazard avoidance); {@link NatsOutboundPublisher} fails loudly rather
+     * than silently downgrading if a CRITICAL-classified type is ever dispatched in that state.
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "natsOutboundPublisher")
+    public NatsOutboundPublisher natsOutboundPublisher(OutboundClassificationProperties classification,
+            OutboundPostCommitPublisher postCommitPublisher,
+            @Autowired(required = false) OutboundMessageOutboxWriter outboundMessageOutboxWriter,
+            @Autowired(required = false) DataSource dataSource) {
+        OutboundMessageOutboxWriter outboxWriter = dataSource != null ? outboundMessageOutboxWriter : null;
+        return new NatsOutboundPublisher(classification, outboxWriter, postCommitPublisher, ENGINE_ID);
+    }
+
+    /** Ensures {@code outbound-relay-leader} — separate bucket/key namespace from the other leases. */
+    @Bean
+    @ConditionalOnMissingBean(name = "outboundRelayLeaderLease")
+    @ConditionalOnBean(DataSource.class)
+    public SweepLeaderLease outboundRelayLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
+            Connection connection, OutboundMessageOutboxProperties outboxProperties) {
+        Duration ttl = Duration.ofSeconds(2 * outboxProperties.getRelayCyclePeriodSeconds());
+        kvManager.ensureBucket(OUTBOUND_RELAY_LEADER_BUCKET, ttl, 3, connection);
+        return new SweepLeaderLease(jetStream, kvManager, connection, OUTBOUND_RELAY_LEADER_BUCKET,
+                RELAY_LEADER_KEY_PREFIX, ENGINE_ID, resolveNodeId(), ttl);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DataSource.class)
+    public OutboundMessageRelay outboundMessageRelay(DataSource dataSource, JetStream jetStream,
+            SweepLeaderLease outboundRelayLeaderLease, OutboundMessageOutboxProperties outboxProperties,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new OutboundMessageRelay(dataSource, jetStream, outboundRelayLeaderLease, outboxProperties, metrics, ENGINE_ID);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DataSource.class)
+    public OutboundMessageRelayScheduler outboundMessageRelayScheduler(OutboundMessageRelay outboundMessageRelay,
+            OutboundMessageOutboxProperties outboxProperties) {
+        return new OutboundMessageRelayScheduler(outboundMessageRelay, outboxProperties.getRelayCyclePeriodSeconds(), ENGINE_ID);
     }
 
     private static String resolveNodeId() {
