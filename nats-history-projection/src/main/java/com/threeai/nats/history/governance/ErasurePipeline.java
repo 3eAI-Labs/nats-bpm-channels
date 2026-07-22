@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 
 import com.threeai.nats.core.history.HistoryClassNames;
 import com.threeai.nats.core.history.exception.ErasureVerificationFailedException;
+import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
 import com.threeai.nats.history.governance.ScopeResolution.CandidateInstance;
 import com.threeai.nats.history.projection.ProjectionStore;
 import com.threeai.nats.history.query.HistoryQueryApi;
@@ -62,6 +63,7 @@ public class ErasurePipeline {
     private final ErasureScopeResolver scopeResolver;
     private final ErasureAuditLogger auditLogger;
     private final HistoryQueryApi verificationQuery;
+    private final ContentAddressedLargePayloadStore largePayloadStore;
 
     public ErasurePipeline(DataSource projectionDataSource, ErasureScopeResolver scopeResolver,
             ErasureAuditLogger auditLogger, HistoryQueryApi verificationQuery) {
@@ -69,6 +71,7 @@ public class ErasurePipeline {
         this.scopeResolver = scopeResolver;
         this.auditLogger = auditLogger;
         this.verificationQuery = verificationQuery;
+        this.largePayloadStore = new ContentAddressedLargePayloadStore(projectionDataSource);
     }
 
     public ErasureRequestOutcome requestErasure(String subjectKey, ErasureTargetScope scope) {
@@ -152,11 +155,17 @@ public class ErasurePipeline {
         return ids;
     }
 
-    private void deleteLargePayloads(List<UUID> payloadIds) throws SQLException {
-        try (Connection connection = projectionDataSource.getConnection();
-             PreparedStatement stmt = connection.prepareStatement("DELETE FROM projection_large_payload WHERE id = ANY(?)")) {
-            stmt.setArray(1, connection.createArrayOf("UUID", payloadIds.toArray()));
-            stmt.executeUpdate();
+    /**
+     * basamak-3 D-F': releases (rather than unconditionally hard-deletes) each large-payload
+     * reference — {@code projection_large_payload} is now content-addressed/dedup'd (D-B'/D-D'),
+     * so ANOTHER still-live referrer (e.g. a byte-identical RUNTIME variable value elsewhere, or
+     * the SAME content attached to a different {@code EXT_TASK_LOG}/{@code ATTACHMENT} row) may
+     * legitimately still need the row; {@link ContentAddressedLargePayloadStore#releaseReference}
+     * only physically deletes once the reference count reaches zero.
+     */
+    private void deleteLargePayloads(List<UUID> payloadIds) {
+        for (UUID payloadId : payloadIds) {
+            largePayloadStore.releaseReference(payloadId);
         }
     }
 

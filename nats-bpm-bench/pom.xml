@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.3eai</groupId>
         <artifactId>nats-channel-parent</artifactId>
-        <version>0.3.0</version>
+        <version>0.4.0</version>
     </parent>
     <artifactId>nats-bpm-bench</artifactId>
     <name>NATS BPM Bench</name>
@@ -23,6 +23,14 @@
         <dependency>
             <groupId>com.3eai</groupId>
             <artifactId>camunda-nats-channel</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Basamak-3 LargeVariableBenchScenario: content-addressed projection store (V1/V4
+             migration resources + ContentAddressedLargePayloadStore). No reactor cycle
+             (nats-history-projection depends only on nats-core). -->
+        <dependency>
+            <groupId>com.3eai</groupId>
+            <artifactId>nats-history-projection</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

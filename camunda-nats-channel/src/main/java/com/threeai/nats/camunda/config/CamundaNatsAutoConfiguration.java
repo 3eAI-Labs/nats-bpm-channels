@@ -25,6 +25,9 @@ import com.threeai.nats.camunda.history.HistoryOutboxRelay;
 import com.threeai.nats.camunda.history.HistoryOutboxRelayScheduler;
 import com.threeai.nats.camunda.history.HistoryPostCommitPublisher;
 import com.threeai.nats.camunda.history.NatsHistoryEventHandler;
+import com.threeai.nats.camunda.variable.LargeVariableExternalizationSweep;
+import com.threeai.nats.camunda.variable.LargeVariablePostCommitExternalizer;
+import com.threeai.nats.camunda.variable.LargeVariableSerializer;
 import com.threeai.nats.core.NatsConnectionFactory;
 import com.threeai.nats.core.NatsProperties;
 import com.threeai.nats.core.config.NatsTransportSecurityGuard;
@@ -33,6 +36,10 @@ import com.threeai.nats.core.history.PseudonymTokenGenerator;
 import com.threeai.nats.core.jetstream.JetStreamKvManager;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.jetstream.SweepLeaderLease;
+import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
+import com.threeai.nats.core.largepayload.LargeVariableExternalizationProperties;
+import com.threeai.nats.core.largepayload.LargeVariableProjectionDataSourceProperties;
+import com.threeai.nats.core.largepayload.LargeVariableSerializerNames;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.nats.client.Connection;
@@ -45,11 +52,16 @@ import org.camunda.bpm.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.camunda.bpm.engine.impl.cfg.ProcessEnginePlugin;
 import org.camunda.bpm.engine.impl.history.handler.DbHistoryEventHandler;
 import org.camunda.bpm.engine.impl.history.handler.HistoryEventHandler;
+import org.camunda.bpm.engine.impl.variable.serializer.ByteArrayValueSerializer;
+import org.camunda.bpm.engine.impl.variable.serializer.FileValueSerializer;
+import org.camunda.bpm.engine.impl.variable.serializer.JavaObjectSerializer;
+import org.camunda.bpm.engine.impl.variable.serializer.TypedValueSerializer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
@@ -58,11 +70,13 @@ import org.springframework.core.env.Environment;
 @ConditionalOnClass(org.camunda.bpm.engine.ProcessEngine.class)
 @EnableConfigurationProperties({NatsProperties.class, CamundaNatsProperties.class, A2Properties.class,
         HistoryClassificationProperties.class, HistoryOutboxProperties.class,
-        com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties.class})
+        com.threeai.nats.core.vault.PseudonymVaultDataSourceProperties.class,
+        LargeVariableExternalizationProperties.class, LargeVariableProjectionDataSourceProperties.class})
 public class CamundaNatsAutoConfiguration {
 
     private static final String ENGINE_ID = "camunda";
     private static final String RELAY_LEADER_BUCKET = "history-relay-leader";
+    private static final String LARGE_VARIABLE_LEADER_BUCKET = "large-variable-sweep-leader";
     private static final String RELAY_LEADER_KEY_PREFIX = "relay-leader.";
     private static final String CUTOVER_STATE_BUCKET = "history-cutover-state";
 
@@ -311,6 +325,105 @@ public class CamundaNatsAutoConfiguration {
                 configuration.setCustomHistoryEventHandlers(customHandlers);
             }
         };
+    }
+
+    // --- Large Variable Externalization (basamak-3) ---
+
+    /**
+     * Separate Hikari pool pointed at the SAME physical projection Postgres instance {@code
+     * nats-history-projection} owns (D-B'/D-D' unified store — see {@code
+     * LargeVariableProjectionDataSourceProperties} class Javadoc for the ARCH-Q2-style isolation
+     * rationale). Gated on {@code history.large-variable.projection-datasource.jdbc-url} being
+     * configured at all — without it, externalization simply never activates for this deployment
+     * (D-C' {@code enabled} kill-switch is a SEPARATE, always-available runtime toggle).
+     */
+    @Bean(name = "largeVariableProjectionDataSource", destroyMethod = "close")
+    @ConditionalOnMissingBean(name = "largeVariableProjectionDataSource")
+    @ConditionalOnProperty(prefix = "history.large-variable.projection-datasource", name = "jdbc-url")
+    public DataSource largeVariableProjectionDataSource(LargeVariableProjectionDataSourceProperties props) {
+        com.zaxxer.hikari.HikariConfig config = new com.zaxxer.hikari.HikariConfig();
+        config.setJdbcUrl(props.getJdbcUrl());
+        config.setUsername(props.getUsername());
+        config.setPassword(props.getPassword());
+        config.setPoolName("camunda-large-variable-projection-pool");
+        return new com.zaxxer.hikari.HikariDataSource(config);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(name = "largeVariableProjectionDataSource")
+    public ContentAddressedLargePayloadStore largeVariablePayloadStore(
+            @org.springframework.beans.factory.annotation.Qualifier("largeVariableProjectionDataSource") DataSource largeVariableProjectionDataSource) {
+        return new ContentAddressedLargePayloadStore(largeVariableProjectionDataSource);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(ContentAddressedLargePayloadStore.class)
+    public LargeVariablePostCommitExternalizer largeVariablePostCommitExternalizer(
+            ContentAddressedLargePayloadStore largeVariablePayloadStore, LargeVariableExternalizationProperties properties,
+            @Autowired(required = false) NatsChannelMetrics metrics) {
+        return new LargeVariablePostCommitExternalizer(largeVariablePayloadStore, properties, metrics, ENGINE_ID);
+    }
+
+    /**
+     * Registers the 3 BYTES/OBJECT/FILE decorators into {@code customPreVariableSerializers}
+     * (docs/08 §2.1 evidence: the fork scans this list FIRST and stops at the first match, so no
+     * fork change is needed for these to win over the built-ins they wrap). {@code
+     * postCommitExternalizer.bindConfiguration(configuration)} here is what makes {@link
+     * LargeVariablePostCommitExternalizer} usable later without a circular {@code ProcessEngine}
+     * bean dependency — see that class's own CODER-NOTE.
+     */
+    @Bean
+    @ConditionalOnBean(LargeVariablePostCommitExternalizer.class)
+    public ProcessEnginePlugin largeVariableProcessEnginePlugin(
+            LargeVariablePostCommitExternalizer postCommitExternalizer,
+            LargeVariableExternalizationProperties properties, ContentAddressedLargePayloadStore largeVariablePayloadStore) {
+        return new AbstractProcessEnginePlugin() {
+            @Override
+            public void preInit(ProcessEngineConfigurationImpl configuration) {
+                postCommitExternalizer.bindConfiguration(configuration);
+
+                List<TypedValueSerializer> customSerializers = configuration.getCustomPreVariableSerializers() != null
+                        ? new ArrayList<>(configuration.getCustomPreVariableSerializers())
+                        : new ArrayList<>();
+                customSerializers.add(new LargeVariableSerializer<>(new ByteArrayValueSerializer(),
+                        LargeVariableSerializerNames.BYTES, properties, largeVariablePayloadStore, postCommitExternalizer));
+                customSerializers.add(new LargeVariableSerializer<>(new JavaObjectSerializer(),
+                        LargeVariableSerializerNames.OBJECT, properties, largeVariablePayloadStore, postCommitExternalizer));
+                customSerializers.add(new LargeVariableSerializer<>(new FileValueSerializer(),
+                        LargeVariableSerializerNames.FILE, properties, largeVariablePayloadStore, postCommitExternalizer));
+                configuration.setCustomPreVariableSerializers(customSerializers);
+            }
+        };
+    }
+
+    /** Ensures {@code large-variable-sweep-leader} — separate bucket/key namespace from the other two leases. */
+    @Bean
+    @ConditionalOnMissingBean(name = "largeVariableSweepLeaderLease")
+    @ConditionalOnBean(LargeVariablePostCommitExternalizer.class)
+    public SweepLeaderLease largeVariableSweepLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
+            Connection connection, LargeVariableExternalizationProperties properties) {
+        Duration ttl = Duration.ofSeconds(2 * properties.getSweepCyclePeriodSeconds());
+        kvManager.ensureBucket(LARGE_VARIABLE_LEADER_BUCKET, ttl, 3, connection);
+        return new SweepLeaderLease(jetStream, kvManager, connection, LARGE_VARIABLE_LEADER_BUCKET,
+                "sweep-leader.", ENGINE_ID, resolveNodeId(), ttl);
+    }
+
+    /** {@code largeVariableSweepLeaderLease}/{@code largeVariablePostCommitExternalizer} bean-NAME
+     *  gating (not type — {@code SweepLeaderLease} also has an unrelated {@code
+     *  historyRelayLeaderLease} instance in this SAME configuration): only activates when a
+     *  projection {@code DataSource} is actually configured (see those beans' own conditions). */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(value = DataSource.class, name = {"largeVariableSweepLeaderLease", "largeVariablePostCommitExternalizer"})
+    public LargeVariableExternalizationSweep largeVariableExternalizationSweep(DataSource dataSource,
+            SweepLeaderLease largeVariableSweepLeaderLease,
+            LargeVariablePostCommitExternalizer largeVariablePostCommitExternalizer,
+            ContentAddressedLargePayloadStore largeVariablePayloadStore,
+            LargeVariableExternalizationProperties properties) {
+        return new LargeVariableExternalizationSweep(dataSource, largeVariableSweepLeaderLease,
+                largeVariablePostCommitExternalizer, largeVariablePayloadStore, properties, ENGINE_ID);
     }
 
     private static String resolveNodeId() {

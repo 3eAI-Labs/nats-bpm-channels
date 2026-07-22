@@ -12,5 +12,10 @@ public enum BenchMode {
     /** Basamak-2: default {@code DbHistoryEventHandler}, no offload — {@code HistoryBenchScenario}'s reference mode. */
     DB_HISTORY_BASELINE,
     /** Basamak-2: {@code NatsHistoryEventHandler} installed, classes cut over — offload active. */
-    HISTORY_OFFLOAD
+    HISTORY_OFFLOAD,
+    /** Basamak-3: built-in {@code ByteArrayValueSerializer} only, no externalization — {@code
+     *  LargeVariableBenchScenario}'s reference mode. */
+    LARGE_VARIABLE_BASELINE,
+    /** Basamak-3: {@code LargeVariableSerializer} + deferred externalization active. */
+    LARGE_VARIABLE_EXTERNALIZED
 }

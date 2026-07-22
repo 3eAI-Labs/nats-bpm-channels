@@ -9,8 +9,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 
 import com.threeai.nats.core.db.SqlMigrationRunner;
+import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
+import com.threeai.nats.core.largepayload.LargePayloadReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +44,7 @@ class RetentionEnforcementJobTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V1__entity_lifecycle_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
         auditLogger = new RetentionAuditLogger(dataSource);
     }
 
@@ -170,6 +174,64 @@ class RetentionEnforcementJobTest {
         // §4.4 -- a delete without a matching audit entry is a compliance violation).
         assertThat(partitionExists("variable_detail_history_2020_01")).isTrue();
         assertThat(auditLogCount("variable_detail_history_2020_01")).isEqualTo(auditRowsBefore);
+    }
+
+    /**
+     * basamak-3 D-F': a dropped {@code ext_task_log_history} partition's {@code error_details_ref}
+     * companion is released (not left dangling, not silently over-retained forever).
+     */
+    @Test
+    void enforceRetention_droppedPartitionWithLargePayloadRef_soleReference_releasesRow() throws Exception {
+        ContentAddressedLargePayloadStore largePayloadStore = new ContentAddressedLargePayloadStore(dataSource);
+        LargePayloadReference ref = largePayloadStore.storeAndAcquireReference(
+                "stack trace bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8), "ext_task_log_history");
+        createExtTaskLogPartitionRow(ref.id());
+
+        RetentionProperties properties = new RetentionProperties();
+        properties.setAuditCriticalDefaultWindow("P0D"); // 2020 row is far older than "now"
+
+        newJob(properties).enforceRetention();
+
+        assertThat(partitionExists("ext_task_log_history_2020_01")).isFalse();
+        assertThat(largePayloadStore.fetchById(ref.id())).isEmpty(); // sole reference -> row deleted
+    }
+
+    /**
+     * The DEDUP counterpart of the above: a large payload still referenced from ELSEWHERE (a
+     * byte-identical row NOT in the dropped partition) must survive the drop — D-B'/D-D' dedup
+     * would otherwise leave that other referrer dangling.
+     */
+    @Test
+    void enforceRetention_droppedPartitionWithLargePayloadRef_sharedReference_survivesDrop() throws Exception {
+        ContentAddressedLargePayloadStore largePayloadStore = new ContentAddressedLargePayloadStore(dataSource);
+        byte[] sharedContent = "shared stack trace".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        LargePayloadReference ref = largePayloadStore.storeAndAcquireReference(sharedContent, "ext_task_log_history");
+        largePayloadStore.storeAndAcquireReference(sharedContent, "ext_task_log_history"); // 2nd, independent reference -> ref_count 2
+        createExtTaskLogPartitionRow(ref.id());
+
+        RetentionProperties properties = new RetentionProperties();
+        properties.setAuditCriticalDefaultWindow("P0D");
+
+        newJob(properties).enforceRetention();
+
+        assertThat(partitionExists("ext_task_log_history_2020_01")).isFalse();
+        assertThat(largePayloadStore.fetchById(ref.id())).isPresent(); // still referenced by the 2nd acquirer
+    }
+
+    private void createExtTaskLogPartitionRow(UUID largePayloadId) throws Exception {
+        try (Connection c = dataSource.getConnection(); java.sql.Statement stmt = c.createStatement()) {
+            stmt.execute("DROP TABLE IF EXISTS ext_task_log_history_2020_01");
+            stmt.execute("CREATE TABLE ext_task_log_history_2020_01 PARTITION OF ext_task_log_history "
+                    + "FOR VALUES FROM ('2020-01-01 00:00:00+00') TO ('2020-02-01 00:00:00+00')");
+        }
+        try (Connection c = dataSource.getConnection();
+             PreparedStatement stmt = c.prepareStatement(
+                     "INSERT INTO ext_task_log_history (engine_id, process_instance_id, history_event_id, "
+                   + "event_type, error_details_ref, stream_sequence, event_time) "
+                   + "VALUES ('camunda', 'proc-old', 'evt-ext-old', 'update', ?, 1, '2020-01-15 00:00:00+00')")) {
+            stmt.setObject(1, largePayloadId);
+            stmt.executeUpdate();
+        }
     }
 
     private PGSimpleDataSource unreachableDataSource() {
