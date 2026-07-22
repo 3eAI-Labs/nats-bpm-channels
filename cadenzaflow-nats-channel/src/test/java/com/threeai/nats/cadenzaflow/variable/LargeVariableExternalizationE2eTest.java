@@ -15,6 +15,7 @@ import com.threeai.nats.core.db.SqlMigrationRunner;
 import com.threeai.nats.core.jetstream.JetStreamKvManager;
 import com.threeai.nats.core.jetstream.SweepLeaderLease;
 import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
+import com.threeai.nats.core.largepayload.ContentHash;
 import com.threeai.nats.core.largepayload.LargeVariableExternalizationProperties;
 import com.threeai.nats.core.largepayload.LargeVariableSerializerNames;
 import io.nats.client.JetStream;
@@ -59,6 +60,7 @@ class LargeVariableExternalizationE2eTest {
     private static LargeVariablePostCommitExternalizer postCommitExternalizer;
     private static LargeVariableExternalizationSweep sweep;
     private static LargeVariableExternalizationProperties properties;
+    private static ContentAddressedLargePayloadStore payloadStore;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -86,6 +88,8 @@ class LargeVariableExternalizationE2eTest {
                 "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(projectionDataSource,
                 "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(projectionDataSource,
+                "db/migration/projection/V5__runtime_large_variable_reference.sql");
 
         natsContainer = new GenericContainer<>("nats:2.10-alpine").withCommand("--jetstream").withExposedPorts(4222);
         natsContainer.start();
@@ -95,7 +99,7 @@ class LargeVariableExternalizationE2eTest {
         properties = new LargeVariableExternalizationProperties();
         properties.setThresholdBytes(64);
 
-        ContentAddressedLargePayloadStore payloadStore = new ContentAddressedLargePayloadStore(projectionDataSource);
+        payloadStore = new ContentAddressedLargePayloadStore(projectionDataSource);
         postCommitExternalizer = new LargeVariablePostCommitExternalizer(payloadStore, properties, null, "cadenzaflow");
 
         JetStreamKvManager kvManager = new JetStreamKvManager();
@@ -103,7 +107,8 @@ class LargeVariableExternalizationE2eTest {
         kvManager.ensureBucket(leaderBucket, Duration.ofSeconds(60), 1, natsConnection);
         SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
                 leaderBucket, "sweep-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
-        sweep = new LargeVariableExternalizationSweep(engineDataSource, leaderLease, postCommitExternalizer, properties, "cadenzaflow");
+        sweep = new LargeVariableExternalizationSweep(
+                engineDataSource, leaderLease, postCommitExternalizer, payloadStore, properties, "cadenzaflow");
 
         ProcessEngineConfigurationImpl config = (ProcessEngineConfigurationImpl)
                 ProcessEngineConfiguration.createStandaloneProcessEngineConfiguration();
@@ -224,6 +229,98 @@ class LargeVariableExternalizationE2eTest {
 
         await().atMost(Duration.ofSeconds(10)).until(() -> isExternalized(variableId));
         assertThat((byte[]) runtimeService.getVariable(processInstanceId, "sweptBytes")).isEqualTo(largeContent);
+    }
+
+    /**
+     * FINDING-001 probe (Sentinel review, ship-blocker): hard-deleting the OWNING PROCESS of a
+     * sole-referenced externalized variable must eventually (via reconciliation) bring the
+     * content-addressed object's ref_count to 0 and delete the row — otherwise the externalized
+     * PII payload survives the deletion forever (a KVKK/D-F' violation the fork's delete path
+     * cannot be synchronously hooked to prevent — see {@code LargeVariableExternalizationSweep}
+     * class Javadoc).
+     */
+    @Test
+    void hardDeleteProcess_soleReference_reconciliationReleasesAndDeletesPayload() {
+        String processInstanceId = startInstance();
+        byte[] piiContent = "z".repeat(200).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        RuntimeService runtimeService = engine.getRuntimeService();
+        runtimeService.setVariable(processInstanceId, "piiBytes", Variables.byteArrayValue(piiContent));
+        String variableId = variableInstanceId(processInstanceId, "piiBytes");
+        await().atMost(Duration.ofSeconds(10)).until(() -> isExternalized(variableId));
+        String contentHash = ContentHash.sha256Hex(piiContent);
+        assertThat(payloadStore.fetchByContentHash(contentHash)).isPresent(); // sanity: really externalized
+
+        runtimeService.deleteProcessInstance(processInstanceId, "test hard delete — FINDING-001 probe");
+        sweep.sweepCycle(); // leader-elected cycle now also reconciles runtime references
+
+        assertThat(payloadStore.fetchByContentHash(contentHash)).isEmpty(); // PII genuinely gone
+        assertThat(payloadStore.currentRuntimeReference("cadenzaflow", variableId)).isEmpty(); // ledger row cleaned up too
+    }
+
+    /**
+     * FINDING-001 probe, shared-content variant: two INDEPENDENT variables externalize to the SAME
+     * content (dedup, D-B'/D-D') — deleting one referrer's process must NOT delete the object (the
+     * other referrer still needs it); deleting BOTH must.
+     */
+    @Test
+    void hardDeleteProcess_sharedReference_survivesUntilLastReferrerDeleted() {
+        byte[] sharedPiiContent = "shared-pii-".repeat(30).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String contentHash = ContentHash.sha256Hex(sharedPiiContent);
+        RuntimeService runtimeService = engine.getRuntimeService();
+
+        String processInstanceIdA = startInstance();
+        runtimeService.setVariable(processInstanceIdA, "sharedBytesA", Variables.byteArrayValue(sharedPiiContent));
+        String variableIdA = variableInstanceId(processInstanceIdA, "sharedBytesA");
+
+        String processInstanceIdB = startInstance();
+        runtimeService.setVariable(processInstanceIdB, "sharedBytesB", Variables.byteArrayValue(sharedPiiContent));
+        String variableIdB = variableInstanceId(processInstanceIdB, "sharedBytesB");
+
+        await().atMost(Duration.ofSeconds(10)).until(() -> isExternalized(variableIdA) && isExternalized(variableIdB));
+        assertThat(payloadStore.fetchByContentHash(contentHash)).isPresent();
+
+        runtimeService.deleteProcessInstance(processInstanceIdA, "test hard delete A — FINDING-001 probe");
+        sweep.sweepCycle();
+
+        // referrer B still holds a live reference -- the shared object must survive.
+        assertThat(payloadStore.fetchByContentHash(contentHash)).isPresent();
+        assertThat(payloadStore.currentRuntimeReference("cadenzaflow", variableIdA)).isEmpty();
+        assertThat(payloadStore.currentRuntimeReference("cadenzaflow", variableIdB)).isPresent();
+
+        runtimeService.deleteProcessInstance(processInstanceIdB, "test hard delete B — FINDING-001 probe");
+        sweep.sweepCycle();
+
+        // last referrer gone -- the object is now genuinely deleted.
+        assertThat(payloadStore.fetchByContentHash(contentHash)).isEmpty();
+        assertThat(payloadStore.currentRuntimeReference("cadenzaflow", variableIdB)).isEmpty();
+    }
+
+    /**
+     * FINDING-001 probe, overwrite variant: re-externalizing the SAME variable to DIFFERENT content
+     * releases the OLD payload (once no longer shared) without waiting for reconciliation — the
+     * fast/sweep path itself performs this release eagerly (see {@code
+     * LargeVariablePostCommitExternalizer#externalizeNow}), since the overwrite IS observable at
+     * write time (unlike a hard delete).
+     */
+    @Test
+    void overwriteWithDifferentContent_releasesOldPayloadEagerly() {
+        String processInstanceId = startInstance();
+        RuntimeService runtimeService = engine.getRuntimeService();
+        byte[] oldContent = "old-".repeat(60).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] newContent = "new-".repeat(60).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String oldHash = ContentHash.sha256Hex(oldContent);
+        String newHash = ContentHash.sha256Hex(newContent);
+
+        runtimeService.setVariable(processInstanceId, "overwritten", Variables.byteArrayValue(oldContent));
+        String variableId = variableInstanceId(processInstanceId, "overwritten");
+        await().atMost(Duration.ofSeconds(10)).until(() -> isExternalized(variableId));
+        assertThat(payloadStore.fetchByContentHash(oldHash)).isPresent();
+
+        runtimeService.setVariable(processInstanceId, "overwritten", Variables.byteArrayValue(newContent));
+        await().atMost(Duration.ofSeconds(10)).until(() -> payloadStore.fetchByContentHash(newHash).isPresent());
+
+        assertThat(payloadStore.fetchByContentHash(oldHash)).isEmpty(); // released without needing reconciliation
+        assertThat((byte[]) runtimeService.getVariable(processInstanceId, "overwritten")).isEqualTo(newContent);
     }
 
     private String variableInstanceId(String processInstanceId, String variableName) {

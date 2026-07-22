@@ -39,6 +39,7 @@ class ContentAddressedLargePayloadStoreTest {
         dataSource.setUser(postgres.getUsername());
         dataSource.setPassword(postgres.getPassword());
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/test-fixture/V2__large_payload_store.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/test-fixture/V3__runtime_large_variable_reference.sql");
         store = new ContentAddressedLargePayloadStore(dataSource);
     }
 
@@ -50,7 +51,7 @@ class ContentAddressedLargePayloadStoreTest {
     @AfterEach
     void cleanUp() throws Exception {
         try (Connection c = dataSource.getConnection(); java.sql.Statement stmt = c.createStatement()) {
-            stmt.execute("TRUNCATE projection_large_payload");
+            stmt.execute("TRUNCATE runtime_large_variable_ref, projection_large_payload");
         }
     }
 
@@ -164,6 +165,76 @@ class ContentAddressedLargePayloadStoreTest {
         assertThatThrownBy(() -> unreachable.storeAndAcquireReference(bytesOf("x"), "src"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("SYS_LARGE_PAYLOAD_STORE_FAILED");
+    }
+
+    // --- RUNTIME reference ledger (D-F' FINDING-001 fix) ---
+
+    @Test
+    void currentRuntimeReference_none_empty() {
+        assertThat(store.currentRuntimeReference("camunda", "var-unknown")).isEmpty();
+    }
+
+    @Test
+    void recordRuntimeReference_thenRead_returnsPayloadId() {
+        LargePayloadReference ref = store.storeAndAcquireReference(bytesOf("runtime-content"), "runtime.camunda");
+
+        store.recordRuntimeReference("camunda", "var-1", ref.id(), ref.contentHash());
+
+        assertThat(store.currentRuntimeReference("camunda", "var-1")).contains(ref.id());
+    }
+
+    @Test
+    void recordRuntimeReference_sameVariableDifferentPayload_upsertsInPlace() {
+        LargePayloadReference first = store.storeAndAcquireReference(bytesOf("first-content"), "runtime.camunda");
+        LargePayloadReference second = store.storeAndAcquireReference(bytesOf("second-content"), "runtime.camunda");
+        store.recordRuntimeReference("camunda", "var-1", first.id(), first.contentHash());
+
+        store.recordRuntimeReference("camunda", "var-1", second.id(), second.contentHash());
+
+        assertThat(store.currentRuntimeReference("camunda", "var-1")).contains(second.id());
+        assertThat(store.listRuntimeReferences("camunda")).hasSize(1); // ONE row per (engine, variable)
+    }
+
+    @Test
+    void listRuntimeReferences_scopedByEngineId() {
+        LargePayloadReference ref = store.storeAndAcquireReference(bytesOf("scoped-content"), "runtime.camunda");
+        store.recordRuntimeReference("camunda", "var-1", ref.id(), ref.contentHash());
+        store.recordRuntimeReference("cadenzaflow", "var-2", ref.id(), ref.contentHash());
+
+        java.util.List<RuntimeVariableReference> camundaRefs = store.listRuntimeReferences("camunda");
+
+        assertThat(camundaRefs).hasSize(1);
+        assertThat(camundaRefs.get(0).variableId()).isEqualTo("var-1");
+    }
+
+    @Test
+    void deleteRuntimeReferenceRecord_removesLedgerRow_payloadRowUnaffected() {
+        LargePayloadReference ref = store.storeAndAcquireReference(bytesOf("delete-ledger-content"), "runtime.camunda");
+        store.recordRuntimeReference("camunda", "var-1", ref.id(), ref.contentHash());
+
+        store.deleteRuntimeReferenceRecord("camunda", "var-1");
+
+        assertThat(store.currentRuntimeReference("camunda", "var-1")).isEmpty();
+        assertThat(store.fetchById(ref.id())).isPresent(); // deleting the LEDGER row is not a release
+    }
+
+    /**
+     * The FINDING-001 fix, proven at the store layer: acquire-new-then-release-old (the order
+     * {@code LargeVariablePostCommitExternalizer} uses) never leaves a payload under-referenced
+     * during the transition, even when old and new happen to race — releasing the OLD reference
+     * only after the NEW one is durably acquired means the object is never momentarily unreferenced.
+     */
+    @Test
+    void overwriteFlow_acquireNewThenReleaseOld_oldPayloadReleasedWhenNoLongerShared() {
+        LargePayloadReference oldRef = store.storeAndAcquireReference(bytesOf("old-value"), "runtime.camunda");
+        store.recordRuntimeReference("camunda", "var-1", oldRef.id(), oldRef.contentHash());
+
+        LargePayloadReference newRef = store.storeAndAcquireReference(bytesOf("new-value"), "runtime.camunda");
+        store.recordRuntimeReference("camunda", "var-1", newRef.id(), newRef.contentHash());
+        store.releaseReference(oldRef.id()); // the ledger row no longer references it
+
+        assertThat(store.fetchById(oldRef.id())).isEmpty(); // old payload gone -- sole reference released
+        assertThat(store.fetchById(newRef.id())).isPresent();
     }
 
     private byte[] bytesOf(String s) {

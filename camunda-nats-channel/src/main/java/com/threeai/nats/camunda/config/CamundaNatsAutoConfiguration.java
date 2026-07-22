@@ -420,9 +420,10 @@ public class CamundaNatsAutoConfiguration {
     public LargeVariableExternalizationSweep largeVariableExternalizationSweep(DataSource dataSource,
             SweepLeaderLease largeVariableSweepLeaderLease,
             LargeVariablePostCommitExternalizer largeVariablePostCommitExternalizer,
+            ContentAddressedLargePayloadStore largeVariablePayloadStore,
             LargeVariableExternalizationProperties properties) {
-        return new LargeVariableExternalizationSweep(
-                dataSource, largeVariableSweepLeaderLease, largeVariablePostCommitExternalizer, properties, ENGINE_ID);
+        return new LargeVariableExternalizationSweep(dataSource, largeVariableSweepLeaderLease,
+                largeVariablePostCommitExternalizer, largeVariablePayloadStore, properties, ENGINE_ID);
     }
 
     private static String resolveNodeId() {

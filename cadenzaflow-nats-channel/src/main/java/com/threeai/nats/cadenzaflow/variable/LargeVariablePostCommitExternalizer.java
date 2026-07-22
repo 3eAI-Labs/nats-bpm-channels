@@ -2,6 +2,8 @@ package com.threeai.nats.cadenzaflow.variable;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -145,8 +147,24 @@ public class LargeVariablePostCommitExternalizer {
                             kv("variable_id", variableId), kv("engine_id", engineId));
                     return null;
                 }
+                // FINDING-001 fix (D-F', RUNTIME-side refcount): read the ledger's PREVIOUS
+                // reference for this variable BEFORE acquiring the new one -- this only matters for
+                // an overwrite (the variable was already externalized once, to different content);
+                // a first-time externalization simply finds nothing here.
+                Optional<UUID> previousPayloadId = largePayloadStore.currentRuntimeReference(engineId, variableId);
+
                 LargePayloadReference ref = largePayloadStore.storeAndAcquireReference(current, "runtime." + engineId);
                 entity.setByteArrayValue(ExternalizationMarker.encode(ref.contentHash()));
+                // Record the ledger row BEFORE releasing the old one -- acquire-new-then-release-old
+                // (never the reverse) means the object this variable references is NEVER momentarily
+                // unreferenced (see ContentAddressedLargePayloadStore class Javadoc concurrency note).
+                largePayloadStore.recordRuntimeReference(engineId, variableId, ref.id(), ref.contentHash());
+                if (previousPayloadId.isPresent() && !previousPayloadId.get().equals(ref.id())) {
+                    // The variable was re-externalized to DIFFERENT content (overwrite) -- the OLD
+                    // payload is no longer referenced by this variable; release that ONE reference
+                    // (still shared-safe: releaseReference only deletes at ref_count 0).
+                    largePayloadStore.releaseReference(previousPayloadId.get());
+                }
                 if (metrics != null) {
                     metrics.largeVariableExternalizedCount(engineId).increment();
                 }

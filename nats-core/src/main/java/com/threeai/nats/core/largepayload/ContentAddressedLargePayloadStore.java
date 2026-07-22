@@ -6,6 +6,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -15,8 +17,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * JDBC client for the basamak-3 unified, content-addressed {@code projection_large_payload} store
- * (`docs/08-large-variable-externalization.md` D-B'/D-D'/D-F', migration
- * {@code V4__large_payload_content_addressing.sql}). Engine-neutral, framework-agnostic — takes any
+ * (`docs/08-large-variable-externalization.md` D-B'/D-D'/D-F', migrations
+ * {@code V4__large_payload_content_addressing.sql} + {@code V5__runtime_large_variable_reference.sql}).
+ * Engine-neutral, framework-agnostic — takes any
  * {@link DataSource} pointed at the projection Postgres instance, so it can be instantiated both by
  * {@code nats-history-projection}'s {@code ProjectionStore} (HISTORY writer, existing basamak-2
  * pool) and by the engine-side deferred externalization worker in {@code camunda-nats-channel}/
@@ -57,6 +60,21 @@ public class ContentAddressedLargePayloadStore {
 
     private static final String DELETE_IF_ZERO_SQL =
             "DELETE FROM projection_large_payload WHERE id = ? AND ref_count = 0";
+
+    private static final String CURRENT_RUNTIME_REFERENCE_SQL =
+            "SELECT payload_id FROM runtime_large_variable_ref WHERE engine_id = ? AND variable_id = ?";
+
+    private static final String RECORD_RUNTIME_REFERENCE_SQL =
+            "INSERT INTO runtime_large_variable_ref (engine_id, variable_id, payload_id, content_hash) "
+          + "VALUES (?, ?, ?, ?) "
+          + "ON CONFLICT (engine_id, variable_id) DO UPDATE SET "
+          + "payload_id = EXCLUDED.payload_id, content_hash = EXCLUDED.content_hash, updated_at = now()";
+
+    private static final String DELETE_RUNTIME_REFERENCE_SQL =
+            "DELETE FROM runtime_large_variable_ref WHERE engine_id = ? AND variable_id = ?";
+
+    private static final String LIST_RUNTIME_REFERENCES_SQL =
+            "SELECT variable_id, payload_id, content_hash FROM runtime_large_variable_ref WHERE engine_id = ?";
 
     private final DataSource projectionDataSource;
 
@@ -171,5 +189,89 @@ public class ContentAddressedLargePayloadStore {
             stmt.setObject(1, id);
             stmt.executeUpdate();
         }
+    }
+
+    // --- RUNTIME reference ledger (D-F' FINDING-001 fix, migration V5) ---
+    //
+    // The fork's variable/process HARD-delete path never re-enters the custom serializer (no
+    // synchronous release-on-delete hook is possible — docs/08 evidence), so a RUNTIME reference
+    // cannot be released at delete time the way a HISTORY reference is released by ErasurePipeline/
+    // RetentionEnforcementJob (both of which DO see the row being removed). This ledger instead
+    // records "this RUNTIME variable is why this payload's ref_count includes +1"; a periodic
+    // reconciliation sweep (LargeVariableExternalizationSweep, engine-side) compares ledger rows
+    // against ACT_RU_VARIABLE's CURRENT externalization marker and releases any row whose variable
+    // is gone or whose marker no longer matches — see that class for the actual reconciliation loop.
+
+    /** @return the {@code payload_id} this variable is CURRENTLY on record as referencing, if any —
+     *          used by {@code LargeVariablePostCommitExternalizer} to release a STALE reference when
+     *          the SAME variable is re-externalized to different content (overwrite case). */
+    public Optional<UUID> currentRuntimeReference(String engineId, String variableId) {
+        try (Connection connection = projectionDataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(CURRENT_RUNTIME_REFERENCE_SQL)) {
+            stmt.setString(1, engineId);
+            stmt.setString(2, variableId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next() ? Optional.ofNullable((UUID) rs.getObject(1)) : Optional.empty();
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "SYS_LARGE_PAYLOAD_RUNTIME_REF_READ_FAILED: failed to read runtime reference for variable "
+                            + variableId, e);
+        }
+    }
+
+    /**
+     * Upserts the ledger row for (engineId, variableId) to point at {@code payloadId} — called
+     * AFTER {@link #storeAndAcquireReference} has already acquired the NEW reference, so the
+     * payload this ledger row is about to stop pointing at (if different) is never left
+     * under-referenced during the transition.
+     */
+    public void recordRuntimeReference(String engineId, String variableId, UUID payloadId, String contentHash) {
+        try (Connection connection = projectionDataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(RECORD_RUNTIME_REFERENCE_SQL)) {
+            stmt.setString(1, engineId);
+            stmt.setString(2, variableId);
+            stmt.setObject(3, payloadId);
+            stmt.setString(4, contentHash);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "SYS_LARGE_PAYLOAD_RUNTIME_REF_WRITE_FAILED: failed to record runtime reference for variable "
+                            + variableId, e);
+        }
+    }
+
+    /** Called by the reconciliation sweep once the corresponding reference has been released. */
+    public void deleteRuntimeReferenceRecord(String engineId, String variableId) {
+        try (Connection connection = projectionDataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(DELETE_RUNTIME_REFERENCE_SQL)) {
+            stmt.setString(1, engineId);
+            stmt.setString(2, variableId);
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "SYS_LARGE_PAYLOAD_RUNTIME_REF_DELETE_FAILED: failed to delete runtime reference record for variable "
+                            + variableId, e);
+        }
+    }
+
+    /** @return every RUNTIME reference ledger row for {@code engineId} — the reconciliation sweep's input set. */
+    public List<RuntimeVariableReference> listRuntimeReferences(String engineId) {
+        List<RuntimeVariableReference> refs = new ArrayList<>();
+        try (Connection connection = projectionDataSource.getConnection();
+             PreparedStatement stmt = connection.prepareStatement(LIST_RUNTIME_REFERENCES_SQL)) {
+            stmt.setString(1, engineId);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    refs.add(new RuntimeVariableReference(engineId, rs.getString("variable_id"),
+                            (UUID) rs.getObject("payload_id"), rs.getString("content_hash")));
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "SYS_LARGE_PAYLOAD_RUNTIME_REF_LIST_FAILED: failed to list runtime references for engine "
+                            + engineId, e);
+        }
+        return refs;
     }
 }
