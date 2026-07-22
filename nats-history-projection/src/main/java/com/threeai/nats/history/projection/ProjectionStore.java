@@ -15,6 +15,8 @@ import java.util.Optional;
 import java.util.UUID;
 import javax.sql.DataSource;
 
+import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
+import com.threeai.nats.core.largepayload.LargePayloadReference;
 import com.threeai.nats.history.projection.HistoryClassColumnMapping.TableMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,15 +25,27 @@ import org.slf4j.LoggerFactory;
  * JDBC erişim katmanı (BR-REL-003, ADR-0011, `03_classes/2_relay_projection.md` §3). Implements
  * the 3-step partition-safe merge-upsert protocol from {@code DB_SCHEMA.md §2.3} / migration
  * {@code V1__entity_lifecycle_tables.sql} header (single source of truth for the protocol text).
+ *
+ * <p><b>CODER-NOTE (basamak-3, D-B'/D-D'/D-F' — content-addressed {@code projection_large_payload}):</b>
+ * {@link #storeLargePayload}/{@link #releaseLargePayloadReference} now delegate to the shared
+ * {@link ContentAddressedLargePayloadStore} (migration {@code
+ * V4__large_payload_content_addressing.sql}) instead of a private, always-insert/always-delete
+ * table — the SAME store the engine-side deferred-externalization worker
+ * (`camunda-nats-channel`/`cadenzaflow-nats-channel`) writes into for RUNTIME payloads, so
+ * byte-identical content from either side dedups onto one row (D-D' "3-copy -> 1 object"). Public
+ * signatures are unchanged (basamak-2 compatibility, `ProjectionStoreTest`/`ErasurePipelineTest`
+ * pass unmodified) — the dedup/refcount behavior is purely additive underneath.
  */
 public class ProjectionStore {
 
     private static final Logger log = LoggerFactory.getLogger(ProjectionStore.class);
 
     private final DataSource projectionDataSource;
+    private final ContentAddressedLargePayloadStore largePayloadStore;
 
     public ProjectionStore(DataSource projectionDataSource) {
         this.projectionDataSource = projectionDataSource;
+        this.largePayloadStore = new ContentAddressedLargePayloadStore(projectionDataSource);
     }
 
     /** Table name for a given ACT_HI class — used by {@code ReconciliationJob}'s row-count comparison. */
@@ -122,23 +136,27 @@ public class ProjectionStore {
     }
 
     /**
-     * Writes a large byte-array payload into {@code projection_large_payload} for callers to
-     * populate {@code variable_value_ref}/{@code error_details_ref}/{@code content_ref}
-     * (ARCH-Q1 referans pattern reused inside the projection store).
+     * Writes (or, on content-hash dedup hit, acquires an additional reference to) a large
+     * byte-array payload for callers to populate {@code variable_value_ref}/
+     * {@code error_details_ref}/{@code content_ref} (ARCH-Q1 referans pattern reused inside the
+     * projection store; basamak-3 D-B'/D-D' content-addressing — see class Javadoc).
      */
     public UUID storeLargePayload(byte[] payload, String sourceTable) {
-        UUID id = UUID.randomUUID();
-        String sql = "INSERT INTO projection_large_payload (id, source_table, payload_bytes) VALUES (?,?,?)";
-        try (Connection connection = projectionDataSource.getConnection();
-             PreparedStatement stmt = connection.prepareStatement(sql)) {
-            stmt.setObject(1, id);
-            stmt.setString(2, sourceTable);
-            stmt.setBytes(3, payload);
-            stmt.executeUpdate();
-            return id;
-        } catch (SQLException e) {
-            throw new IllegalStateException("Failed to store large payload for source table " + sourceTable, e);
-        }
+        LargePayloadReference ref = largePayloadStore.storeAndAcquireReference(payload, sourceTable);
+        return ref.id();
+    }
+
+    /**
+     * D-F' refcount/GC: releases ONE reference previously acquired via {@link #storeLargePayload}
+     * for {@code payloadId} — the row is physically deleted only once every reference has been
+     * released (never a direct unconditional DELETE, which would corrupt state for content shared
+     * with another still-live referrer). Called by {@link
+     * com.threeai.nats.history.governance.ErasurePipeline} (erasure removes a reference) and {@link
+     * com.threeai.nats.history.governance.RetentionEnforcementJob} (a dropped partition's rows stop
+     * referencing their large-payload companions).
+     */
+    public void releaseLargePayloadReference(UUID payloadId) {
+        largePayloadStore.releaseReference(payloadId);
     }
 
     private Optional<ExistingRow> selectExisting(Connection connection, TableMeta meta, EntityHistoryRecord record)

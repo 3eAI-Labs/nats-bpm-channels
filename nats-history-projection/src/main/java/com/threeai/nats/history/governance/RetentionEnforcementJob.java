@@ -12,12 +12,15 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 
 import com.threeai.nats.core.history.HistoryClassNames;
 import com.threeai.nats.core.history.exception.RetentionAuditLogWriteFailedException;
+import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
 import com.threeai.nats.history.projection.ProjectionStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +56,22 @@ public class RetentionEnforcementJob {
 
     private static final Logger log = LoggerFactory.getLogger(RetentionEnforcementJob.class);
     private static final Pattern PARTITION_BOUND_TO = Pattern.compile("TO \\('([^']+)'\\)");
+    private static final Pattern SAFE_IDENTIFIER = Pattern.compile("^[a-z][a-z0-9_]*$");
+
+    /**
+     * basamak-3 D-F' refcount/GC: the {@code *_ref} column of every class table whose rows may
+     * point into the content-addressed {@code projection_large_payload} store (D-B'/D-D') — a
+     * dropped partition's rows stop referencing their companion payload, so each reference must be
+     * released BEFORE the DROP makes the referencing row (and the id it carried) unrecoverable.
+     * Every entry is checked against {@link ProjectionStore#allowedColumnsFor} + {@link
+     * #SAFE_IDENTIFIER} before use (same defense-in-depth discipline as {@code ErasurePipeline}'s
+     * {@code ANONYMIZATION_COLUMNS}, commit 17099d4) even though these are curated literals, never
+     * attacker-influenceable.
+     */
+    private static final Map<String, String> LARGE_PAYLOAD_REF_COLUMN = Map.of(
+            HistoryClassNames.VARINST, "variable_value_ref",
+            HistoryClassNames.EXT_TASK_LOG, "error_details_ref",
+            HistoryClassNames.ATTACHMENT, "content_ref");
 
     private static final String LIST_PARTITIONS_SQL =
             "SELECT c.relname AS partition_name, pg_get_expr(c.relpartbound, c.oid) AS partition_bound "
@@ -63,6 +82,7 @@ public class RetentionEnforcementJob {
     private final RetentionAuditLogger auditLogger;
     private final RetentionProperties properties;
     private final String engineId;
+    private final ContentAddressedLargePayloadStore largePayloadStore;
 
     public RetentionEnforcementJob(DataSource projectionDataSource, RetentionAuditLogger auditLogger,
             RetentionProperties properties, String engineId) {
@@ -70,6 +90,7 @@ public class RetentionEnforcementJob {
         this.auditLogger = auditLogger;
         this.properties = properties;
         this.engineId = engineId;
+        this.largePayloadStore = new ContentAddressedLargePayloadStore(projectionDataSource);
     }
 
     @Scheduled(cron = "${history.retention.cron:0 30 3 * * *}")
@@ -102,10 +123,12 @@ public class RetentionEnforcementJob {
 
     private void dropPartitionWithAudit(String historyClass, String table, PartitionInfo partition, int windowDays)
             throws SQLException {
+        List<UUID> orphanedLargePayloadIds = List.of();
         try (Connection connection = projectionDataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
                 long estimatedRows = estimateRowCount(connection, partition.partitionName());
+                orphanedLargePayloadIds = collectLargePayloadRefs(connection, historyClass, partition.partitionName());
                 try (java.sql.Statement stmt = connection.createStatement()) {
                     stmt.execute("DROP TABLE " + partition.partitionName());
                 }
@@ -125,6 +148,56 @@ public class RetentionEnforcementJob {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to drop retention partition " + partition.partitionName(), e);
+        }
+        releaseOrphanedLargePayloadRefs(historyClass, orphanedLargePayloadIds);
+    }
+
+    /**
+     * basamak-3 D-F': reads the (about to be dropped) partition's large-payload {@code *_ref}
+     * column values BEFORE the DROP — once the partition is gone, the referencing row (and the id
+     * it carried) is unrecoverable. Read-only, inside the SAME transaction as the DROP so it sees
+     * exactly the rows that are about to disappear (no TOCTOU window against a concurrent
+     * projection write landing on this already-past-retention-window partition).
+     */
+    private List<UUID> collectLargePayloadRefs(Connection connection, String historyClass, String partitionName)
+            throws SQLException {
+        String column = LARGE_PAYLOAD_REF_COLUMN.get(historyClass);
+        if (column == null) {
+            return List.of();
+        }
+        if (!SAFE_IDENTIFIER.matcher(column).matches() || !ProjectionStore.allowedColumnsFor(historyClass).contains(column)) {
+            throw new IllegalStateException("LARGE_PAYLOAD_REF_COLUMN entry '" + column + "' for " + historyClass
+                    + " is not on the projection allowlist — refusing to build retention SQL");
+        }
+        List<UUID> ids = new ArrayList<>();
+        String sql = "SELECT " + column + " FROM " + partitionName + " WHERE " + column + " IS NOT NULL";
+        try (PreparedStatement stmt = connection.prepareStatement(sql); ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                ids.add((UUID) rs.getObject(1));
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Runs AFTER the DROP+audit transaction has committed — a release failure here (e.g. a
+     * transient projection-DB hiccup) must NOT roll back or re-attempt the already-committed,
+     * already-audited partition drop (that would violate the retention audit-log atomicity
+     * invariant this class's own CODER-NOTE establishes above); it only means that ONE large-payload
+     * row is not decremented this cycle (a bounded storage-efficiency gap, not a correctness or
+     * audit-completeness one — symmetric with {@code HistoryPostCommitPublisher}'s WARN-only
+     * best-effort acceptance elsewhere in this codebase). Each id is released independently so one
+     * failure does not block releasing the rest.
+     */
+    private void releaseOrphanedLargePayloadRefs(String historyClass, List<UUID> payloadIds) {
+        for (UUID payloadId : payloadIds) {
+            try {
+                largePayloadStore.releaseReference(payloadId);
+            } catch (Exception e) {
+                log.warn("Failed to release large-payload reference after retention partition drop — "
+                        + "row retained, will not be automatically retried",
+                        kv("history_class", historyClass), kv("payload_id", payloadId), e);
+            }
         }
     }
 

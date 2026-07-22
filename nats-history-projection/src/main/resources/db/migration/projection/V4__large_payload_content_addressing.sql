@@ -25,8 +25,12 @@ UPDATE projection_large_payload
 -- Merge pre-existing duplicate-content rows onto ONE canonical row per hash (lowest id, deterministic)
 -- BEFORE the uniqueness constraint below is added -- basamak-2 never deduplicated, so two rows with
 -- byte-identical payload_bytes (e.g. the same repeated EXT_TASK_LOG stack trace) are legal today.
+-- Postgres' uuid type has no built-in MIN()/MAX() aggregate (only comparison operators) -- MIN()
+-- over the text representation is equivalent (uuid ordering is a bytewise/hex compare, which the
+-- canonical hyphenated-hex string representation preserves) and any deterministic pick is fine
+-- here anyway (which surviving row becomes canonical is arbitrary, never observed by callers).
 CREATE TEMP TABLE bk3_canonical_payload AS
-SELECT content_hash, MIN(id) AS canonical_id
+SELECT content_hash, MIN(id::text)::uuid AS canonical_id
 FROM projection_large_payload
 GROUP BY content_hash;
 
