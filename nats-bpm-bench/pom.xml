@@ -25,6 +25,14 @@
             <artifactId>camunda-nats-channel</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Basamak-3 LargeVariableBenchScenario: content-addressed projection store (V1/V4
+             migration resources + ContentAddressedLargePayloadStore). No reactor cycle
+             (nats-history-projection depends only on nats-core). -->
+        <dependency>
+            <groupId>com.3eai</groupId>
+            <artifactId>nats-history-projection</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.camunda.bpm</groupId>
             <artifactId>camunda-engine</artifactId>
