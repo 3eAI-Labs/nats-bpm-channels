@@ -4,6 +4,51 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.4.0] — 2026-07-22 — Basamak-3: Large Variable Externalization
+
+Sentinel-governed lean track (evidence-first design doc `docs/08-large-variable-externalization.md`
+with 7 locked decisions D-A'..D-G'; direct implementation + one consolidated fresh-context review
+`docs/sentinel/step3/PHASE_REVIEW.md`). Additive, pure-SPI, no fork change; `flowable-nats-channel`
+untouched (D-G).
+
+### Added
+
+- **Large-variable externalization (BYTES/OBJECT/FILE)** — a custom `TypedValueSerializer`
+  (`LargeVariableSerializer`, registered via `customPreVariableSerializers`, zero fork change)
+  moves above-threshold variable payloads out of the engine DB's `ACT_GE_BYTEARRAY` to
+  basamak-2's Postgres projection store, leaving a small marker in an existing `ValueFields`
+  column (zero schema change to `ACT_RU_VARIABLE`). Size-thresholded (configurable, default
+  ~4-8KB); below-threshold values keep their built-in behaviour (D-A'/D-C'/D-E').
+- **Deferred/post-commit externalization** — `LargeVariablePostCommitExternalizer` (background,
+  never blocks the engine command critical path) + `LargeVariableExternalizationSweep`
+  (leader-elected catch-all + RUNTIME reference reconciliation), reusing basamak-2's
+  post-commit/relay + leader-lease patterns (D-A').
+- **Content-addressed unified store** (`nats-core` `ContentAddressedLargePayloadStore`,
+  SHA-256, atomic `INSERT ... ON CONFLICT ... RETURNING` dedup + refcount) — shared by the
+  HISTORY side (basamak-2 `projection_large_payload`, migrated to content-addressing in `V4`)
+  and the RUNTIME side, with a `runtime_large_variable_ref` ledger (`V5`) (D-B'/D-D'/D-F').
+- **Refcount-based GC integrated into basamak-2 retention/erasure** — a content object is
+  deleted only when its last reference is released; RUNTIME references are released on
+  overwrite (eager) and on hard variable/process deletion (reconciliation sweep). KVKK erasure
+  now genuinely removes externalized PII (D-F').
+- **`nats-bpm-bench`** large-variable threshold-calibration scenario.
+
+### Changed
+
+- **No breaking change to basamak-1/2 public API** (SemVer minor; additive). `nats-core` gains a
+  `largepayload` package; basamak-2's `ProjectionStore.storeLargePayload` evolved to
+  content-addressed + refcount (backward-compatible; `V4` migration merges pre-existing
+  duplicate-content rows and backfills refcounts).
+
+### Known limitations
+
+- **Dedup benefit (3-copy → 1 object) not yet live** (review FINDING-002, written-acknowledged):
+  the dedup infrastructure is correct and atomic, but the RUNTIME↔HISTORY unification benefit
+  activates only once basamak-2's variable-value HISTORY emission gap is closed (a future
+  increment). Tracked debt; not a correctness issue.
+- **Externalized-variable read** requires the projection DB to be reachable (FINDING-005);
+  below-threshold variables are unaffected.
+
 ## [0.3.0] — 2026-07-21 — Basamak-2: History Offload
 
 Sentinel-governed feature branch `feature/step2-history-offload` (30 commits: implementation +
