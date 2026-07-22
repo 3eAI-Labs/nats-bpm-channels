@@ -17,10 +17,10 @@
 | **D-B'/D-G'** | **Dış-store = basamak-2 Postgres projeksiyonuna birleşik** + içerik-adresli (hash) dedup; `projection_large_payload` genişler. RUNTIME+HISTORY tek store, iki tüketici. | NATS Object Store / MinIO-S3 (bağımsız) REDDEDİLDİ; 3-kopya→1-nesne dedup fırsatı ve basamak-2 altyapı yeniden-kullanımı. |
 | **D-C'** | **Kapsam = boyut-eşikli, mevcut BYTES/OBJECT/FILE tipleri.** Yalnız konfigürable eşik üstü (default ~4–8KB; bench-kalibre, PO-Q4 deseni) externalize; küçük blob DB'de kalır. Büyük-String (4000-char limiti) KAPSAM DIŞI (ayrı gelecek). | Eşiksiz-tümü + genişletilmiş-String REDDEDİLDİ. |
 | **D-D'** | **RUNTIME + HISTORY birleşik** (D-B'ye içkin). 3-kopya (`ACT_RU_VARIABLE` + `ACT_HI_DETAIL` + `ACT_HI_VARINST`) tek content-addressed nesneye indirgenir. | Ayrı-store REDDEDİLDİ. |
-| **D-E'** | **Referans şeması = mevcut `TEXT_`/`TEXT2_` (VARCHAR 4000) kolonları.** SIFIR şema değişikliği, fork'a sıfır dokunuş, saf-SPI korunur. | Yeni kolon/tablo REDDEDİLDİ (fork-modify gerektirir). |
+| **D-E'** | **Referans şeması = mevcut bir `ValueFields` kolonu, SIFIR şema değişikliği, fork'a sıfır dokunuş, saf-SPI.** **Uygulama düzeltmesi (impl/review F-003, 2026-07-22):** `TEXT_`/`TEXT2_` fork tarafından ZATEN dolu (`FileValueSerializer.java:54-61` filename+mimetype; `AbstractObjectValueSerializer.java:44-46` objectTypeName — externalize sonrası gerekli metadata). Bu yüzden referans-marker **`byteArrayValue`** kolonunda taşınır (küçük — E2E'de <100 bayt); büyük payload DB-dışıdır (offload ruhu korunur), yalnız küçük bir marker byte-array kalır. Hâlâ sıfır-şema, hâlâ mevcut `ValueFields` kolonu. | Yeni kolon/tablo REDDEDİLDİ (fork-modify gerektirir). |
 | **D-F'** | **Silme = refcount/GC, basamak-2 retention/erasure yaşam-döngüsüne entegre.** İçerik paylaşımlı nesne yalnız SON referans kalkınca silinir. | Senkron per-entity silme hook'u REDDEDİLDİ (dedup'la dangling üretir). |
 
-**Not:** D-A' (deferred) + D-E' (reuse-TEXT_) birleşimi bir **"önce-staging-sonra-externalize" durum makinesi** doğurur: serializer bugünkü gibi `ACT_GE_BYTEARRAY`'e yazar (dayanıklı tx-içi kopya = basamak-2 kompakt-outbox analoğu), post-commit taşıyıcı eşik-üstü byte-array'i projeksiyona externalize eder, referansı `TEXT_`'e yeniden yazar, DB byte-array'i siler. `readValue()` iki durumu da çözer: byte-array var = pending; `TEXT_`-referans = externalized.
+**Not:** D-A' (deferred) + D-E' birleşimi bir **"önce-staging-sonra-externalize" durum makinesi** doğurur: serializer bugünkü gibi `ACT_GE_BYTEARRAY`'e yazar (dayanıklı tx-içi kopya = basamak-2 kompakt-outbox analoğu), post-commit taşıyıcı eşik-üstü byte-array'i projeksiyona externalize eder, **referans-marker'ı `byteArrayValue`'ye** (küçük) yazar, büyük DB byte-array içeriğini boşaltır. `readValue()` iki durumu da çözer: büyük byte-array var = pending; küçük marker = externalized (projeksiyondan fetch).
 
 ---
 
@@ -74,3 +74,20 @@ Tek `setVariable()` (byte/object/file), aynı tx'te potansiyel **3 fiziksel `ACT
 - `ACT_HI_DETAIL`/`ACT_HI_VARINST` byte-array'leri aynı `ByteArrayField`/`ACT_GE_BYTEARRAY` mekanizması (`ResourceTypes.HISTORY`). Basamak-2 projeksiyonu bunları zaten taşıyor.
 - Basamak-3, RUNTIME payload'ını **aynı content-addressed nesneye** bağlar → tek object-store, iki tüketici (basamak-2 history projeksiyon + basamak-3 runtime referans). GC ortak.
 - Risk yumuşak: externalization başarısız olursa veri DB'de kalır (bugünkü davranış), **audit kaybı yok** — yalnız offload gecikmesi. Bu, basamak-2'den daha esnek bir "yumuşak-geçiş" imkânı verir.
+
+---
+
+## 6. Yalın-yol implementasyon + konsolide review kapanışı (2026-07-22)
+
+Basamak-3 "hızlı bitir" direktifiyle yalın yürütüldü (phase1/3/4 atlandı; bu belge SPEC). Implementasyon 9 commit (`1103cc1`…`642cf67`), 669/669 test. TEK konsolide fresh-context review (`docs/sentinel/step3/PHASE_REVIEW.md`): 🔴1 🟠1 🟡3 🟢1. Kapanış:
+
+| Bulgu | Karar/Kapanış |
+|---|---|
+| 🔴 **F-001** RUNTIME refcount hiç release edilmiyor → silme sonrası externalize PII hayatta kalıyor (D-F' ihlali + KVKK regresyonu; reviewer probe ile kanıtladı) | **DÜZELTİLİYOR** — RUNTIME referans-release tamamlanıyor (leader-elected sweep reconciliation: canlı `ACT_RU_VARIABLE` marker'larıyla store referrer'larını karşılaştır, orphan'ı release et; son-referans 0 → nesne gerçekten silinir). Probe testleştiriliyor (silme sonrası PII gitti). |
+| 🟠 **F-002** D-D' "3-kopya→1" dedup faydası canlı değil (~1×) | **ACK (bilinen sınırlama):** dedup ALTYAPISI doğru ve atomik; fayda basamak-2'nin variable-value HISTORY-emission boşluğu kapanınca OTOMATİK aktive olur. Basamak-3 önceden-var basamak-2 boşluğunu açmaz (kapsam). İzlenen borç. |
+| 🟡 **F-003** D-E' marker `byteArrayValue`'de (TEXT_/TEXT2_ metadata dolu) | **DÜZELTİLDİ (bu belge):** §1 D-E' + Not gerçek mekanizmayla hizalandı. Sağlam sapma (offload ruhu korunur). |
+| 🟡 **F-004** `enabled=false` "güvenli rollback" abartılı; serializer-adı KALICI kilit | **ACK:** externalize edilmiş değişkeni OKUYAN her node plugin'i (serializer'ı) tutmalı — serializer-adı persist edilir, plugin kaldırılırsa mevcut externalize değişkenler okunamaz. `enabled=false` yalnız YENİ externalization'ı durdurur, mevcutları geri almaz. Deployment rehberine (phase-publish) not. |
+| 🟡 **F-005** Externalize değişken OKUMA yolu projeksiyon-DB'ye sert bağımlı | **ACK (mimari sonuç):** basamak-2 history yazımı async-relay (DB-availability'den bağımsız) iken, externalize RUNTIME değişkeni OKUMAK projeksiyon-DB'nin AYAKTA olmasını gerektirir (senkron fetch). Kiracı-owned availability zarfı: projeksiyon-DB down → externalize değişken okunamaz (küçük değişkenler etkilenmez). Eşik seçimi bu availability-tradeoff'u yönetir. |
+| 🟢 **F-006** cadenzaflow Sweep Javadoc "camunda 7.x" artefaktı | **DÜZELTİLİYOR** (ayna Javadoc). |
+
+**Güvenlik (review):** SQL injection TEMİZ (sabit identifier + parametreli; allowlist+regex basamak-2 dersi uygulanmış); PII-log TEMİZ (DP-1; yalnız content_hash/byte_length/id); dedup race atomik. Tek compliance ihlali F-001'in erasure boyutu → düzeltiliyor.
