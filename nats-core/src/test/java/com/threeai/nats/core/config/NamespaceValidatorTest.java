@@ -38,4 +38,42 @@ class NamespaceValidatorTest {
             org.assertj.core.api.Assertions.assertThat(e.getChannelKey()).isEqualTo("fooChannel");
         }
     }
+
+    // --- Basamak-4 (docs/09 D-E') — events.*/dlq.events.* reservation ---
+
+    @Test
+    void assertNotReservedForOutbound_eventsPrefix_throws() {
+        assertThatThrownBy(() -> NamespaceValidator.assertNotReservedForOutbound("events.camunda.order.pi-1", "tenantChannel"))
+                .isInstanceOf(TopicNamespaceCollisionException.class)
+                .hasMessageContaining("events.camunda.order.pi-1")
+                .hasMessageContaining("tenantChannel")
+                .hasMessageContaining("outbound-handoff");
+    }
+
+    @Test
+    void assertNotReservedForOutbound_dlqEventsPrefix_throws() {
+        assertThatThrownBy(() -> NamespaceValidator.assertNotReservedForOutbound("dlq.events.camunda.order.pi-1", "tenantChannel"))
+                .isInstanceOf(TopicNamespaceCollisionException.class)
+                .hasMessageContaining("dlq.events.camunda.order.pi-1")
+                .hasMessageContaining("outbound-handoff DLQ");
+    }
+
+    @Test
+    void assertNotReservedForOutbound_notReserved_doesNotThrow() {
+        assertThatCode(() -> NamespaceValidator.assertNotReservedForOutbound("order.new", "orderChannel"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void assertNotReservedForOutbound_nullSubject_doesNotThrow() {
+        assertThatCode(() -> NamespaceValidator.assertNotReservedForOutbound(null, "orderChannel"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void assertNotReservedForOutbound_jobsPrefix_doesNotThrow() {
+        // events.*/dlq.events.* guard is independent from the A2 jobs.* guard.
+        assertThatCode(() -> NamespaceValidator.assertNotReservedForOutbound("jobs.order-fulfillment", "orderChannel"))
+                .doesNotThrowAnyException();
+    }
 }
