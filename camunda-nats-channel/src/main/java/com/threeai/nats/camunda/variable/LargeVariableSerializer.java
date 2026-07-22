@@ -111,7 +111,10 @@ public class LargeVariableSerializer<T extends TypedValue> implements TypedValue
                     kv("value_fields_type", valueFields.getClass().getName()), kv("byte_length", staged.length));
             return;
         }
-        postCommitExternalizer.scheduleExternalization(variableInstance.getId());
+        // CODER-NOTE: the LIVE entity is handed over, NOT variableInstance.getId() eagerly — for a
+        // brand-new variable, the id is not yet assigned at this point (see
+        // LargeVariablePostCommitExternalizer#scheduleExternalization's own CODER-NOTE).
+        postCommitExternalizer.scheduleExternalization(variableInstance);
     }
 
     @Override

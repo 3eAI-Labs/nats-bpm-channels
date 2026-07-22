@@ -71,6 +71,16 @@
             <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Basamak-3 LargeVariableExternalizationE2eTest: reuses nats-history-projection's real
+             db/migration/projection/* classpath resources (V1/V4) to build the SAME unified
+             content-addressed store schema RUNTIME externalization writes into (D-B'/D-D').
+             No reactor cycle (nats-history-projection depends only on nats-core); test-scope only. -->
+        <dependency>
+            <groupId>com.3eai</groupId>
+            <artifactId>nats-history-projection</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>

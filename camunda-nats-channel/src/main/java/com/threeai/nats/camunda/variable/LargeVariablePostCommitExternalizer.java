@@ -92,10 +92,20 @@ public class LargeVariablePostCommitExternalizer {
      * (uncommitted) command that just staged the over-threshold value, so the listener fires only
      * if that write actually commits (a rolled-back write must never trigger externalization of
      * content that was never durably staged).
+     *
+     * <p><b>CODER-NOTE (deferred {@code getId()} read, production bug found via this class's own
+     * E2E test):</b> for a BRAND NEW variable, {@code VariableInstanceEntity.getId()} is still
+     * {@code null} at {@code writeValue()} time — the fork's ID generator assigns it only during
+     * the command's {@code DbEntityManager} flush/insert, which has not happened yet while the
+     * serializer is still populating the entity's {@code ValueFields}. Accepting the LIVE entity
+     * reference (not a pre-extracted id string) and reading {@code getId()} lazily INSIDE the
+     * {@code COMMITTED} listener — which by definition only fires after that same flush has
+     * durably inserted the row with its real, non-null primary key — is what makes this correct
+     * for both brand-new variables and in-place updates of an existing one.
      */
-    public void scheduleExternalization(String variableId) {
+    public void scheduleExternalization(VariableInstanceEntity variableInstance) {
         Context.getCommandContext().getTransactionContext()
-                .addTransactionListener(TransactionState.COMMITTED, commandContext -> dispatchAsync(variableId));
+                .addTransactionListener(TransactionState.COMMITTED, commandContext -> dispatchAsync(variableInstance.getId()));
     }
 
     private void dispatchAsync(String variableId) {
