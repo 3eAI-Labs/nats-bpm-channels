@@ -8,6 +8,10 @@ public class NatsOutboundChannelModel extends OutboundChannelModel {
     private boolean jetstream;
     private boolean autoCreateStream;
     private String streamName;
+    /** D-G' (docs/09-outbound-handoff.md) — DLQ subject for publish-failure custody-transfer;
+     *  {@code null} means "use the default {@code dlq.<subject>} convention" (mirrors the inbound
+     *  channel model's own default resolution in {@code NatsChannelDefinitionProcessor}). */
+    private String dlqSubject;
 
     public String getSubject() {
         return subject;
@@ -39,5 +43,13 @@ public class NatsOutboundChannelModel extends OutboundChannelModel {
 
     public void setStreamName(String streamName) {
         this.streamName = streamName;
+    }
+
+    public String getDlqSubject() {
+        return dlqSubject;
+    }
+
+    public void setDlqSubject(String dlqSubject) {
+        this.dlqSubject = dlqSubject;
     }
 }
