@@ -200,4 +200,38 @@ public class NatsChannelMetrics {
         return Counter.builder("nats.large_variable.externalized")
                 .tag("engine_id", engineId).register(registry);
     }
+
+    // --- Outbound Handoff (basamak-4, docs/09-outbound-handoff.md) ---
+
+    public Counter outboundOutboxWrittenCount(String messageType, String engineId) {
+        return Counter.builder("nats.outbound.outbox.written")
+                .tag("message_type", messageType).tag("engine_id", engineId).register(registry);
+    }
+
+    public Counter outboundOutboxRelayedCount(String messageType, String outcome) {
+        return Counter.builder("nats.outbound.outbox.relayed")
+                .tag("message_type", messageType).tag("outcome", outcome).register(registry);
+    }
+
+    /** {@code SYS_OUTBOX_ROW_STUCK}-equivalent signal source — updated by {@code OutboundMessageRelay.checkStuckRows()}. */
+    public void registerOutboundOutboxOldestRowAgeGauge(String engineId, Supplier<Number> ageSecondsSupplier) {
+        Gauge.builder("nats.outbound.outbox.oldest_row_age_seconds", ageSecondsSupplier)
+                .tag("engine_id", engineId).register(registry);
+    }
+
+    public Counter outboundPostCommitPublishedCount(String messageType) {
+        return Counter.builder("nats.outbound.postcommit.published")
+                .tag("message_type", messageType).register(registry);
+    }
+
+    /** Flowable D-G' hardening — JetStream publish outcome for the two outbound channel adapters. */
+    public Counter flowableOutboundPublishedCount(String subject, String channel) {
+        return Counter.builder("nats.flowable.outbound.published")
+                .tag("subject", subject).tag("channel", channel).register(registry);
+    }
+
+    public Counter flowableOutboundDlqRoutedCount(String subject, String channel) {
+        return Counter.builder("nats.flowable.outbound.dlq_routed")
+                .tag("subject", subject).tag("channel", channel).register(registry);
+    }
 }

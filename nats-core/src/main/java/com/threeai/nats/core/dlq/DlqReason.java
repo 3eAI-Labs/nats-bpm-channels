@@ -25,7 +25,13 @@ public enum DlqReason {
     /** Basamak-2, `ERROR_REGISTRY.md` §3.3 row 12 — {@code HistoryProjectionConsumer} deliveryCount &gt; maxDeliver. */
     HISTORY_DELIVERY_BUDGET_EXCEEDED("BUS_HISTORY_DELIVERY_BUDGET_EXCEEDED"),
     /** Basamak-2, `ERROR_REGISTRY.md` §3.3 row 11 — envelope does not match the asyncapi contract. */
-    HISTORY_SCHEMA_DRIFT("SYS_PROJECTION_SCHEMA_DRIFT");
+    HISTORY_SCHEMA_DRIFT("SYS_PROJECTION_SCHEMA_DRIFT"),
+    /**
+     * Basamak-4 (docs/09-outbound-handoff.md D-G') — Flowable {@code NatsOutboundEventChannelAdapter}/
+     * {@code JetStreamOutboundEventChannelAdapter} publish attempt failed (broker unreachable, publish
+     * exception). Routed to DLQ as a last-resort custody-transfer instead of a silent message loss.
+     */
+    OUTBOUND_PUBLISH_FAILED("SYS_OUTBOUND_PUBLISH_FAILED");
 
     private final String exceptionCode;
 

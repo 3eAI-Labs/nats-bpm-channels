@@ -151,8 +151,9 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
     private void registerOutbound(NatsOutboundChannelModel model) {
         validateSubject(model.getSubject(), model.getKey());
 
+        String dlqSubject = resolveDlqSubject(model);
         NatsOutboundEventChannelAdapter adapter = new NatsOutboundEventChannelAdapter(
-                connection, model.getSubject());
+                connection, model.getSubject(), model.getKey(), dlqPublisher, dlqSubject, metrics);
         model.setOutboundEventChannelAdapter(adapter);
     }
 
@@ -163,9 +164,15 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
             streamManager.ensureStream(model.getStreamName(), model.getSubject(), connection);
         }
 
+        String dlqSubject = resolveDlqSubject(model);
         JetStreamOutboundEventChannelAdapter adapter = new JetStreamOutboundEventChannelAdapter(
-                jetStream, model.getSubject(), metrics, model.getKey());
+                jetStream, model.getSubject(), metrics, model.getKey(), dlqPublisher, dlqSubject);
         model.setOutboundEventChannelAdapter(adapter);
+    }
+
+    /** D-G' — mirrors the inbound adapters' {@code "dlq." + subject} default when unconfigured. */
+    private String resolveDlqSubject(NatsOutboundChannelModel model) {
+        return model.getDlqSubject() != null ? model.getDlqSubject() : "dlq." + model.getSubject();
     }
 
     private void validateSubject(String subject, String channelKey) {
@@ -175,6 +182,10 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
         }
         try {
             NamespaceValidator.assertNotReservedForA2(subject, channelKey);
+            // D-E'/D-G' (docs/09-outbound-handoff.md) -- events.*/dlq.events.* are reserved for the
+            // basamak-4 outbound-handoff mechanism; a tenant-defined Flowable channel must not
+            // collide with either.
+            NamespaceValidator.assertNotReservedForOutbound(subject, channelKey);
         } catch (TopicNamespaceCollisionException e) {
             // nats-core is engine-neutral and cannot depend on Flowable (see CODER-NOTES);
             // re-wrap so callers still see the FlowableException surface they expect.

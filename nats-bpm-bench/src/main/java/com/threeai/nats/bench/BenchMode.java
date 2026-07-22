@@ -17,5 +17,11 @@ public enum BenchMode {
      *  LargeVariableBenchScenario}'s reference mode. */
     LARGE_VARIABLE_BASELINE,
     /** Basamak-3: {@code LargeVariableSerializer} + deferred externalization active. */
-    LARGE_VARIABLE_EXTERNALIZED
+    LARGE_VARIABLE_EXTERNALIZED,
+    /** Basamak-4: {@code NatsOutboundPublisher} classifies the bench message type CRITICAL —
+     *  tx-in {@code outbound_message_outbox} write active — {@code OutboundBenchScenario}. */
+    OUTBOUND_CRITICAL,
+    /** Basamak-4: {@code NatsOutboundPublisher} classifies the bench message type BEST_EFFORT —
+     *  post-commit publish only, zero {@code outbound_message_outbox} writes. */
+    OUTBOUND_BEST_EFFORT
 }

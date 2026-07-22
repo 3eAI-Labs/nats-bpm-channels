@@ -162,6 +162,58 @@ class NatsChannelDefinitionProcessorTest {
                 .hasCauseInstanceOf(TopicNamespaceCollisionException.class);
     }
 
+    // --- Basamak-4 (docs/09-outbound-handoff.md D-E'/D-G') ---
+
+    @Test
+    void registerOutbound_reservedOutboundNamespace_throwsCollisionException() {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("events.camunda.order.created.proc-1");
+
+        assertThatThrownBy(() ->
+                processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false))
+                .isInstanceOf(FlowableException.class)
+                .hasCauseInstanceOf(TopicNamespaceCollisionException.class);
+    }
+
+    @Test
+    void registerOutbound_reservedOutboundDlqNamespace_throwsCollisionException() {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("dlq.events.camunda.order.created.proc-1");
+
+        assertThatThrownBy(() ->
+                processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false))
+                .isInstanceOf(FlowableException.class)
+                .hasCauseInstanceOf(TopicNamespaceCollisionException.class);
+    }
+
+    @Test
+    void registerOutbound_noDlqSubjectConfigured_adapterUsesDefaultDlqConvention() throws Exception {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.completed");
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        assertThat(model.getOutboundEventChannelAdapter()).isInstanceOf(NatsOutboundEventChannelAdapter.class);
+        // Default DLQ subject resolution ("dlq." + subject) is exercised end-to-end by
+        // NatsOutboundEventChannelAdapterTest; here we only assert the adapter wired successfully.
+    }
+
+    @Test
+    void registerJetStreamOutbound_explicitDlqSubject_adapterCreated() {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.completed");
+        model.setJetstream(true);
+        model.setDlqSubject("dlq.custom.order.completed");
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        assertThat(model.getOutboundEventChannelAdapter()).isInstanceOf(JetStreamOutboundEventChannelAdapter.class);
+    }
+
     @Test
     void registerJetStreamInbound_thenFindBySubject_returnsModel() {
         NatsInboundChannelModel model = new NatsInboundChannelModel();

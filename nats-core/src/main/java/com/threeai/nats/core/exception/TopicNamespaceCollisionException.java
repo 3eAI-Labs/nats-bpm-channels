@@ -21,8 +21,19 @@ public class TopicNamespaceCollisionException extends RuntimeException {
     private final String channelKey;
 
     public TopicNamespaceCollisionException(String subject, String channelKey) {
+        this(subject, channelKey, "'jobs.*' namespace reserved for A2");
+    }
+
+    /**
+     * Basamak-4 (docs/09-outbound-handoff.md D-E') — generalizes the reservation message so the
+     * SAME exception type can report a collision against either the {@code jobs.*} (A2) or the
+     * {@code events.*}/{@code dlq.events.*} (outbound-handoff) reserved namespace without
+     * hardcoding "A2" into every message. The 2-arg constructor above is kept byte-identical
+     * (existing message text) for A2 callers/tests.
+     */
+    public TopicNamespaceCollisionException(String subject, String channelKey, String reservedNamespaceDescription) {
         super("NATS channel '" + channelKey + "': subject '" + subject
-                + "' collides with the 'jobs.*' namespace reserved for A2 (" + CODE + ")");
+                + "' collides with the " + reservedNamespaceDescription + " (" + CODE + ")");
         this.subject = subject;
         this.channelKey = channelKey;
     }

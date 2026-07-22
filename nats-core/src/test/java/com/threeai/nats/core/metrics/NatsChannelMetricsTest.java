@@ -155,6 +155,47 @@ class NatsChannelMetricsTest {
     }
 
     @Test
+    void outboundCounters_registeredAndIncrementCorrectly() {
+        Counter written = metrics.outboundOutboxWrittenCount("order_created", "camunda");
+        Counter relayed = metrics.outboundOutboxRelayedCount("order_created", "published");
+        Counter postCommit = metrics.outboundPostCommitPublishedCount("order_created");
+        Counter flowablePublished = metrics.flowableOutboundPublishedCount("order.completed", "orderChannel");
+        Counter flowableDlqRouted = metrics.flowableOutboundDlqRoutedCount("order.completed", "orderChannel");
+
+        written.increment();
+        relayed.increment();
+        postCommit.increment();
+        flowablePublished.increment();
+        flowableDlqRouted.increment();
+
+        assertThat(written.count()).isEqualTo(1.0);
+        assertThat(written.getId().getName()).isEqualTo("nats.outbound.outbox.written");
+        assertThat(written.getId().getTag("message_type")).isEqualTo("order_created");
+        assertThat(written.getId().getTag("engine_id")).isEqualTo("camunda");
+        assertThat(relayed.getId().getName()).isEqualTo("nats.outbound.outbox.relayed");
+        assertThat(relayed.getId().getTag("outcome")).isEqualTo("published");
+        assertThat(postCommit.getId().getName()).isEqualTo("nats.outbound.postcommit.published");
+        assertThat(flowablePublished.count()).isEqualTo(1.0);
+        assertThat(flowablePublished.getId().getName()).isEqualTo("nats.flowable.outbound.published");
+        assertThat(flowablePublished.getId().getTag("subject")).isEqualTo("order.completed");
+        assertThat(flowablePublished.getId().getTag("channel")).isEqualTo("orderChannel");
+        assertThat(flowableDlqRouted.count()).isEqualTo(1.0);
+        assertThat(flowableDlqRouted.getId().getName()).isEqualTo("nats.flowable.outbound.dlq_routed");
+    }
+
+    @Test
+    void outboundOutboxOldestRowAgeGauge_reflectsSupplierValue() {
+        java.util.concurrent.atomic.AtomicLong ageSeconds = new java.util.concurrent.atomic.AtomicLong(7);
+
+        metrics.registerOutboundOutboxOldestRowAgeGauge("camunda", ageSeconds::get);
+
+        io.micrometer.core.instrument.Gauge gauge = registry.find("nats.outbound.outbox.oldest_row_age_seconds")
+                .tag("engine_id", "camunda").gauge();
+        assertThat(gauge).isNotNull();
+        assertThat(gauge.value()).isEqualTo(7.0);
+    }
+
+    @Test
     void historyGauges_reflectSupplierValues() {
         java.util.concurrent.atomic.AtomicLong oldestRowAge = new java.util.concurrent.atomic.AtomicLong(10);
         java.util.concurrent.atomic.AtomicLong diffCount = new java.util.concurrent.atomic.AtomicLong(2);
