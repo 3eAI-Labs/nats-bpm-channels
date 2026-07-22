@@ -193,4 +193,11 @@ public class NatsChannelMetrics {
         return Counter.builder("nats.history.vault.access")
                 .tag("operation", operation).tag("granted", String.valueOf(granted)).register(registry);
     }
+
+    // --- Large Variable Externalization (basamak-3, docs/08) ---
+
+    public Counter largeVariableExternalizedCount(String engineId) {
+        return Counter.builder("nats.large_variable.externalized")
+                .tag("engine_id", engineId).register(registry);
+    }
 }
