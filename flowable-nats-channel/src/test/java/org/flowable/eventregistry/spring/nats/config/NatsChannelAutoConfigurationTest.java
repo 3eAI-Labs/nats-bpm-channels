@@ -108,24 +108,29 @@ class NatsChannelAutoConfigurationTest {
 
     @Test
     void autoConfig_meterRegistryPresent_createsNatsChannelMetricsDefaultBean() {
-        // QA-FINDING (see round-2 return report): FlowableNatsAutoConfiguration#failureEventBridge
-        // unconditionally forwards ANY present MeterRegistry bean into
-        // DlqBridgeCircuitBreakerFactory.create(...), which touches
-        // io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics -- an
-        // <optional>true</optional> nats-core dependency this module does not itself redeclare
-        // (same latent NoClassDefFoundError risk camunda-nats-channel's
-        // A2SubscriptionRegistrarTest already worked around by keeping meterRegistry null). A real
-        // MeterRegistry bean here would make failureEventBridge()'s factory method throw
-        // NoClassDefFoundError, so a mock FailureEventBridge bean is supplied to short-circuit that
-        // ConditionalOnMissingBean factory method entirely -- this test targets ONLY the
-        // natsChannelMetrics() default bean in isolation, which itself never touches the
-        // resilience4j-micrometer classes.
+        // QA-FINDING-1 (fixed): FlowableNatsAutoConfiguration#failureEventBridge unconditionally
+        // forwards ANY present MeterRegistry bean into DlqBridgeCircuitBreakerFactory.create(...),
+        // which used to touch io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics
+        // unconditionally -- an <optional>true</optional> nats-core dependency this module does
+        // not itself redeclare (confirmed via `mvn dependency:tree`: genuinely absent from this
+        // module's classpath). Pre-fix, a real MeterRegistry bean here made failureEventBridge()'s
+        // factory method throw NoClassDefFoundError. DlqBridgeCircuitBreakerFactory now guards that
+        // call behind a classpath-presence check and skips metrics gracefully when absent; this
+        // test now exercises the REAL failureEventBridge() bean (no mock short-circuit) with a real
+        // MeterRegistry present, proving both beans wire successfully AND no
+        // resilience4j.circuitbreaker.* meter gets registered (metrics gracefully skipped, not
+        // silently mis-bound).
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(FlowableNatsAutoConfiguration.class))
                 .withUserConfiguration(MockConnectionConfig.class)
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
-                .withBean(FailureEventBridge.class, () -> mock(FailureEventBridge.class))
-                .run(context -> assertThat(context).hasSingleBean(NatsChannelMetrics.class));
+                .withBean(MeterRegistry.class, () -> meterRegistry)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(NatsChannelMetrics.class);
+                    assertThat(context).hasSingleBean(FailureEventBridge.class);
+                    assertThat(meterRegistry.find("resilience4j.circuitbreaker.state").meters()).isEmpty();
+                });
     }
 
     @Test

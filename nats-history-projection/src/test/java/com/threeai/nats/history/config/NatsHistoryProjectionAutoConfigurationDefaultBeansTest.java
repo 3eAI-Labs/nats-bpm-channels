@@ -79,21 +79,30 @@ class NatsHistoryProjectionAutoConfigurationDefaultBeansTest {
 
     @Test
     void meterRegistryPresent_createsNatsChannelMetricsDefaultBean() {
-        // QA-FINDING (see round-2 return report, same pattern already documented in
-        // flowable-nats-channel): historyDlqInspectionConsumer() unconditionally forwards any
-        // present MeterRegistry into DlqBridgeCircuitBreakerFactory.create(...), which touches
-        // io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics -- an
-        // <optional>true</optional> nats-core dependency this module does not redeclare either.
-        // A mock HistoryDlqInspectionConsumer bean short-circuits that ConditionalOnMissingBean
-        // factory method so THIS test can isolate natsChannelMetrics() itself, which never
-        // touches the resilience4j-micrometer classes.
+        // QA-FINDING-1 (fixed): historyDlqInspectionConsumer() unconditionally forwards any
+        // present MeterRegistry into DlqBridgeCircuitBreakerFactory.create(...), which used to
+        // touch io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics
+        // unconditionally -- an <optional>true</optional> nats-core dependency this module does
+        // NOT redeclare (confirmed via `mvn dependency:tree`: absent from this module's compile
+        // AND test classpath). Pre-fix this bean creation threw NoClassDefFoundError the moment a
+        // MeterRegistry bean existed. This test now exercises the REAL
+        // historyDlqInspectionConsumer() bean (no mock short-circuit) against this module's
+        // genuinely resilience4j-micrometer-free classpath with a real MeterRegistry present,
+        // proving the classpath guard: both beans wire successfully AND no
+        // resilience4j.circuitbreaker.* meter gets registered (metrics gracefully skipped, not
+        // silently mis-bound).
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(NatsHistoryProjectionAutoConfiguration.class))
                 .withBean(Connection.class, () -> mock(Connection.class))
                 .withBean(JetStream.class, () -> mock(JetStream.class))
-                .withBean(HistoryDlqInspectionConsumer.class, () -> mock(HistoryDlqInspectionConsumer.class))
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
-                .run(context -> assertThat(context).hasSingleBean(NatsChannelMetrics.class));
+                .withBean(MeterRegistry.class, () -> meterRegistry)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(NatsChannelMetrics.class);
+                    assertThat(context).hasSingleBean(HistoryDlqInspectionConsumer.class);
+                    assertThat(meterRegistry.find("resilience4j.circuitbreaker.state").meters()).isEmpty();
+                });
     }
 
     @Test

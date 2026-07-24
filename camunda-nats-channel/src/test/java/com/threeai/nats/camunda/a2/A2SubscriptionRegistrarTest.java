@@ -70,11 +70,16 @@ class A2SubscriptionRegistrarTest {
 
         externalTaskService = mock(ExternalTaskService.class);
         dlqPublisher = new DlqPublisher(jetStream, connection, null);
-        // null, not a real SimpleMeterRegistry: DlqBridgeCircuitBreakerFactory.create only touches
-        // TaggedCircuitBreakerMetrics (resilience4j-micrometer) when registry != null, and that
-        // artifact is an OPTIONAL nats-core dependency this module does not itself redeclare —
-        // mirrors CamundaNatsAutoConfigurationTest's context (no MeterRegistry bean present either).
-        meterRegistry = null;
+        // QA-FINDING-1 (fixed): DlqBridgeCircuitBreakerFactory.create used to touch
+        // TaggedCircuitBreakerMetrics (resilience4j-micrometer) unconditionally whenever
+        // registry != null, and that artifact is an OPTIONAL nats-core dependency this module does
+        // not itself redeclare (confirmed via `mvn dependency:tree`: genuinely absent from this
+        // module's classpath) -- so a real MeterRegistry here used to throw NoClassDefFoundError
+        // the instant this constructor ran. DlqBridgeCircuitBreakerFactory now guards that call
+        // behind a classpath-presence check and skips metrics gracefully when absent; using a REAL
+        // SimpleMeterRegistry for every test in this class (rather than null) is precisely what
+        // proves that fix end-to-end, on this module's real resilience4j-micrometer-free classpath.
+        meterRegistry = new SimpleMeterRegistry();
         metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
         processEngine = mock(ProcessEngine.class);
         lockResolver = new UmbrellaLockResolver(properties);
@@ -90,6 +95,16 @@ class A2SubscriptionRegistrarTest {
     @AfterEach
     void tearDown() {
         registrar.destroy();
+    }
+
+    @Test
+    void constructor_realMeterRegistryPresent_noNoClassDefFoundError_metricsGracefullySkipped() {
+        // QA-FINDING-1 proof: setUp() already constructed `registrar` with a real MeterRegistry on
+        // this module's genuinely resilience4j-micrometer-free classpath (see setUp()'s comment) --
+        // reaching this assertion at all proves no NoClassDefFoundError occurred. The classpath
+        // guard means metrics are skipped gracefully, not silently mis-bound, so no
+        // resilience4j.circuitbreaker.* meter should be registered.
+        assertThat(meterRegistry.find("resilience4j.circuitbreaker.state").meters()).isEmpty();
     }
 
     @Test
