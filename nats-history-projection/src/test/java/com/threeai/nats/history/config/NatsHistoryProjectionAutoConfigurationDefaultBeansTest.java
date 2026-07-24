@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 import java.time.Duration;
 import javax.sql.DataSource;
 
-import com.threeai.nats.core.NatsProperties;
 import com.threeai.nats.history.projection.HistoryDlqInspectionConsumer;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -17,9 +16,7 @@ import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.context.annotation.Configuration;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -46,17 +43,15 @@ class NatsHistoryProjectionAutoConfigurationDefaultBeansTest {
     @Test
     void noUserConnectionBean_createsRealConnectionViaDefaultFactoryBean() {
         String natsUrl = "nats://" + natsContainer.getHost() + ":" + natsContainer.getMappedPort(4222);
-        // QA-FINDING (see round-2 return report): NatsHistoryProjectionAutoConfiguration's
-        // natsConnection(NatsProperties props) bean has no @EnableConfigurationProperties(
-        // NatsProperties.class) of its own (unlike FlowableNatsAutoConfiguration, which does) --
-        // in a real deployment where this module runs WITHOUT also co-locating
-        // camunda-nats-channel/flowable-nats-channel's auto-configuration (which register
-        // NatsProperties) AND without the tenant supplying their own Connection bean, this bean
-        // fails to instantiate with NoSuchBeanDefinitionException. Supplying NatsProperties
-        // directly here is a test-only workaround to still exercise the factory method's body.
+        // QA-FINDING-2 (fixed): NatsHistoryProjectionAutoConfiguration now carries its own
+        // @EnableConfigurationProperties(NatsProperties.class) (mirrors FlowableNatsAutoConfiguration),
+        // so natsConnection(NatsProperties props) resolves standalone -- no co-located
+        // camunda/flowable-nats-channel auto-configuration and no tenant-supplied NatsProperties
+        // bean needed. Previously this bean failed with NoSuchBeanDefinitionException in exactly
+        // this shape (module running alone, no user Connection bean); this test proves the fix by
+        // deliberately NOT supplying NatsProperties from anywhere else.
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(NatsHistoryProjectionAutoConfiguration.class))
-                .withUserConfiguration(NatsPropertiesConfig.class)
                 .withBean(JetStream.class, () -> mock(JetStream.class))
                 .withPropertyValues("spring.nats.url=" + natsUrl)
                 .run(context -> {
@@ -65,11 +60,6 @@ class NatsHistoryProjectionAutoConfigurationDefaultBeansTest {
                     assertThatCode(() -> connection.flush(Duration.ofSeconds(2))).doesNotThrowAnyException();
                     connection.close();
                 });
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(NatsProperties.class)
-    static class NatsPropertiesConfig {
     }
 
     @Test

@@ -86,11 +86,19 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @AutoConfiguration
 @EnableScheduling
-@EnableConfigurationProperties({HistoryProjectionProperties.class, HistoryProjectionDataSourceProperties.class,
-        PseudonymVaultDataSourceProperties.class, ReconciliationProperties.class, HistoryCutoverProperties.class,
-        RetentionProperties.class})
+@EnableConfigurationProperties({NatsProperties.class, HistoryProjectionProperties.class,
+        HistoryProjectionDataSourceProperties.class, PseudonymVaultDataSourceProperties.class,
+        ReconciliationProperties.class, HistoryCutoverProperties.class, RetentionProperties.class})
 public class NatsHistoryProjectionAutoConfiguration {
 
+    /**
+     * QA-FINDING-2 fix: {@code NatsProperties} is now bound by THIS auto-configuration's own
+     * {@code @EnableConfigurationProperties} above (mirrors {@code FlowableNatsAutoConfiguration}'s
+     * discipline) instead of relying on a co-located engine module's auto-configuration to have
+     * bound it first. A tenant running this module standalone (no camunda/flowable-nats-channel
+     * on the classpath) without supplying their own {@code Connection} bean previously hit {@code
+     * NoSuchBeanDefinitionException} here.
+     */
     @Bean
     @ConditionalOnMissingBean
     public Connection natsConnection(NatsProperties props) throws IOException, InterruptedException {
