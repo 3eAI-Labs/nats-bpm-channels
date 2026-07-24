@@ -66,4 +66,12 @@ class ContentHashTest {
     void isWellFormedHex_null_false() {
         assertThat(ContentHash.isWellFormedHex(null)).isFalse();
     }
+
+    @Test
+    void sha256Hex_stringOverload_matchesByteArrayOverloadOnItsUtf8Bytes() {
+        String stringOverloadResult = ContentHash.sha256Hex("hello world");
+        String byteArrayOverloadResult = ContentHash.sha256Hex("hello world".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(stringOverloadResult).isEqualTo(byteArrayOverloadResult);
+    }
 }

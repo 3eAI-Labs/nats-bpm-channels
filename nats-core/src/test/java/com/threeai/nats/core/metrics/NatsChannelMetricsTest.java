@@ -22,6 +22,7 @@ class NatsChannelMetricsTest {
     @Test
     void counters_registeredAndIncrementCorrectly() {
         Counter consume = metrics.consumeCount("order.new", "orderChannel");
+        Counter consumeError = metrics.consumeErrorCount("order.new", "orderChannel");
         Counter ack = metrics.ackCount("order.new", "orderChannel");
         Counter nak = metrics.nakCount("order.new", "orderChannel");
         Counter dlq = metrics.dlqCount("order.new", "orderChannel");
@@ -33,12 +34,16 @@ class NatsChannelMetricsTest {
         Counter slowConsumer = metrics.slowConsumerCount();
 
         consume.increment();
+        consumeError.increment();
         ack.increment();
         nak.increment();
         dlq.increment();
         reconnect.increment();
 
         assertThat(consume.count()).isEqualTo(1.0);
+        assertThat(consumeError.count()).isEqualTo(1.0);
+        assertThat(consumeError.getId().getName()).isEqualTo("nats.inbound.errors");
+        assertThat(consumeError.getId().getTag("subject")).isEqualTo("order.new");
         assertThat(ack.count()).isEqualTo(1.0);
         assertThat(nak.count()).isEqualTo(1.0);
         assertThat(dlq.count()).isEqualTo(1.0);
@@ -181,6 +186,17 @@ class NatsChannelMetricsTest {
         assertThat(flowablePublished.getId().getTag("channel")).isEqualTo("orderChannel");
         assertThat(flowableDlqRouted.count()).isEqualTo(1.0);
         assertThat(flowableDlqRouted.getId().getName()).isEqualTo("nats.flowable.outbound.dlq_routed");
+    }
+
+    @Test
+    void largeVariableExternalizedCount_registeredAndIncrementCorrectly() {
+        Counter externalized = metrics.largeVariableExternalizedCount("camunda");
+
+        externalized.increment();
+
+        assertThat(externalized.count()).isEqualTo(1.0);
+        assertThat(externalized.getId().getName()).isEqualTo("nats.large_variable.externalized");
+        assertThat(externalized.getId().getTag("engine_id")).isEqualTo("camunda");
     }
 
     @Test

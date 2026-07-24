@@ -49,6 +49,13 @@ class SweepLeaderLeaseTest {
     }
 
     @Test
+    void getTtl_returnsConfiguredValue() {
+        SweepLeaderLease lease = newLease("camunda", "pod-1");
+
+        assertThat(lease.getTtl()).isEqualTo(Duration.ofSeconds(240));
+    }
+
+    @Test
     void basamak2Overload_usesCustomBucketAndKeyPrefix_notDefault() throws Exception {
         // history-relay-leader reuse (08_config.md §3) -- separate bucket/key namespace from
         // a2-sweep-leader, verifying the two lease families never collide.

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.time.Duration;
 
 import io.nats.client.Connection;
@@ -62,5 +63,27 @@ class JetStreamKvManagerTest {
         assertThatThrownBy(() -> manager.ensureBucket("a2-sweep-leader", Duration.ofSeconds(240), 3, connection))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("a2-sweep-leader");
+    }
+
+    @Test
+    void ensureBucket_connectionKeyValueManagementFailsWithIOException_wrapsAsIllegalStateException() throws Exception {
+        Connection brokenConnection = mock(Connection.class);
+        when(brokenConnection.keyValueManagement()).thenThrow(new IOException("no connection"));
+
+        assertThatThrownBy(() -> manager.ensureBucket("a2-sweep-leader", Duration.ofSeconds(240), 3, brokenConnection))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("I/O error")
+                .hasCauseInstanceOf(IOException.class);
+    }
+
+    @Test
+    void ensureBucket_unexpectedRuntimeException_wrapsAsIllegalStateException() throws Exception {
+        Connection brokenConnection = mock(Connection.class);
+        when(brokenConnection.keyValueManagement()).thenThrow(new RuntimeException("unexpected"));
+
+        assertThatThrownBy(() -> manager.ensureBucket("a2-sweep-leader", Duration.ofSeconds(240), 3, brokenConnection))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unexpected error")
+                .hasCauseInstanceOf(RuntimeException.class);
     }
 }

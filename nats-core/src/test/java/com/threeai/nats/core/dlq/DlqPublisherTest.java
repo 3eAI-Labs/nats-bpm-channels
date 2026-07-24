@@ -106,6 +106,26 @@ class DlqPublisherTest {
         assertThat(outcome).isEqualTo(DlqPublishOutcome.FAILED_BOTH_PUBLISH);
     }
 
+    /**
+     * A core-NATS (non-JetStream) message has no delivery metadata -- {@code msg.metaData()}
+     * throws (real jnats {@code NatsMessage} behavior) rather than returning null. {@code
+     * deliveryCountOf} must swallow this and fall back to {@code 1}, not propagate.
+     */
+    @Test
+    void publish_originalMessageHasNoJetStreamMetadata_deliveryCountDefaultsToOne() throws Exception {
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn("payload".getBytes(StandardCharsets.UTF_8));
+        when(msg.getHeaders()).thenReturn(new Headers());
+        when(msg.getSubject()).thenReturn("jobs.foo.reply");
+        when(msg.metaData()).thenThrow(new IllegalStateException("Message is not a JetStream message"));
+
+        publisher.publish(msg, "dlq.jobs.foo", DlqReason.EMPTY_MESSAGE_BODY, "jobs.foo.reply", "foo");
+
+        ArgumentCaptor<NatsMessage> captor = ArgumentCaptor.forClass(NatsMessage.class);
+        verify(jetStream).publish(captor.capture());
+        assertThat(captor.getValue().getHeaders().getLast("X-Cadenzaflow-Dlq-Delivery-Count")).isEqualTo("1");
+    }
+
     private Message createMockMessage(byte[] data, Headers headers, String subject, long deliveryCount) {
         Message msg = mock(Message.class);
         when(msg.getData()).thenReturn(data);

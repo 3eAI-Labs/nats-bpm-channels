@@ -24,6 +24,9 @@ class OutboundClassificationPropertiesTest {
 
         assertThat(properties.classify("payment.requested")).isEqualTo(OutboundClassification.CRITICAL);
         assertThat(properties.classify("order.created")).isEqualTo(OutboundClassification.BEST_EFFORT);
+        // getCriticalTypes() is what a Spring-bound consumer/inspector reads back -- must be the
+        // SAME set classify() itself consults, not a decoupled copy.
+        assertThat(properties.getCriticalTypes()).containsExactly("payment.requested");
     }
 
     @Test
@@ -39,5 +42,6 @@ class OutboundClassificationPropertiesTest {
         properties.setVariableAllowlist(Map.of("order.created", List.of("amount", "currency")));
 
         assertThat(properties.variableAllowlistFor("order.created")).containsExactly("amount", "currency");
+        assertThat(properties.getVariableAllowlist()).containsEntry("order.created", List.of("amount", "currency"));
     }
 }
