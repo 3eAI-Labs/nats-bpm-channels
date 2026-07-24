@@ -1,6 +1,12 @@
 package com.threeai.nats.history.cutover;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
@@ -96,5 +102,22 @@ class CutoverRollbackTest {
         rollback.rollback("camunda", HistoryClassNames.INCIDENT, "ops-1", "reason-2");
 
         assertThat(stateStore.find("camunda", HistoryClassNames.INCIDENT).orElseThrow().rollbackCount()).isEqualTo(2);
+    }
+
+    // --- Sentinel Phase 5.5 (round 2): KV write failure ---
+
+    @Test
+    void rollback_kvWriteThrows_wrapsInIllegalStateException_doesNotTouchStateStore() throws Exception {
+        io.nats.client.Connection brokenConnection = mock(io.nats.client.Connection.class);
+        when(brokenConnection.keyValue(anyString())).thenThrow(new java.io.IOException("bucket not found"));
+        ClassCutoverStateStore mockStateStore = mock(ClassCutoverStateStore.class);
+        CutoverRollback rollback = new CutoverRollback(mockStateStore, kvManager, brokenConnection);
+
+        assertThatThrownBy(() -> rollback.rollback("camunda", HistoryClassNames.OP_LOG, "ops-1", "reason"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to write rollback KV value for camunda/" + HistoryClassNames.OP_LOG)
+                .hasCauseInstanceOf(java.io.IOException.class);
+
+        verify(mockStateStore, never()).rollback(anyString(), anyString(), org.mockito.ArgumentMatchers.any());
     }
 }
