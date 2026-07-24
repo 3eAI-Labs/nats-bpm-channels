@@ -1,5 +1,6 @@
 package org.flowable.eventregistry.spring.nats;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -11,16 +12,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 import io.nats.client.Connection;
 import io.nats.client.Dispatcher;
 import io.nats.client.Message;
 import io.nats.client.MessageHandler;
 import io.nats.client.Subscription;
+import io.nats.client.impl.Headers;
 import org.flowable.eventregistry.api.EventRegistry;
 import org.flowable.eventregistry.spring.nats.channel.NatsInboundChannelModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 
 class NatsInboundEventChannelAdapterTest {
 
@@ -116,5 +120,39 @@ class NatsInboundEventChannelAdapterTest {
         adapter.handleMessage(goodMessage);
 
         verify(eventRegistry).eventReceived(eq(channelModel), any(NatsInboundEvent.class));
+    }
+
+    // --- Sentinel Phase 5.5 (round 2) coverage ---
+
+    @Test
+    void unsubscribe_dispatcherDrainThrows_logsWarnAndStillClosesDispatcher() throws Exception {
+        doThrow(new RuntimeException("drain failed")).when(dispatcher).drain(any(Duration.class));
+        adapter.subscribe();
+
+        assertThatCode(adapter::unsubscribe).doesNotThrowAnyException();
+
+        verify(dispatcher).drain(Duration.ofSeconds(5));
+        verify(connection).closeDispatcher(dispatcher);
+    }
+
+    @Test
+    void handleMessage_traceIdHeaderPresent_propagatedToMdcDuringProcessing() {
+        Headers headers = new Headers();
+        headers.add("X-Trace-Id", "trace-abc-999");
+        Message message = mock(Message.class);
+        when(message.getData()).thenReturn("{\"orderId\":1}".getBytes(StandardCharsets.UTF_8));
+        when(message.getHeaders()).thenReturn(headers);
+        when(message.getSubject()).thenReturn("order.new");
+
+        final String[] capturedTraceId = {null};
+        org.mockito.Mockito.doAnswer(invocation -> {
+            capturedTraceId[0] = MDC.get("trace_id");
+            return null;
+        }).when(eventRegistry).eventReceived(any(), any(NatsInboundEvent.class));
+
+        adapter.handleMessage(message);
+
+        org.assertj.core.api.Assertions.assertThat(capturedTraceId[0]).isEqualTo("trace-abc-999");
+        org.assertj.core.api.Assertions.assertThat(MDC.get("trace_id")).isNull();
     }
 }
