@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -102,6 +103,136 @@ class A2IncidentBridgeTest {
         bridge.handleDlqMessage(msg);
 
         verify(msg).nakWithDelay(any(Duration.class));
+    }
+
+    @Test
+    void subscribe_registersJetStreamPushSubscription_logsSuccess() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        A2IncidentBridge freshBridge = new A2IncidentBridge(freshConnection, freshJetStream,
+                externalTaskService, "a2-jetstream-bridge", config, circuitBreaker, null);
+
+        freshBridge.subscribe();
+
+        verify(freshJetStream).subscribe(org.mockito.ArgumentMatchers.eq(config.getSubject()), eq(dispatcher),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(false),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void subscribe_jetStreamThrows_wrapsAsIllegalStateException() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        when(freshConnection.createDispatcher()).thenReturn(mock(io.nats.client.Dispatcher.class));
+        when(freshJetStream.subscribe(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean(),
+                org.mockito.ArgumentMatchers.any(io.nats.client.PushSubscribeOptions.class)))
+                .thenThrow(new java.io.IOException("subscribe failed"));
+        A2IncidentBridge freshBridge = new A2IncidentBridge(freshConnection, freshJetStream,
+                externalTaskService, "a2-jetstream-bridge", config, circuitBreaker, null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(freshBridge::subscribe)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(config.getSubject());
+    }
+
+    @Test
+    void unsubscribe_beforeSubscribe_isNoOp_doesNotThrow() {
+        A2IncidentBridge freshBridge = new A2IncidentBridge(mock(Connection.class), mock(JetStream.class),
+                externalTaskService, "a2-jetstream-bridge", config, circuitBreaker, null);
+
+        org.assertj.core.api.Assertions.assertThatCode(freshBridge::unsubscribe).doesNotThrowAnyException();
+    }
+
+    @Test
+    void subscribeThenUnsubscribe_drainsDispatcherAndShutsDownExecutor() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        A2IncidentBridge freshBridge = new A2IncidentBridge(freshConnection, freshJetStream,
+                externalTaskService, "a2-jetstream-bridge", config, circuitBreaker, null);
+        freshBridge.subscribe();
+
+        freshBridge.unsubscribe();
+
+        verify(dispatcher).drain(Duration.ofSeconds(10));
+    }
+
+    @Test
+    void unsubscribe_dispatcherDrainThrows_logsWarningAndStillShutsDownExecutor() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        when(dispatcher.drain(any(Duration.class))).thenThrow(new RuntimeException("drain failed"));
+        A2IncidentBridge freshBridge = new A2IncidentBridge(freshConnection, freshJetStream,
+                externalTaskService, "a2-jetstream-bridge", config, circuitBreaker, null);
+        freshBridge.subscribe();
+
+        org.assertj.core.api.Assertions.assertThatCode(freshBridge::unsubscribe).doesNotThrowAnyException();
+    }
+
+    /**
+     * {@code extractExternalTaskId}/{@code dlqReasonOf} both short-circuit to their "no headers"
+     * default (null / "UNKNOWN") on the SAME precondition — a single message with null headers
+     * exercises both defensive branches at once, still through the real success path (mocked
+     * {@code handleFailure} does not care that the task id is null).
+     */
+    @Test
+    void handleDlqMessage_headersNull_extractsNullTaskIdAndUnknownReason_stillAcks() {
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn("{}".getBytes(StandardCharsets.UTF_8));
+        when(msg.getHeaders()).thenReturn(null);
+        when(msg.getSubject()).thenReturn("dlq.jobs.order-fulfillment");
+
+        bridge.handleDlqMessage(msg);
+
+        verify(externalTaskService).handleFailure(eq((String) null), eq("a2-jetstream-bridge"),
+                anyString(), eq("UNKNOWN"), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(0L));
+        verify(msg).ack();
+    }
+
+    /**
+     * {@code Nats-Msg-Id} NOT carrying the {@code .dlq} suffix contract-fix #3 normally guarantees
+     * (a malformed/legacy message) — {@code extractExternalTaskId} falls back to the raw header
+     * value verbatim rather than stripping a suffix that isn't there.
+     */
+    @Test
+    void handleDlqMessage_msgIdWithoutDlqSuffix_usesRawValueAsExternalTaskId() {
+        Headers headers = new Headers();
+        headers.add("Nats-Msg-Id", "task-raw-no-suffix"); // no ".dlq" suffix
+        headers.add("X-Cadenzaflow-Dlq-Reason", "BUS_REPLY_DELIVERY_BUDGET_EXCEEDED");
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn("{}".getBytes(StandardCharsets.UTF_8));
+        when(msg.getHeaders()).thenReturn(headers);
+        when(msg.getSubject()).thenReturn("dlq.jobs.order-fulfillment");
+
+        bridge.handleDlqMessage(msg);
+
+        verify(externalTaskService).handleFailure(eq("task-raw-no-suffix"), eq("a2-jetstream-bridge"),
+                anyString(), anyString(), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(0L));
+    }
+
+    @Test
+    void handleDlqMessage_metaDataUnavailableOnFailurePath_backoffUsesDefaultDeliveryCountOne() {
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn("{}".getBytes(StandardCharsets.UTF_8));
+        Headers headers = new Headers();
+        headers.add("Nats-Msg-Id", "task-metaless.dlq");
+        headers.add("X-Cadenzaflow-Dlq-Reason", "BUS_REPLY_DELIVERY_BUDGET_EXCEEDED");
+        when(msg.getHeaders()).thenReturn(headers);
+        when(msg.getSubject()).thenReturn("dlq.jobs.order-fulfillment");
+        when(msg.metaData()).thenThrow(new IllegalStateException("not a JetStream message"));
+        doThrow(new RuntimeException("cockpit db down"))
+                .when(externalTaskService).handleFailure(anyString(), anyString(), anyString(), anyString(), anyInt(), anyLong());
+
+        bridge.handleDlqMessage(msg);
+
+        // deliveryCountOf() caught the metaData() failure and fell back to 1 -> backoff 2^0=1s.
+        verify(msg).nakWithDelay(Duration.ofSeconds(1));
     }
 
     private Message dlqMessage(String externalTaskId, String reason, long deliveryCount) {

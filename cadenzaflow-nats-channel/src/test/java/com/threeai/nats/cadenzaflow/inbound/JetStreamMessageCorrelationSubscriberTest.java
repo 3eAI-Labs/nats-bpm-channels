@@ -64,6 +64,224 @@ class JetStreamMessageCorrelationSubscriberTest {
     }
 
     @Test
+    void subscribe_registersJetStreamPushSubscription_logsSuccess() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        JetStreamMessageCorrelationSubscriber freshSubscriber = new JetStreamMessageCorrelationSubscriber(
+                freshConnection, freshJetStream, runtimeService, config, null, dlqPublisher);
+
+        freshSubscriber.subscribe();
+
+        verify(freshJetStream).subscribe(eq(config.getSubject()), eq(dispatcher), any(), eq(false), any());
+    }
+
+    @Test
+    void subscribe_durableNameConfigured_appliedToConsumerConfiguration() throws Exception {
+        config.setDurableName("order-received-durable");
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        when(freshConnection.createDispatcher()).thenReturn(mock(io.nats.client.Dispatcher.class));
+        JetStreamMessageCorrelationSubscriber freshSubscriber = new JetStreamMessageCorrelationSubscriber(
+                freshConnection, freshJetStream, runtimeService, config, null, dlqPublisher);
+
+        freshSubscriber.subscribe();
+
+        org.mockito.ArgumentCaptor<io.nats.client.PushSubscribeOptions> optsCaptor =
+                org.mockito.ArgumentCaptor.forClass(io.nats.client.PushSubscribeOptions.class);
+        verify(freshJetStream).subscribe(eq(config.getSubject()), any(), any(), eq(false), optsCaptor.capture());
+        assertThat(optsCaptor.getValue().getConsumerConfiguration().getDurable()).isEqualTo("order-received-durable");
+    }
+
+    @Test
+    void subscribe_jetStreamThrows_wrapsAsIllegalStateException() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        when(freshConnection.createDispatcher()).thenReturn(mock(io.nats.client.Dispatcher.class));
+        when(freshJetStream.subscribe(org.mockito.ArgumentMatchers.anyString(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), any(io.nats.client.PushSubscribeOptions.class)))
+                .thenThrow(new IOException("subscribe failed"));
+        JetStreamMessageCorrelationSubscriber freshSubscriber = new JetStreamMessageCorrelationSubscriber(
+                freshConnection, freshJetStream, runtimeService, config, null, dlqPublisher);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(freshSubscriber::subscribe)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(config.getSubject());
+    }
+
+    @Test
+    void unsubscribe_beforeSubscribe_isNoOp_doesNotThrow() {
+        org.assertj.core.api.Assertions.assertThatCode(subscriber::unsubscribe).doesNotThrowAnyException();
+    }
+
+    @Test
+    void subscribeThenUnsubscribe_drainsDispatcherAndShutsDownExecutor() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        JetStreamMessageCorrelationSubscriber freshSubscriber = new JetStreamMessageCorrelationSubscriber(
+                freshConnection, freshJetStream, runtimeService, config, null, dlqPublisher);
+        freshSubscriber.subscribe();
+
+        freshSubscriber.unsubscribe();
+
+        verify(dispatcher).drain(Duration.ofSeconds(10));
+    }
+
+    @Test
+    void unsubscribe_dispatcherDrainThrows_logsWarningAndStillShutsDownExecutor() throws Exception {
+        Connection freshConnection = mock(Connection.class);
+        JetStream freshJetStream = mock(JetStream.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        when(dispatcher.drain(any(Duration.class))).thenThrow(new RuntimeException("drain failed"));
+        JetStreamMessageCorrelationSubscriber freshSubscriber = new JetStreamMessageCorrelationSubscriber(
+                freshConnection, freshJetStream, runtimeService, config, null, dlqPublisher);
+        freshSubscriber.subscribe();
+
+        org.assertj.core.api.Assertions.assertThatCode(freshSubscriber::unsubscribe).doesNotThrowAnyException();
+    }
+
+    @Test
+    void handleMessage_businessKeyHeaderConfigured_appliedToCorrelation() {
+        config.setBusinessKeyHeader("X-Business-Key");
+        Headers headers = new Headers();
+        headers.add("X-Business-Key", "biz-42");
+        Message msg = createMockMessage("{\"orderId\":1}", headers, 1);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder).processInstanceBusinessKey("biz-42");
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableConfigured_extractsFromJsonPayload() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\":\"biz-json-1\",\"other\":2}", null, 1);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder).processInstanceBusinessKey("biz-json-1");
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableFieldMissing_businessKeyNull_skipsBuilderCall() {
+        config.setBusinessKeyVariable("missingField");
+        Message msg = createMockMessage("{\"orderId\":1}", null, 1);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableMalformedJson_noColonAfterField_businessKeyNull() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\"}", null, 1); // field present, no ':' after it
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableMalformedJson_noOpeningQuoteAfterColon_businessKeyNull() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\":42}", null, 1); // numeric value, no quote
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableMalformedJson_unterminatedString_businessKeyNull() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\":\"unterminated", null, 1); // no closing quote
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_withMetrics_naksIncrementsCounterOnCorrelationFailure() {
+        NatsChannelMetrics realMetrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        JetStreamMessageCorrelationSubscriber metricsSubscriber = new JetStreamMessageCorrelationSubscriber(
+                connection, jetStream, runtimeService, config, realMetrics, dlqPublisher);
+        Message msg = createMockMessage("{\"orderId\":1}", null, 1);
+        when(correlationBuilder.correlateWithResult()).thenThrow(new RuntimeException("no process"));
+
+        metricsSubscriber.handleMessage(msg);
+
+        assertThat(realMetrics.nakCount("order.new", "OrderReceived").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void handleMessage_withMetrics_ackIncrementsCounterOnSuccess() {
+        NatsChannelMetrics realMetrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        JetStreamMessageCorrelationSubscriber metricsSubscriber = new JetStreamMessageCorrelationSubscriber(
+                connection, jetStream, runtimeService, config, realMetrics, dlqPublisher);
+        Message msg = createMockMessage("{\"orderId\":1}", null, 1);
+
+        metricsSubscriber.handleMessage(msg);
+
+        assertThat(realMetrics.ackCount("order.new", "OrderReceived").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void handleMessage_withMetrics_maxDeliverExceededAndDlqBothFail_incrementsNakCounter() throws Exception {
+        NatsChannelMetrics realMetrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        JetStream failingJetStream = mock(JetStream.class);
+        Connection failingConnection = mock(Connection.class);
+        when(failingJetStream.publish(any(NatsMessage.class))).thenThrow(new IOException("JS down"));
+        doThrow(new RuntimeException("core down"))
+                .when(failingConnection).publish(any(String.class), any(Headers.class), any(byte[].class));
+        DlqPublisher bothFailDlqPublisher = new DlqPublisher(failingJetStream, failingConnection, realMetrics);
+        JetStreamMessageCorrelationSubscriber metricsSubscriber = new JetStreamMessageCorrelationSubscriber(
+                connection, failingJetStream, runtimeService, config, realMetrics, bothFailDlqPublisher);
+        Message msg = createMockMessage("{\"orderId\":99}", null, 6); // 6 > maxDeliver(5)
+
+        metricsSubscriber.handleMessage(msg);
+
+        assertThat(realMetrics.nakCount("order.new", "OrderReceived").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void handleMessage_metaDataUnavailableDuringMaxDeliverCheck_defaultsToDeliveryCountOne_processesNormally() {
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn("{\"orderId\":1}".getBytes(StandardCharsets.UTF_8));
+        when(msg.getHeaders()).thenReturn(null);
+        when(msg.getSubject()).thenReturn("order.new");
+        when(msg.metaData()).thenThrow(new IllegalStateException("not a JetStream message"));
+
+        subscriber.handleMessage(msg);
+
+        // deliveryCount defaults to 1 (<= maxDeliver(5)) -- proceeds to normal correlation, not DLQ.
+        verify(runtimeService).createMessageCorrelation("OrderReceived");
+        verify(msg).ack();
+    }
+
+    @Test
+    void handleMessage_correlationFailsAndMetaDataUnavailable_fallsBackToPlainNak() {
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn("{\"orderId\":1}".getBytes(StandardCharsets.UTF_8));
+        when(msg.getHeaders()).thenReturn(null);
+        when(msg.getSubject()).thenReturn("order.new");
+        when(msg.metaData()).thenThrow(new IllegalStateException("not a JetStream message"));
+        when(correlationBuilder.correlateWithResult()).thenThrow(new RuntimeException("no process"));
+
+        subscriber.handleMessage(msg);
+
+        // nakWithBackoff()'s OWN metaData() call also fails -> falls back to plain nak(), never
+        // reaching nakWithDelay(...) at all.
+        verify(msg).nak();
+        verify(msg, never()).nakWithDelay(any(Duration.class));
+    }
+
+    @Test
     void handleMessage_success_acksMessage() {
         Message msg = createMockMessage("{\"orderId\":1}", null, 1);
 
