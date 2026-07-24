@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.3eai</groupId>
         <artifactId>nats-channel-parent</artifactId>
-        <version>0.5.1</version>
+        <version>0.6.0</version>
     </parent>
     <artifactId>cadenzaflow-nats-channel</artifactId>
     <name>CadenzaFlow NATS Channel Adapter</name>

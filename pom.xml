@@ -6,11 +6,11 @@
 
     <groupId>com.3eai</groupId>
     <artifactId>nats-channel-parent</artifactId>
-    <version>0.5.1</version>
+    <version>0.6.0</version>
     <packaging>pom</packaging>
 
     <name>NATS BPM Channels</name>
-    <description>NATS.io channel adapters for BPM engines: Flowable, Camunda 7, and CadenzaFlow</description>
+    <description>NATS.io channel adapters for BPM engines: Flowable, Camunda 7, CIBSeven, and CadenzaFlow</description>
     <url>https://github.com/3eAI-Labs/nats-bpm-channels</url>
 
     <!-- cadenzaflow-nats-channel yaprak modüldür (hiçbir modül ona bağımlı değil) ve fork
@@ -22,6 +22,12 @@
         <module>nats-core</module>
         <module>flowable-nats-channel</module>
         <module>camunda-nats-channel</module>
+        <!-- cibseven-nats-channel: byte-mirror of camunda-nats-channel targeting CIBSeven
+             (org.cibseven.bpm:cibseven-engine, Camunda 7 community fork). Unlike
+             cadenzaflow-engine, cibseven-engine IS on Maven Central, so this module is a
+             first-class default reactor member (public, CI-buildable, Central-publishable)
+             and is NOT gated behind the -DskipCadenzaflow profile. -->
+        <module>cibseven-nats-channel</module>
         <module>nats-bpm-bench</module>
         <module>nats-history-projection</module>
     </modules>
@@ -67,6 +73,7 @@
         <spring-boot.version>3.3.6</spring-boot.version>
         <flowable.version>7.1.0</flowable.version>
         <camunda.version>7.24.0</camunda.version>
+        <cibseven.version>2.2.0</cibseven.version>
         <cadenzaflow.version>1.2.0</cadenzaflow.version>
         <jnats.version>2.20.5</jnats.version>
         <testcontainers.version>2.0.4</testcontainers.version>
@@ -128,6 +135,12 @@
                 <groupId>org.camunda.bpm</groupId>
                 <artifactId>camunda-engine</artifactId>
                 <version>${camunda.version}</version>
+            </dependency>
+            <!-- CIBSeven (Camunda 7 community fork; org.cibseven.* packages, on Maven Central) -->
+            <dependency>
+                <groupId>org.cibseven.bpm</groupId>
+                <artifactId>cibseven-engine</artifactId>
+                <version>${cibseven.version}</version>
             </dependency>
             <!-- CadenzaFlow -->
             <dependency>
