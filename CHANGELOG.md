@@ -4,6 +4,26 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.6.0] — 2026-07-24 — CIBSeven engine adapter
+
+### Added
+
+- **CIBSeven engine adapter (`cibseven-nats-channel`)** — a fourth engine binding targeting
+  [CIBSeven](https://cibseven.org/) 2.x (`org.cibseven.bpm:cibseven-engine`), the Apache-2.0
+  Camunda 7 community fork by CIB software GmbH. Byte-for-byte a rename-mirror of
+  `camunda-nats-channel` (`org.camunda.* → org.cibseven.*`, `com.threeai.nats.camunda → …cibseven`),
+  so it carries the full basamak 1–4 feature set (dispatch, history-offload, large-variable
+  externalization, outbound-handoff) with zero behavioral divergence. The BPMN extension namespace
+  is unchanged (CIBSeven retains `http://camunda.org/schema/1.0/bpmn` and the `camunda:` prefix —
+  verified: `BpmnParse.CAMUNDA_BPMN_EXTENSIONS_NS` and `BpmnModelConstants.CAMUNDA_NS` are kept),
+  so Camunda 7 BPMN files run unmodified. 285 tests pass against the real CIBSeven 2.2.0 engine
+  (unit + Testcontainers integration on Postgres + NATS JetStream).
+- Unlike `cadenzaflow-engine` (private fork, not on Maven Central), `cibseven-engine` is public, so
+  `cibseven-nats-channel` is a first-class default reactor module — CI builds it under
+  `-DskipCadenzaflow`, and it is Maven-Central-publishable alongside the Flowable and Camunda 7
+  adapters. The `-DskipCadenzaflow` boundary now cleanly separates the three public engine adapters
+  from the single private/commercial CadenzaFlow one.
+
 ## [0.5.1] — 2026-07-24 — Test hardening & concurrency fixes
 
 Patch release: coverage raised to ≥90% line on all production modules (weighted 93.0%,
