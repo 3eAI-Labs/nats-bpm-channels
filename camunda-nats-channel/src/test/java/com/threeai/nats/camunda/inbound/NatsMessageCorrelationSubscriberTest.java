@@ -54,6 +54,128 @@ class NatsMessageCorrelationSubscriberTest {
     }
 
     @Test
+    void subscribe_registersDispatcherSubscription_logsSuccess() {
+        Connection freshConnection = mock(Connection.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        NatsMessageCorrelationSubscriber freshSubscriber =
+                new NatsMessageCorrelationSubscriber(freshConnection, runtimeService, config, null);
+
+        freshSubscriber.subscribe();
+
+        verify(dispatcher).subscribe(eq(config.getSubject()), any(io.nats.client.MessageHandler.class));
+    }
+
+    @Test
+    void unsubscribe_beforeSubscribe_isNoOp_doesNotThrow() {
+        org.assertj.core.api.Assertions.assertThatCode(subscriber::unsubscribe).doesNotThrowAnyException();
+    }
+
+    @Test
+    void subscribeThenUnsubscribe_closesDispatcherAndShutsDownExecutor() {
+        Connection freshConnection = mock(Connection.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        NatsMessageCorrelationSubscriber freshSubscriber =
+                new NatsMessageCorrelationSubscriber(freshConnection, runtimeService, config, null);
+        freshSubscriber.subscribe();
+
+        freshSubscriber.unsubscribe();
+
+        verify(freshConnection).closeDispatcher(dispatcher);
+    }
+
+    @Test
+    void unsubscribe_closeDispatcherThrows_logsWarningAndStillShutsDownExecutor() {
+        Connection freshConnection = mock(Connection.class);
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(freshConnection.createDispatcher()).thenReturn(dispatcher);
+        doThrow(new RuntimeException("close failed")).when(freshConnection).closeDispatcher(dispatcher);
+        NatsMessageCorrelationSubscriber freshSubscriber =
+                new NatsMessageCorrelationSubscriber(freshConnection, runtimeService, config, null);
+        freshSubscriber.subscribe();
+
+        org.assertj.core.api.Assertions.assertThatCode(freshSubscriber::unsubscribe).doesNotThrowAnyException();
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableConfigured_extractsFromJsonPayload() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\":\"biz-json-2\"}", null);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder).processInstanceBusinessKey("biz-json-2");
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableFieldMissing_businessKeyNull_skipsBuilderCall() {
+        config.setBusinessKeyVariable("missingField");
+        Message msg = createMockMessage("{\"orderId\":\"1\"}", null);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableMalformedJson_noColonAfterField_businessKeyNull() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\"}", null);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableMalformedJson_noOpeningQuoteAfterColon_businessKeyNull() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\":42}", null);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_businessKeyVariableMalformedJson_unterminatedString_businessKeyNull() {
+        config.setBusinessKeyVariable("orderId");
+        Message msg = createMockMessage("{\"orderId\":\"unterminated", null);
+
+        subscriber.handleMessage(msg);
+
+        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+    }
+
+    @Test
+    void handleMessage_withMetrics_consumeErrorCountIncrementedOnCorrelationFailure() {
+        com.threeai.nats.core.metrics.NatsChannelMetrics realMetrics =
+                new com.threeai.nats.core.metrics.NatsChannelMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+        NatsMessageCorrelationSubscriber metricsSubscriber =
+                new NatsMessageCorrelationSubscriber(connection, runtimeService, config, realMetrics);
+        Message msg = createMockMessage("{\"orderId\":\"1\"}", null);
+        when(correlationBuilder.correlateWithResult()).thenThrow(new RuntimeException("no process"));
+
+        metricsSubscriber.handleMessage(msg);
+
+        assertThat(realMetrics.consumeErrorCount("order.new", "OrderReceived").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void handleMessage_withMetrics_consumeCountIncrementedOnSuccess() {
+        com.threeai.nats.core.metrics.NatsChannelMetrics realMetrics =
+                new com.threeai.nats.core.metrics.NatsChannelMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+        NatsMessageCorrelationSubscriber metricsSubscriber =
+                new NatsMessageCorrelationSubscriber(connection, runtimeService, config, realMetrics);
+        Message msg = createMockMessage("{\"orderId\":\"1\"}", null);
+
+        metricsSubscriber.handleMessage(msg);
+
+        assertThat(realMetrics.consumeCount("order.new", "OrderReceived").count()).isEqualTo(1.0);
+    }
+
+    @Test
     void handleMessage_correlatesSuccessfully() {
         Message msg = createMockMessage("{\"orderId\":\"123\"}", null);
 
