@@ -167,6 +167,69 @@ class ContentAddressedLargePayloadStoreTest {
                 .hasMessageContaining("SYS_LARGE_PAYLOAD_STORE_FAILED");
     }
 
+    @Test
+    void fetchByContentHash_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.fetchByContentHash("f".repeat(64)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_FETCH_FAILED");
+    }
+
+    @Test
+    void fetchById_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.fetchById(UUID.randomUUID()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_FETCH_FAILED");
+    }
+
+    @Test
+    void releaseReference_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.releaseReference(UUID.randomUUID()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_RELEASE_FAILED");
+    }
+
+    @Test
+    void currentRuntimeReference_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.currentRuntimeReference("camunda", "var-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_RUNTIME_REF_READ_FAILED");
+    }
+
+    @Test
+    void recordRuntimeReference_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.recordRuntimeReference("camunda", "var-1", UUID.randomUUID(), "f".repeat(64)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_RUNTIME_REF_WRITE_FAILED");
+    }
+
+    @Test
+    void deleteRuntimeReferenceRecord_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.deleteRuntimeReferenceRecord("camunda", "var-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_RUNTIME_REF_DELETE_FAILED");
+    }
+
+    @Test
+    void listRuntimeReferences_unreachableStore_throwsIllegalStateException() {
+        ContentAddressedLargePayloadStore unreachable = new ContentAddressedLargePayloadStore(unreachableDataSource());
+
+        assertThatThrownBy(() -> unreachable.listRuntimeReferences("camunda"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SYS_LARGE_PAYLOAD_RUNTIME_REF_LIST_FAILED");
+    }
+
     // --- RUNTIME reference ledger (D-F' FINDING-001 fix) ---
 
     @Test

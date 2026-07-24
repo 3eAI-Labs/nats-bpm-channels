@@ -206,4 +206,96 @@ class HistoryQueryApiTest {
             return false;
         }
     };
+
+    // --- Sentinel Phase 5.5 (round 2): listTaskHistory had no test coverage at all ---
+
+    @Test
+    void listTaskHistory_instanceNotFound_returnsEmpty() {
+        var result = queryApi.listTaskHistory("no-such-instance", new PageRequest(0, 20), ctx());
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void listTaskHistory_instanceExists_returnsTasks() {
+        insertProcessInstance("proc-9", "biz-9", "def9", Instant.now());
+        Map<String, Object> taskFields = new LinkedHashMap<>();
+        taskFields.put("taskId", "task-1");
+        taskFields.put("name", "Approve");
+        taskFields.put("assignee", "user-1");
+        taskFields.put("owner", "user-2");
+        projectionStore.upsertEntity(HistoryClassNames.TASKINST,
+                new EntityHistoryRecord("camunda", "task-1", "proc-9", 1, Instant.now(), taskFields));
+
+        var result = queryApi.listTaskHistory("proc-9", new PageRequest(0, 20), ctx());
+
+        assertThat(result).isPresent();
+        assertThat(result.get().data()).hasSize(1);
+        assertThat(result.get().data().get(0).taskId()).isEqualTo("task-1");
+        assertThat(result.get().data().get(0).assignee()).isEqualTo("user-1");
+    }
+
+    @Test
+    void listVariableHistory_instanceNotFound_returnsEmpty() {
+        var result = queryApi.listVariableHistory("no-such-instance", new PageRequest(0, 20), ctx());
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void projectionTableNameForVerification_delegatesToProjectionStoreTableNameFor() {
+        String tableName = HistoryQueryApi.projectionTableNameForVerification(HistoryClassNames.PROCINST);
+
+        assertThat(tableName).isEqualTo(ProjectionStore.tableNameFor(HistoryClassNames.PROCINST));
+    }
+
+    // --- Sentinel Phase 5.5 (round 2): real SQLException fault-injection (broken schema — no
+    // application tables present, "relation does not exist") for the exception-wrapping paths. ---
+
+    @Test
+    void getProcessInstanceHistory_sqlException_wrapsInIllegalStateException() {
+        HistoryQueryApi brokenApi = new HistoryQueryApi(brokenSchemaDataSource(), new PiiMaskingService(), ALLOW_ALL);
+
+        assertThatThrownBy(() -> brokenApi.getProcessInstanceHistory("proc-1", ctx()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to query process instance history")
+                .hasCauseInstanceOf(java.sql.SQLException.class);
+    }
+
+    @Test
+    void listProcessInstanceHistory_countSqlException_wrapsInIllegalStateException() {
+        HistoryQueryApi brokenApi = new HistoryQueryApi(brokenSchemaDataSource(), new PiiMaskingService(), ALLOW_ALL);
+        ProcessInstanceListQuery query = new ProcessInstanceListQuery("biz-1", null, null, null, new PageRequest(0, 20));
+
+        assertThatThrownBy(() -> brokenApi.listProcessInstanceHistory(query, ctx()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to count rows in process_instance_history")
+                .hasCauseInstanceOf(java.sql.SQLException.class);
+    }
+
+    @Test
+    void listActivityHistory_processInstanceExistsSqlException_wrapsInIllegalStateException() {
+        HistoryQueryApi brokenApi = new HistoryQueryApi(brokenSchemaDataSource(), new PiiMaskingService(), ALLOW_ALL);
+
+        assertThatThrownBy(() -> brokenApi.listActivityHistory("proc-1", new PageRequest(0, 20), ctx()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to check process instance existence for proc-1")
+                .hasCauseInstanceOf(java.sql.SQLException.class);
+    }
+
+    /**
+     * Points at a Postgres schema (same running container/credentials, different {@code
+     * currentSchema}) with none of this module's tables present — every query against it fails
+     * with a genuine "relation does not exist" {@link java.sql.SQLException}, exercising the
+     * catch-and-wrap idiom shared by every method in {@link HistoryQueryApi} without mocking the
+     * JDBC layer.
+     */
+    private static javax.sql.DataSource brokenSchemaDataSource() {
+        PGSimpleDataSource broken = new PGSimpleDataSource();
+        broken.setUrl(postgres.getJdbcUrl());
+        broken.setUser(postgres.getUsername());
+        broken.setPassword(postgres.getPassword());
+        broken.setCurrentSchema("pg_catalog"); // real schema, but none of OUR tables live there
+        return broken;
+    }
 }

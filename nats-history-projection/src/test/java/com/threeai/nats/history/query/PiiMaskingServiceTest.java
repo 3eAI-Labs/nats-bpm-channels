@@ -85,4 +85,15 @@ class PiiMaskingServiceTest {
 
         assertThat(result).isNull();
     }
+
+    @Test
+    void mask_unrecognizedType_piiNotPermitted_passesThroughUnmodified() {
+        // e.g. PagedResponse -- not one of the 4 known PII-bearing DTOs, so mask() must not throw
+        // or silently drop data; it passes the object through verbatim (no known PII fields).
+        PagedResponse<String> unrecognized = new PagedResponse<>(java.util.List.of("x"), 0, 20, 1L);
+
+        PagedResponse<String> result = maskingService.mask(unrecognized, ctx(false));
+
+        assertThat(result).isSameAs(unrecognized);
+    }
 }

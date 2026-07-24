@@ -4,6 +4,51 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.5.1] — 2026-07-24 — Test hardening & concurrency fixes
+
+Patch release: coverage raised to ≥90% line on all production modules (weighted 93.0%,
+up from ~76%) with meaningful real-dependency tests, plus a `@Tag("reliability")` load/stress
+suite (excluded from the default build). This effort surfaced and fixed **four real production
+bugs present in 0.3.0–0.5.0** — anyone on those versions should upgrade.
+
+### Fixed
+
+- **[HIGH] `NoClassDefFoundError` at auto-configuration when a `MeterRegistry` is present** —
+  `DlqBridgeCircuitBreakerFactory` referenced `TaggedCircuitBreakerMetrics` (from the *optional*
+  `resilience4j-micrometer`) unconditionally, so any deployment with Spring Boot Actuator +
+  Micrometer/Prometheus (but without that optional jar transitively present) crashed at startup
+  via `FailureEventBridge` / `A2SubscriptionRegistrar` / `HistoryDlqInspectionConsumer`. The
+  metrics binding is now behind a `ClassUtils.isPresent(...)` classpath guard (isolated in
+  `Resilience4jMicrometerMetricsBinder`); the circuit breaker works with or without the jar,
+  metrics are registered only when it is present.
+- **[HIGH] `ProjectionStore.upsertEntity` could split one entity across multiple rows under
+  concurrent first-writes** — the `selectExisting()`→`insertNew()` check-then-act was not atomic
+  and the per-writer `partition_anchor_at` differed, so the unique index never collided
+  (10 concurrent first-events produced up to 7 rows). Now serialized per entity with a
+  `pg_advisory_xact_lock` (zero schema change; the 3-step protocol and range-partitioning are
+  unchanged).
+- **[HIGH] `ProjectionStore.upsertEntity` could lose a newer state under concurrent updates** —
+  `updateExisting()` had no `stream_sequence` guard, so the last physical writer won rather than
+  the highest-sequence writer (violating the ADR-0012 stream-sequence tie-break / NFR-R4/R6
+  idempotency under concurrency). Fixed with the same advisory lock plus an `AND stream_sequence < ?`
+  CAS guard.
+- **[MEDIUM] `nats-history-projection` failed to start standalone** —
+  `NatsHistoryProjectionAutoConfiguration#natsConnection` lacked
+  `@EnableConfigurationProperties(NatsProperties.class)` (unlike `FlowableNatsAutoConfiguration`),
+  so a standalone deployment with no tenant `Connection` bean hit `NoSuchBeanDefinitionException`.
+
+### Tests / internal
+
+- Line coverage ≥90% on every production module (nats-core 98.9%, flowable 96.5%,
+  nats-history-projection 92.9%, cadenzaflow 90.8%, camunda 90.7%); reactor branch coverage
+  66.5% → 80.4%. ~351 new tests, real Testcontainers (Postgres/NATS) + fault-injection, no
+  coverage-padding; unreachable defensive paths left documented rather than forced.
+- New `@Tag("reliability")` load/stress suite (excluded from the default `mvn test`; run with
+  `-Dgroups=reliability`): leader-lease split-brain (real KV CAS, N-candidate race → single
+  winner), outbound-relay failover (RPO=0, RTO ≈ lease-TTL), custody-transfer under real broker
+  outage (Docker pause/unpause), content-addressed refcount under concurrency, DLQ under
+  continuous failure, and throughput/backpressure baselines.
+
 ## [0.5.0] — 2026-07-22 — Basamak-4: Outbound Handoff
 
 Sentinel-governed lean track (evidence-first design doc `docs/09-outbound-handoff.md`

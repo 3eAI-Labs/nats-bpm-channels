@@ -1,6 +1,7 @@
 package com.threeai.nats.core.db;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
@@ -59,5 +60,27 @@ class SqlMigrationRunnerTest {
         assertThatThrownBy(() -> SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/does-not-exist.sql"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("does-not-exist.sql");
+    }
+
+    /**
+     * Idempotency contract (class Javadoc): a SECOND application of the SAME script against a
+     * schema where it was already applied hits Postgres SQLState {@code 42P07} ("relation already
+     * exists") and must be swallowed (DEBUG log, no throw) -- never re-thrown as a failure.
+     */
+    @Test
+    void applyClasspathScript_alreadyApplied_isIdempotent_doesNotThrow() {
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/test-fixture/V1__widget.sql");
+
+        assertThatCode(() -> SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/test-fixture/V1__widget.sql"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void applyClasspathScript_genuineSqlFailure_wrapsAsIllegalStateException() {
+        assertThatThrownBy(() -> SqlMigrationRunner.applyClasspathScript(dataSource,
+                "db/migration/test-fixture/V4__broken_syntax.sql"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("V4__broken_syntax.sql")
+                .hasCauseInstanceOf(java.sql.SQLException.class);
     }
 }

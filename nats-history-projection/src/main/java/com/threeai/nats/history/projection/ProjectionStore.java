@@ -35,10 +35,36 @@ import org.slf4j.LoggerFactory;
  * byte-identical content from either side dedups onto one row (D-D' "3-copy -> 1 object"). Public
  * signatures are unchanged (basamak-2 compatibility, `ProjectionStoreTest`/`ErasurePipelineTest`
  * pass unmodified) — the dedup/refcount behavior is purely additive underneath.
+ *
+ * <p><b>CODER-NOTE (reliability hardening, QA-FINDING-1/QA-FINDING-2 —
+ * {@code ProjectionStoreConcurrencyReliabilityTest}):</b> {@link #upsertEntity}'s 3-step
+ * partition-safe merge-upsert protocol (SELECT then INSERT-or-UPDATE, DB_SCHEMA.md §2.3,
+ * ADR-0011/0012/0018 — the protocol's SQL shape, the range-partition scheme, and
+ * {@code partition_anchor_at} semantics are all UNCHANGED/LOCKED by this fix) is now wrapped in a
+ * single transaction guarded by a Postgres session-level advisory lock scoped to that transaction
+ * ({@code pg_advisory_xact_lock}, see {@link #acquireEntityLock}), keyed per
+ * (historyClass, engineId, entityId). This serializes the check-then-act sequence across
+ * concurrent callers for the SAME entity — closing both the first-insert race (QA-FINDING-1:
+ * concurrent distinct-timestamp first-events for a new entity could each observe "not found" and
+ * each insert their own row, splitting the entity across partitions) and the lost-update race
+ * (QA-FINDING-2: a lower-{@code stream_sequence} racer's UPDATE could physically commit after a
+ * higher-sequence racer's, silently reverting to older state). {@link #updateExisting} additionally
+ * carries an independent {@code AND stream_sequence < ?} CAS guard in its WHERE clause (defense in
+ * depth, ADR-0012 tie-break authority enforced at the SQL layer itself, not only by the caller's
+ * earlier read) — the same CAS discipline {@link com.threeai.nats.core.jetstream.SweepLeaderLease}
+ * and {@link ContentAddressedLargePayloadStore} already use elsewhere in this codebase. Concurrent
+ * upserts for DIFFERENT entities never contend (distinct lock keys) — no cross-entity throughput
+ * cost. The sequential (single-caller) call shape and outcomes are byte-for-byte unchanged
+ * ({@link ProjectionStoreTest} passes unmodified); only the concurrent-caller behavior is fixed.
  */
 public class ProjectionStore {
 
     private static final Logger log = LoggerFactory.getLogger(ProjectionStore.class);
+
+    /** {@code hashtextextended(text, seed)} folds the composite lock key into the {@code bigint}
+     *  {@code pg_advisory_xact_lock} requires; auto-released at COMMIT/ROLLBACK of the calling
+     *  transaction (see {@link #acquireEntityLock}). */
+    private static final String ACQUIRE_ENTITY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))";
 
     private final DataSource projectionDataSource;
     private final ContentAddressedLargePayloadStore largePayloadStore;
@@ -75,31 +101,89 @@ public class ProjectionStore {
             throw new IllegalArgumentException(historyClass + " is not an entity-lifecycle class");
         }
         try (Connection connection = projectionDataSource.getConnection()) {
-            Optional<ExistingRow> existing = selectExisting(connection, meta, record);
-            if (existing.isEmpty()) {
-                insertNew(connection, meta, historyClass, record);
-                return UpsertOutcome.APPLIED;
+            connection.setAutoCommit(false);
+            try {
+                acquireEntityLock(connection, historyClass, record.engineId(), record.entityId());
+                UpsertOutcome outcome = applyMergeUpsert(connection, meta, historyClass, record);
+                connection.commit();
+                return outcome;
+            } catch (SQLException e) {
+                rollbackQuietly(connection, historyClass, record.entityId());
+                throw e;
+            } catch (RuntimeException e) {
+                rollbackQuietly(connection, historyClass, record.entityId());
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
             }
-            long existingSeq = existing.get().streamSequence();
-            if (record.streamSequence() > existingSeq) {
-                updateExisting(connection, meta, historyClass, record, existing.get().partitionAnchorAt());
-                return UpsertOutcome.APPLIED;
-            }
-            if (record.streamSequence() == existingSeq) {
-                // BUS_MERGE_UPSERT_CONFLICT_AMBIGUOUS -- theoretical (duplicate delivery at the
-                // SAME stream sequence); safe tie-break: discard, no-op (idempotent).
-                log.warn("Merge-upsert conflict: incoming stream_sequence equals existing (ambiguous, discarding)",
-                        kv("history_class", historyClass), kv("entity_id", record.entityId()),
-                        kv("stream_sequence", record.streamSequence()));
-                return UpsertOutcome.STALE_DISCARDED;
-            }
-            // BUS_PROJECTION_STALE_EVENT_DISCARDED -- expected, no-op (FINDING-004, faz-5 review:
-            // this was ALREADY the emit point, just missing the registry code comment).
-            log.debug("Stale event discarded (incoming stream_sequence older than stored)",
-                    kv("history_class", historyClass), kv("entity_id", record.entityId()));
-            return UpsertOutcome.STALE_DISCARDED;
         } catch (SQLException e) {
             throw new IllegalStateException("Projection upsertEntity failed for class " + historyClass, e);
+        }
+    }
+
+    /**
+     * Serializes the check-then-act merge-upsert protocol (§2.3, class Javadoc) per
+     * (historyClass, engineId, entityId) using a Postgres advisory lock scoped to the CURRENT
+     * transaction ({@code pg_advisory_xact_lock}) -- auto-released at COMMIT or ROLLBACK, so there
+     * is no explicit unlock call to forget and no leak risk even on an exception path. {@code
+     * hashtextextended} folds the composite key into the single {@code bigint} the function
+     * requires; a hash collision between two DIFFERENT entities only costs a spurious extra wait
+     * (never a correctness issue -- advisory locks are pure mutual exclusion, not identity
+     * assertions). {@code historyClass} is included in the key so two different entity-lifecycle
+     * classes can never coincidentally collide on the SAME (engineId, entityId) string.
+     */
+    private void acquireEntityLock(Connection connection, String historyClass, String engineId, String entityId)
+            throws SQLException {
+        String lockKey = historyClass + ':' + engineId + ':' + entityId;
+        try (PreparedStatement stmt = connection.prepareStatement(ACQUIRE_ENTITY_LOCK_SQL)) {
+            stmt.setString(1, lockKey);
+            stmt.execute();
+        }
+    }
+
+    private UpsertOutcome applyMergeUpsert(Connection connection, TableMeta meta, String historyClass,
+            EntityHistoryRecord record) throws SQLException {
+        Optional<ExistingRow> existing = selectExisting(connection, meta, record);
+        if (existing.isEmpty()) {
+            insertNew(connection, meta, historyClass, record);
+            return UpsertOutcome.APPLIED;
+        }
+        long existingSeq = existing.get().streamSequence();
+        if (record.streamSequence() > existingSeq) {
+            boolean updated = updateExisting(connection, meta, historyClass, record, existing.get().partitionAnchorAt());
+            if (updated) {
+                return UpsertOutcome.APPLIED;
+            }
+            // Defense-in-depth only -- should not happen while acquireEntityLock() correctly
+            // serializes every caller for this entity: updateExisting's own stream_sequence CAS
+            // guard (ADR-0012 tie-break authority) rejected the write anyway. Fail safe: no-op.
+            log.warn("Merge-upsert update rejected by stream_sequence CAS guard despite advisory-lock "
+                            + "serialization (unexpected -- discarding as stale)",
+                    kv("history_class", historyClass), kv("entity_id", record.entityId()),
+                    kv("stream_sequence", record.streamSequence()));
+            return UpsertOutcome.STALE_DISCARDED;
+        }
+        if (record.streamSequence() == existingSeq) {
+            // BUS_MERGE_UPSERT_CONFLICT_AMBIGUOUS -- theoretical (duplicate delivery at the
+            // SAME stream sequence); safe tie-break: discard, no-op (idempotent).
+            log.warn("Merge-upsert conflict: incoming stream_sequence equals existing (ambiguous, discarding)",
+                    kv("history_class", historyClass), kv("entity_id", record.entityId()),
+                    kv("stream_sequence", record.streamSequence()));
+            return UpsertOutcome.STALE_DISCARDED;
+        }
+        // BUS_PROJECTION_STALE_EVENT_DISCARDED -- expected, no-op (FINDING-004, faz-5 review:
+        // this was ALREADY the emit point, just missing the registry code comment).
+        log.debug("Stale event discarded (incoming stream_sequence older than stored)",
+                kv("history_class", historyClass), kv("entity_id", record.entityId()));
+        return UpsertOutcome.STALE_DISCARDED;
+    }
+
+    private void rollbackQuietly(Connection connection, String historyClass, String entityId) {
+        try {
+            connection.rollback();
+        } catch (SQLException rollbackFailure) {
+            log.warn("Failed to roll back projection upsertEntity transaction after error",
+                    kv("history_class", historyClass), kv("entity_id", entityId), rollbackFailure);
         }
     }
 
@@ -197,7 +281,12 @@ public class ProjectionStore {
         }
     }
 
-    private void updateExisting(Connection connection, TableMeta meta, String historyClass,
+    /**
+     * @return {@code true} if the row was actually updated (CAS guard passed), {@code false} if
+     *         the {@code stream_sequence} guard rejected the write (see caller for the
+     *         defense-in-depth fallback -- QA-FINDING-2 fix, class Javadoc).
+     */
+    private boolean updateExisting(Connection connection, TableMeta meta, String historyClass,
             EntityHistoryRecord record, Instant partitionAnchorAt) throws SQLException {
         List<String> setColumns = new ArrayList<>(List.of("stream_sequence", "event_time", "updated_at"));
         List<Object> setValues = new ArrayList<>(List.of(record.streamSequence(),
@@ -211,7 +300,12 @@ public class ProjectionStore {
             }
             sql.append(setColumns.get(i)).append(" = ?");
         }
-        sql.append(" WHERE engine_id = ? AND ").append(meta.entityIdColumn()).append(" = ? AND partition_anchor_at = ?");
+        // ADR-0012 tie-break authority CAS guard (QA-FINDING-2 fix): a lower-or-equal incoming
+        // stream_sequence can never overwrite what is currently stored, regardless of what the
+        // caller's earlier selectExisting() observed -- independent of, and in addition to,
+        // acquireEntityLock()'s serialization above.
+        sql.append(" WHERE engine_id = ? AND ").append(meta.entityIdColumn())
+                .append(" = ? AND partition_anchor_at = ? AND stream_sequence < ?");
 
         try (PreparedStatement stmt = connection.prepareStatement(sql.toString())) {
             bindValues(stmt, setValues);
@@ -219,7 +313,8 @@ public class ProjectionStore {
             stmt.setString(++idx, record.engineId());
             stmt.setString(++idx, record.entityId());
             stmt.setTimestamp(++idx, Timestamp.from(partitionAnchorAt));
-            stmt.executeUpdate();
+            stmt.setLong(++idx, record.streamSequence());
+            return stmt.executeUpdate() > 0;
         }
     }
 

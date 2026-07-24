@@ -65,6 +65,22 @@ class NatsOutboundEventChannelAdapterTest {
         assertThat(published.getHeaders().getLast("X-Trace-Id")).isEqualTo("trace-123");
     }
 
+    // --- Sentinel Phase 5.5 (round 2): core-publish throws, no DLQ configured ---
+
+    @Test
+    void sendEvent_corePublishThrows_noDlqPublisherConfigured_throwsFlowableException() {
+        when(connection.getStatus()).thenReturn(Connection.Status.CONNECTED);
+        doThrow(new RuntimeException("broker unreachable")).when(connection).publish(any(Message.class));
+        // `adapter` (from setUp) uses the 2-arg constructor -- dlqPublisher is null, so the
+        // failure path has no custody-transfer option and must surface the FlowableException.
+
+        assertThatThrownBy(() -> adapter.sendEvent("{\"orderId\":123}", Collections.emptyMap()))
+                .isInstanceOf(FlowableException.class)
+                .hasMessageContaining("publish failed")
+                .hasMessageContaining("order.completed")
+                .hasCauseInstanceOf(RuntimeException.class);
+    }
+
     @Test
     void sendEvent_connectionClosed_throwsFlowableException() {
         when(connection.getStatus()).thenReturn(Connection.Status.CLOSED);

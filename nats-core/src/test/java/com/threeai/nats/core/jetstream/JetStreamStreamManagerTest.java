@@ -18,6 +18,7 @@ import io.nats.client.JetStreamManagement;
 import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StreamConfiguration;
 import io.nats.client.api.StreamInfo;
+import io.nats.client.api.SubjectTransform;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -225,5 +226,57 @@ class JetStreamStreamManagerTest {
                         .doesNotThrowAnyException();
 
         verify(jsm, never()).addStream(any(StreamConfiguration.class));
+    }
+
+    /** LLD-Q2/ARCH-Q3 basamak-2 subject-mapped partitioning — the 6-arg overload's {@code
+     *  subjectTransform} must be applied to the builder for a newly-created stream. */
+    @Test
+    void ensureStream_sixArgOverload_notFound_appliesSubjectTransform() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("ORDERS")).thenThrow(notFound);
+        SubjectTransform transform = new SubjectTransform("order.>", "order.{{partition(4,1)}}.>");
+
+        manager.ensureStream("ORDERS", "order.>", connection, null, RetentionPolicy.Limits, transform);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getSubjectTransform()).isNotNull();
+        assertThat(captor.getValue().getSubjectTransform().getSource()).isEqualTo("order.>");
+    }
+
+    @Test
+    void ensureStream_sixArgOverload_nullSubjectTransform_noTransformApplied() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("ORDERS")).thenThrow(notFound);
+
+        manager.ensureStream("ORDERS", "order.>", connection, null, RetentionPolicy.Limits, null);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getSubjectTransform()).isNull();
+    }
+
+    @Test
+    void ensureStream_connectionJetStreamManagementFailsWithIOException_wrapsAsIllegalStateException() throws Exception {
+        Connection brokenConnection = mock(Connection.class);
+        when(brokenConnection.jetStreamManagement()).thenThrow(new java.io.IOException("no connection"));
+
+        assertThatThrownBy(() -> manager.ensureStream("ORDERS", "order.>", brokenConnection))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("I/O error")
+                .hasCauseInstanceOf(java.io.IOException.class);
+    }
+
+    @Test
+    void ensureStream_unexpectedRuntimeException_wrapsAsIllegalStateException() throws Exception {
+        Connection brokenConnection = mock(Connection.class);
+        when(brokenConnection.jetStreamManagement()).thenThrow(new RuntimeException("unexpected"));
+
+        assertThatThrownBy(() -> manager.ensureStream("ORDERS", "order.>", brokenConnection))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unexpected error")
+                .hasCauseInstanceOf(RuntimeException.class);
     }
 }

@@ -16,6 +16,24 @@ class LargeVariableExternalizationPropertiesTest {
     }
 
     @Test
+    void setEnabled_false_isTheDCRollbackKillSwitch() {
+        LargeVariableExternalizationProperties props = new LargeVariableExternalizationProperties();
+
+        props.setEnabled(false);
+
+        assertThat(props.isEnabled()).isFalse();
+    }
+
+    @Test
+    void setSweepCyclePeriodSeconds_overridesDefault() {
+        LargeVariableExternalizationProperties props = new LargeVariableExternalizationProperties();
+
+        props.setSweepCyclePeriodSeconds(120);
+
+        assertThat(props.getSweepCyclePeriodSeconds()).isEqualTo(120);
+    }
+
+    @Test
     void exceedsThreshold_atThreshold_false() {
         LargeVariableExternalizationProperties props = new LargeVariableExternalizationProperties();
         props.setThresholdBytes(100);

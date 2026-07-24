@@ -6,6 +6,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.threeai.nats.core.dlq.DlqPublisher;
@@ -238,6 +240,135 @@ class NatsChannelDefinitionProcessorTest {
         processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
 
         processor.unregisterChannelModel(model, null, eventRepositoryService);
+
+        assertThat(processor.findBySubject("order.new")).isEmpty();
+    }
+
+    // --- Sentinel Phase 5.5 (round 2) coverage: canProcessIfChannelModelAlreadyRegistered ---
+
+    @Test
+    void canProcessIfChannelModelAlreadyRegistered_natsOutboundModel_returnsTrue() {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        assertThat(processor.canProcessIfChannelModelAlreadyRegistered(model)).isTrue();
+    }
+
+    @Test
+    void canProcessIfChannelModelAlreadyRegistered_inboundModel_returnsFalse() {
+        NatsInboundChannelModel model = new NatsInboundChannelModel();
+        assertThat(processor.canProcessIfChannelModelAlreadyRegistered(model)).isFalse();
+    }
+
+    // --- unregisterChannelModel: core (non-JetStream) inbound adapter cleanup path ---
+
+    @Test
+    void unregisterChannelModel_coreInboundAdapter_unsubscribesAndClosesDispatcher() throws Exception {
+        Dispatcher dispatcher = mock(Dispatcher.class);
+        when(connection.createDispatcher()).thenReturn(dispatcher);
+        when(dispatcher.subscribe(anyString(), any(MessageHandler.class))).thenReturn(mock(Subscription.class));
+
+        NatsInboundChannelModel model = new NatsInboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.new");
+        // jetstream left false -> registerInbound (core adapter), not registerJetStreamInbound
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        processor.unregisterChannelModel(model, null, eventRepositoryService);
+
+        verify(dispatcher).drain(any(java.time.Duration.class));
+        verify(connection).closeDispatcher(dispatcher);
+    }
+
+    // --- registerJetStreamInbound / registerJetStreamOutbound: autoCreateStream wiring ---
+
+    @Test
+    void registerJetStreamInbound_autoCreateStreamTrueWithStreamName_ensuresStream() {
+        NatsInboundChannelModel model = new NatsInboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.new");
+        model.setJetstream(true);
+        model.setMaxDeliver(5);
+        model.setAutoCreateStream(true);
+        model.setStreamName("orders-in-stream");
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        verify(streamManager).ensureStream("orders-in-stream", "order.new", connection);
+        assertThat(model.getStreamName()).isEqualTo("orders-in-stream");
+    }
+
+    @Test
+    void registerJetStreamInbound_autoCreateStreamTrueButNoStreamName_doesNotEnsureStream() {
+        NatsInboundChannelModel model = new NatsInboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.new");
+        model.setJetstream(true);
+        model.setMaxDeliver(5);
+        model.setAutoCreateStream(true);
+        // streamName intentionally left null
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        verify(streamManager, never()).ensureStream(any(), any(), any());
+    }
+
+    @Test
+    void registerJetStreamInbound_explicitDlqSubject_usedInsteadOfDefaultConvention() {
+        NatsInboundChannelModel model = new NatsInboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.new");
+        model.setJetstream(true);
+        model.setMaxDeliver(5);
+        model.setDlqSubject("dlq.custom.order.new");
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        assertThat(model.getDlqSubject()).isEqualTo("dlq.custom.order.new");
+        assertThat(model.getInboundEventChannelAdapter())
+                .isInstanceOf(JetStreamInboundEventChannelAdapter.class);
+    }
+
+    @Test
+    void registerJetStreamOutbound_autoCreateStreamTrueWithStreamName_ensuresStream() {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.completed");
+        model.setJetstream(true);
+        model.setAutoCreateStream(true);
+        model.setStreamName("orders-out-stream");
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        verify(streamManager).ensureStream("orders-out-stream", "order.completed", connection);
+        assertThat(model.getStreamName()).isEqualTo("orders-out-stream");
+    }
+
+    @Test
+    void registerJetStreamOutbound_autoCreateStreamTrueButNoStreamName_doesNotEnsureStream() {
+        NatsOutboundChannelModel model = new NatsOutboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.completed");
+        model.setJetstream(true);
+        model.setAutoCreateStream(true);
+
+        processor.registerChannelModel(model, null, eventRegistry, eventRepositoryService, false);
+
+        verify(streamManager, never()).ensureStream(any(), any(), any());
+    }
+
+    // --- resolveKey: tenant-scoped registration/unregistration lifecycle ---
+
+    @Test
+    void registerAndUnregisterJetStreamInbound_withTenantId_lifecycleSucceeds() {
+        NatsInboundChannelModel model = new NatsInboundChannelModel();
+        model.setKey("testChannel");
+        model.setSubject("order.new");
+        model.setJetstream(true);
+        model.setMaxDeliver(5);
+
+        processor.registerChannelModel(model, "tenantA", eventRegistry, eventRepositoryService, false);
+        assertThat(processor.findBySubject("order.new")).contains(model);
+
+        processor.unregisterChannelModel(model, "tenantA", eventRepositoryService);
 
         assertThat(processor.findBySubject("order.new")).isEmpty();
     }

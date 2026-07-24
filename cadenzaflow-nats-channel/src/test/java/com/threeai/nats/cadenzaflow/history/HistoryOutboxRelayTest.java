@@ -13,9 +13,12 @@ import com.threeai.nats.core.history.HistoryClassNames;
 import com.threeai.nats.core.history.PseudonymTokenGenerator;
 import com.threeai.nats.core.jetstream.JetStreamKvManager;
 import com.threeai.nats.core.jetstream.SweepLeaderLease;
+import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamManagement;
 import io.nats.client.JetStreamSubscription;
+import io.nats.client.KeyValue;
 import io.nats.client.Message;
 import io.nats.client.Nats;
 import io.nats.client.PullSubscribeOptions;
@@ -23,6 +26,8 @@ import io.nats.client.api.ConsumerConfiguration;
 import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
+import org.cadenzaflow.bpm.engine.impl.history.event.HistoricExternalTaskLogEntity;
+import org.cadenzaflow.bpm.engine.impl.history.event.HistoricProcessInstanceEventEntity;
 import org.cadenzaflow.bpm.engine.impl.history.event.UserOperationLogEntryEventEntity;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -111,6 +116,54 @@ class HistoryOutboxRelayTest {
                     .write(event, HistoryClassNames.OP_LOG, "cadenzaflow", connection);
             connection.commit();
         }
+    }
+
+    /** Writes an EXT_TASK_LOG row WITH a large-payload companion row (errorDetails). */
+    private void insertOutboxRowWithLargePayload(String historyEventId, String processInstanceId,
+            String errorDetails) throws Exception {
+        HistoricExternalTaskLogEntity event = new HistoricExternalTaskLogEntity() {
+            @Override
+            public String getErrorDetails() {
+                return errorDetails;
+            }
+        };
+        event.setId(historyEventId);
+        event.setEventType("HistoricExternalTaskLog");
+        event.setProcessInstanceId(processInstanceId);
+        event.setWorkerId("worker-1");
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            new CompactHistoryOutboxWriter(dataSource, new PseudonymTokenGenerator(),
+                    new HistoryClassificationProperties(), null)
+                    .write(event, HistoryClassNames.EXT_TASK_LOG, "cadenzaflow", connection);
+            connection.commit();
+        }
+    }
+
+    private void insertOutboxRowWithBusinessKey(String historyEventId, String processInstanceId,
+            String businessKey) throws Exception {
+        HistoricProcessInstanceEventEntity event = new HistoricProcessInstanceEventEntity();
+        event.setId(historyEventId);
+        event.setEventType("ProcessInstanceStart");
+        event.setProcessInstanceId(processInstanceId);
+        event.setBusinessKey(businessKey);
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            new CompactHistoryOutboxWriter(dataSource, new PseudonymTokenGenerator(),
+                    new HistoryClassificationProperties(), null)
+                    .write(event, HistoryClassNames.PROCINST, "cadenzaflow", connection);
+            connection.commit();
+        }
+    }
+
+    private PGSimpleDataSource unreachableDataSource() {
+        PGSimpleDataSource broken = new PGSimpleDataSource();
+        broken.setUrl("jdbc:postgresql://127.0.0.1:1/nonexistent");
+        broken.setUser("nobody");
+        broken.setPassword("nobody");
+        return broken;
     }
 
     private long countOutboxRows() throws Exception {
@@ -233,5 +286,188 @@ class HistoryOutboxRelayTest {
 
         assertThat(countOutboxRows()).isZero(); // relayed+deleted despite the broker-level dedup
         assertThat(appender.list).anyMatch(event -> event.getFormattedMessage().contains("JetStream-deduplicated"));
+    }
+
+    @Test
+    void relayRow_largePayloadReference_dereferencesAndPublishesCompanionBytes() throws Exception {
+        insertOutboxRowWithLargePayload(UUID.randomUUID().toString(), "proc-large-1", "stack trace details");
+        HistoryOutboxRelay relay = newRelayAsLeader(new HistoryOutboxProperties());
+
+        relay.relayCycle();
+
+        assertThat(countOutboxRows()).isZero();
+        JetStreamManagement jsm = natsConnection.jetStreamManagement();
+        ConsumerConfiguration cc = ConsumerConfiguration.builder()
+                .durable("test-consumer-" + UUID.randomUUID().toString().replace("-", ""))
+                .filterSubject("history.cadenzaflow.EXT_TASK_LOG.proc-large-1")
+                .build();
+        jsm.addOrUpdateConsumer("HISTORY_TEST", cc);
+        JetStreamSubscription sub = jetStream.subscribe("history.cadenzaflow.EXT_TASK_LOG.proc-large-1",
+                PullSubscribeOptions.bind("HISTORY_TEST", cc.getDurable()));
+        java.util.List<Message> messages = sub.fetch(1, Duration.ofSeconds(5));
+        assertThat(messages).hasSize(1);
+        String publishedJson = new String(messages.get(0).getData(), java.nio.charset.StandardCharsets.UTF_8);
+        // HistoryWireMessageFactory base64-encodes the dereferenced large-payload bytes into
+        // _largePayloadBase64 -- decoding it back proves the relay actually READ the companion
+        // compact_history_outbox_payload row (dereferenceLargePayload), not just relayed a
+        // placeholder.
+        String base64Marker = "\"_largePayloadBase64\":\"";
+        int start = publishedJson.indexOf(base64Marker) + base64Marker.length();
+        int end = publishedJson.indexOf('"', start);
+        String base64Payload = publishedJson.substring(start, end);
+        assertThat(new String(java.util.Base64.getDecoder().decode(base64Payload), java.nio.charset.StandardCharsets.UTF_8))
+                .isEqualTo("stack trace details");
+    }
+
+    @Test
+    void buildMessage_nonBlankBusinessKey_addsBusinessKeyHeader() throws Exception {
+        insertOutboxRowWithBusinessKey(UUID.randomUUID().toString(), "proc-biz-1", "order-biz-42");
+        HistoryOutboxRelay relay = newRelayAsLeader(new HistoryOutboxProperties());
+
+        relay.relayCycle();
+
+        JetStreamManagement jsm = natsConnection.jetStreamManagement();
+        ConsumerConfiguration cc = ConsumerConfiguration.builder()
+                .durable("test-consumer-" + UUID.randomUUID().toString().replace("-", ""))
+                .filterSubject("history.cadenzaflow.PROCINST.proc-biz-1")
+                .build();
+        jsm.addOrUpdateConsumer("HISTORY_TEST", cc);
+        JetStreamSubscription sub = jetStream.subscribe("history.cadenzaflow.PROCINST.proc-biz-1",
+                PullSubscribeOptions.bind("HISTORY_TEST", cc.getDurable()));
+        java.util.List<Message> messages = sub.fetch(1, Duration.ofSeconds(5));
+        assertThat(messages).hasSize(1);
+        assertThat(messages.get(0).getHeaders().getFirst(com.threeai.nats.core.headers.BpmHeaders.BUSINESS_KEY))
+                .isEqualTo("order-biz-42");
+    }
+
+    @Test
+    void relayRow_withMetrics_incrementsPublishedCounter() throws Exception {
+        insertOutboxRow(UUID.randomUUID().toString(), "proc-metrics-1");
+        NatsChannelMetrics metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        String bucket = "history-relay-leader-test-" + UUID.randomUUID();
+        JetStreamKvManager kvManager = new JetStreamKvManager();
+        kvManager.ensureBucket(bucket, Duration.ofSeconds(60), 1, natsConnection);
+        SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
+                bucket, "relay-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
+        assertThat(leaderLease.tryAcquireOrRenew()).isTrue();
+        HistoryOutboxRelay relay = new HistoryOutboxRelay(dataSource, jetStream, leaderLease,
+                new HistoryOutboxProperties(), metrics, "cadenzaflow");
+
+        relay.relayCycle();
+
+        assertThat(metrics.historyOutboxRelayedCount(HistoryClassNames.OP_LOG, "published").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void relayRow_publishFailure_withMetrics_incrementsFailedCounter() throws Exception {
+        insertOutboxRow(UUID.randomUUID().toString(), "proc-metrics-2");
+        NatsChannelMetrics metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+
+        io.nats.client.Connection brokenConnection =
+                Nats.connect("nats://" + natsContainer.getHost() + ":" + natsContainer.getMappedPort(4222));
+        JetStream brokenJetStream = brokenConnection.jetStream();
+        brokenConnection.close();
+
+        String bucket = "history-relay-leader-test-" + UUID.randomUUID();
+        JetStreamKvManager kvManager = new JetStreamKvManager();
+        kvManager.ensureBucket(bucket, Duration.ofSeconds(60), 1, natsConnection);
+        SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
+                bucket, "relay-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
+        assertThat(leaderLease.tryAcquireOrRenew()).isTrue();
+        HistoryOutboxRelay relay = new HistoryOutboxRelay(dataSource, brokenJetStream, leaderLease,
+                new HistoryOutboxProperties(), metrics, "cadenzaflow");
+
+        relay.relayCycle();
+
+        assertThat(countOutboxRows()).isEqualTo(1);
+        assertThat(metrics.historyOutboxRelayedCount(HistoryClassNames.OP_LOG, "failed").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void relayCycle_leadershipStolenBetweenCycles_logsWarningAndSkipsWithoutTouchingDb() throws Exception {
+        insertOutboxRow(UUID.randomUUID().toString(), "proc-lease-steal");
+
+        String bucket = "history-relay-leader-test-" + UUID.randomUUID();
+        JetStreamKvManager kvManager = new JetStreamKvManager();
+        kvManager.ensureBucket(bucket, Duration.ofSeconds(60), 1, natsConnection);
+        SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
+                bucket, "relay-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
+        HistoryOutboxRelay relay = new HistoryOutboxRelay(dataSource, jetStream, leaderLease,
+                new HistoryOutboxProperties(), null, "cadenzaflow");
+
+        relay.relayCycle(); // first cycle: acquires leadership, relays+deletes the row
+        assertThat(leaderLease.isLeader()).isTrue();
+        assertThat(countOutboxRows()).isZero();
+
+        insertOutboxRow(UUID.randomUUID().toString(), "proc-lease-steal-2");
+        KeyValue kv = natsConnection.keyValue(bucket);
+        kv.put(leaderLease.getKey(), "another-node".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        relay.relayCycle();
+
+        assertThat(leaderLease.isLeader()).isFalse();
+        assertThat(countOutboxRows()).isEqualTo(1); // second row untouched -- zero DB reads once leadership is lost
+    }
+
+    @Test
+    void relayCycle_engineDataSourceUnreachable_doesNotThrow_skipsCycle() throws Exception {
+        String bucket = "history-relay-leader-test-" + UUID.randomUUID();
+        JetStreamKvManager kvManager = new JetStreamKvManager();
+        kvManager.ensureBucket(bucket, Duration.ofSeconds(60), 1, natsConnection);
+        SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
+                bucket, "relay-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
+        assertThat(leaderLease.tryAcquireOrRenew()).isTrue();
+        HistoryOutboxRelay relay = new HistoryOutboxRelay(unreachableDataSource(), jetStream, leaderLease,
+                new HistoryOutboxProperties(), null, "cadenzaflow");
+
+        org.assertj.core.api.Assertions.assertThatCode(relay::relayCycle).doesNotThrowAnyException();
+    }
+
+    @Test
+    void oldestRowAgeGauge_engineDataSourceUnreachable_returnsZero_doesNotThrow() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        NatsChannelMetrics metrics = new NatsChannelMetrics(registry);
+        String bucket = "history-relay-leader-test-" + UUID.randomUUID();
+        JetStreamKvManager kvManager = new JetStreamKvManager();
+        kvManager.ensureBucket(bucket, Duration.ofSeconds(60), 1, natsConnection);
+        SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
+                bucket, "relay-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
+        new HistoryOutboxRelay(unreachableDataSource(), jetStream, leaderLease,
+                new HistoryOutboxProperties(), metrics, "cadenzaflow");
+
+        io.micrometer.core.instrument.Gauge gauge = registry.find("nats.history.outbox.oldest_row_age_seconds")
+                .tag("engine_id", "cadenzaflow").gauge();
+
+        assertThat(gauge).isNotNull();
+        org.assertj.core.api.Assertions.assertThatCode(() -> assertThat(gauge.value()).isEqualTo(0.0))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void checkStuckRows_ageExceedsThreshold_doesNotThrow_rowStillPresentPastThreshold() throws Exception {
+        insertOutboxRow(UUID.randomUUID().toString(), "proc-stuck");
+
+        io.nats.client.Connection brokenConnection =
+                Nats.connect("nats://" + natsContainer.getHost() + ":" + natsContainer.getMappedPort(4222));
+        JetStream brokenJetStream = brokenConnection.jetStream();
+        brokenConnection.close();
+
+        HistoryOutboxProperties properties = new HistoryOutboxProperties();
+        properties.setRelayCyclePeriodSeconds(1);
+        properties.setStuckThresholdMultiplier(1);
+
+        String bucket = "history-relay-leader-test-" + UUID.randomUUID();
+        JetStreamKvManager kvManager = new JetStreamKvManager();
+        kvManager.ensureBucket(bucket, Duration.ofSeconds(60), 1, natsConnection);
+        SweepLeaderLease leaderLease = new SweepLeaderLease(jetStream, kvManager, natsConnection,
+                bucket, "relay-leader.", "cadenzaflow", "test-node", Duration.ofSeconds(60));
+        assertThat(leaderLease.tryAcquireOrRenew()).isTrue();
+        HistoryOutboxRelay relay = new HistoryOutboxRelay(dataSource, brokenJetStream, leaderLease,
+                properties, null, "cadenzaflow");
+
+        Thread.sleep(1500);
+
+        org.assertj.core.api.Assertions.assertThatCode(relay::relayCycle).doesNotThrowAnyException();
+        assertThat(countOutboxRows()).isEqualTo(1);
     }
 }

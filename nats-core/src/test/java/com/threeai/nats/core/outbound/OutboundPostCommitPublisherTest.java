@@ -8,6 +8,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
+import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamManagement;
 import io.nats.client.JetStreamSubscription;
@@ -76,6 +78,19 @@ class OutboundPostCommitPublisherTest {
         assertThat(messages).hasSize(1);
         assertThat(messages.get(0).getSubject()).isEqualTo("events.camunda.order.created.proc-bulk-1");
         assertThat(new String(messages.get(0).getData(), StandardCharsets.UTF_8)).isEqualTo("{\"foo\":1}");
+    }
+
+    @Test
+    void publish_withMetrics_incrementsPostCommitPublishedCounter() throws Exception {
+        NatsChannelMetrics metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        OutboundPostCommitPublisher publisher = new OutboundPostCommitPublisher(jetStream, metrics);
+        OutboundMessageDraft draft = new OutboundMessageDraft("camunda", "order.created", "proc-bulk-metrics",
+                "biz-1", "trace-1", "events.camunda.order.created.proc-bulk-metrics",
+                "{}".getBytes(StandardCharsets.UTF_8));
+
+        publisher.publish(draft);
+
+        assertThat(metrics.outboundPostCommitPublishedCount("order.created").count()).isEqualTo(1.0);
     }
 
     @Test

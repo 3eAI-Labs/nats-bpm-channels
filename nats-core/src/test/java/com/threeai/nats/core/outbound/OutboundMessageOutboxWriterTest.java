@@ -10,6 +10,8 @@ import java.sql.ResultSet;
 import java.util.UUID;
 
 import com.threeai.nats.core.db.SqlMigrationRunner;
+import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -105,6 +107,20 @@ class OutboundMessageOutboxWriterTest {
         }
 
         assertThat(countRows()).isZero();
+    }
+
+    @Test
+    void write_withMetrics_incrementsOutboundOutboxWrittenCounter() throws Exception {
+        NatsChannelMetrics metrics = new NatsChannelMetrics(new SimpleMeterRegistry());
+        OutboundMessageDraft draft = draft("proc-metrics-1");
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            new OutboundMessageOutboxWriter(metrics).write(connection, draft);
+            connection.commit();
+        }
+
+        assertThat(metrics.outboundOutboxWrittenCount("order.created", "camunda").count()).isEqualTo(1.0);
     }
 
     @Test

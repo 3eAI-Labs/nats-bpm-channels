@@ -51,6 +51,17 @@ class ExternalizationMarkerTest {
     }
 
     @Test
+    void decode_correctLengthButWrongPrefix_empty() {
+        // Same total length as a real marker (PREFIX.length() + 64), but the prefix bytes
+        // themselves don't match "NATSEXT1:" -- must fail the byte-by-byte prefix comparison loop,
+        // not just the length check (a different code path than decode_wrongLength_empty above).
+        String hash = ContentHash.sha256Hex("y".getBytes(StandardCharsets.UTF_8));
+        byte[] wrongPrefixSameLength = ("NATSEXT2:" + hash).getBytes(StandardCharsets.US_ASCII);
+
+        assertThat(ExternalizationMarker.decode(wrongPrefixSameLength)).isEmpty();
+    }
+
+    @Test
     void encode_differentHashes_produceDifferentMarkers() {
         String hashA = ContentHash.sha256Hex("a".getBytes(StandardCharsets.UTF_8));
         String hashB = ContentHash.sha256Hex("b".getBytes(StandardCharsets.UTF_8));

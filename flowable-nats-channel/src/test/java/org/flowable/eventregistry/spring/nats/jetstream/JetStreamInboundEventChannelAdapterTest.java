@@ -219,6 +219,63 @@ class JetStreamInboundEventChannelAdapterTest {
         assertThat(capturedTraceId[0]).isEqualTo("trace-standard");
     }
 
+    // --- Sentinel Phase 5.5 (round 2): subscribe()/unsubscribe() error paths ---
+
+    @Test
+    void subscribe_jetStreamSubscribeThrows_wrapsInFlowableException() throws Exception {
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(connection.createDispatcher()).thenReturn(dispatcher);
+        when(jetStream.subscribe(org.mockito.ArgumentMatchers.anyString(), any(io.nats.client.Dispatcher.class),
+                any(io.nats.client.MessageHandler.class), org.mockito.ArgumentMatchers.anyBoolean(),
+                any(io.nats.client.PushSubscribeOptions.class)))
+                .thenThrow(new IOException("simulated broker failure"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(adapter::subscribe)
+                .isInstanceOf(org.flowable.common.engine.api.FlowableException.class)
+                .hasMessageContaining("order.new");
+    }
+
+    @Test
+    void unsubscribe_dispatcherDrainThrows_logsWarnAndStillShutsDownExecutor() throws Exception {
+        io.nats.client.Dispatcher dispatcher = mock(io.nats.client.Dispatcher.class);
+        when(connection.createDispatcher()).thenReturn(dispatcher);
+        doThrow(new RuntimeException("drain failed")).when(dispatcher).drain(any(Duration.class));
+        when(jetStream.subscribe(org.mockito.ArgumentMatchers.anyString(), any(io.nats.client.Dispatcher.class),
+                any(io.nats.client.MessageHandler.class), org.mockito.ArgumentMatchers.anyBoolean(),
+                any(io.nats.client.PushSubscribeOptions.class)))
+                .thenReturn(mock(io.nats.client.JetStreamSubscription.class));
+        adapter.subscribe();
+
+        org.assertj.core.api.Assertions.assertThatCode(adapter::unsubscribe).doesNotThrowAnyException();
+
+        verify(dispatcher).drain(Duration.ofSeconds(10));
+    }
+
+    // --- Sentinel Phase 5.5 (round 2): nakCount metric on DLQ-publish failure ---
+
+    @Test
+    void handleMessage_maxDeliverExceeded_dlqBothFail_incrementsNakCountMetric() throws Exception {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        NatsChannelMetrics metrics = new NatsChannelMetrics(registry);
+        JetStreamInboundEventChannelAdapter metricAdapter = new JetStreamInboundEventChannelAdapter(
+                connection, jetStream, "order.new", 5, "order.dlq", metrics, "orderChannel", dlqPublisher);
+        metricAdapter.setInboundChannelModel(channelModel);
+        metricAdapter.setEventRegistry(eventRegistry);
+
+        when(jetStream.publish(any(NatsMessage.class))).thenThrow(new IOException("JS unavailable"));
+        doThrow(new RuntimeException("core NATS down"))
+                .when(connection).publish(any(String.class), any(Headers.class), any(byte[].class));
+        Message msg = createMockMessage("{\"orderId\":99}", null, 6);
+
+        metricAdapter.handleMessage(msg);
+
+        verify(msg, never()).ack();
+        verify(msg).nakWithDelay(any(Duration.class));
+        assertThat(registry.find("nats.jetstream.inbound.nak")
+                .tag("subject", "order.new").tag("channel", "orderChannel").counter().count())
+                .isEqualTo(1.0);
+    }
+
     // --- helpers ---
 
     private Message createMockMessage(String body, Headers headers, long deliveryCount) {
