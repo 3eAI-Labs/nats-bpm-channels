@@ -1,0 +1,41 @@
+# Maven
+target/
+*.jar
+*.war
+*.ear
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Firebase
+firebase-debug.log
+
+# Sentinel runtime state (working state, not a deliverable)
+.sentinel/
+
+# Key material — NEVER commit. This repository is PUBLIC; a leaked signing key means
+# forged artifacts can be published under com.3eai-labs, and nothing published to
+# Maven Central can ever be retracted.
+# scripts/gpg-setup.sh writes OUTSIDE the repo by default; these rules are the second line of defence.
+*.asc
+*.gpg
+*.pem
+*.p12
+private-key*
+secring.*
+
+# doc-tools output (branded PDF/HTML). The source Markdown lives in the repository, so these
+# are always regenerable — there is no point in versioning the binaries.
+docs/**/dist/

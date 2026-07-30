@@ -1,0 +1,1 @@
+org.flowable.eventregistry.spring.nats.config.FlowableNatsAutoConfiguration

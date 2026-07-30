@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build and Test
+        # SKIP cadenzaflow-nats-channel: the fork engine (org.cadenzaflow.bpm:cadenzaflow-engine,
+        # provided) is not on Maven Central and cannot be resolved from a clean CI checkout.
+        # -DskipCadenzaflow deactivates the `cadenzaflow-mirror` profile in the parent pom
+        # (see pom.xml <profiles>). Since it is a byte-mirror of camunda-nats-channel, the
+        # behaviour is still covered in CI.
+        run: mvn verify --batch-mode --no-transfer-progress -DskipCadenzaflow

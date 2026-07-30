@@ -1,0 +1,362 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- groupId = com.3eai-labs: the Maven Central namespace is the reverse-DNS form of the
+         3eai-labs.com domain, verified with a DNS TXT record. (3eai.com is NOT owned by 3eAI Labs
+         — a third party registered it in 2022 — so the com.3eai namespace cannot be verified.)
+         A hyphen is legal in a groupId; Java packages stay separate as com.threeai.*. -->
+    <groupId>com.3eai-labs</groupId>
+    <artifactId>nats-channel-parent</artifactId>
+    <version>0.7.0</version>
+    <packaging>pom</packaging>
+
+    <name>NATS BPM Channels</name>
+    <description>NATS.io channel adapters for BPM engines: Flowable, Camunda 7, CIBSeven, and CadenzaFlow</description>
+    <!-- Every child module declares its own <url> EXPLICITLY (see */pom.xml). Left to inheritance,
+         Maven appends "/<module>" to the parent url and Central ends up with an address that 404s;
+         the child.project.url.inherit.append.path="false" attribute has no effect on this field in
+         Maven 3.8.7 (the same attribute does work for <scm>, and is used below). -->
+    <url>https://github.com/3eAI-Labs/nats-bpm-channels</url>
+
+    <!-- cadenzaflow-nats-channel is a leaf module (no module depends on it) and it depends on the
+         fork engine (org.cadenzaflow.bpm:cadenzaflow-engine, provided).
+         org.cadenzaflow.bpm:cadenzaflow-engine IS on Maven Central — but only versions
+         1.0.0/1.0.1/1.1.0. This build pins ${cadenzaflow.version}=1.2.0, and that version is not
+         on Central; it resolves only from a local/private repository. Because CI cannot resolve it,
+         the module is kept in the `cadenzaflow-mirror` profile (active while skipCadenzaflow is NOT
+         defined); CI SKIPS it with `-DskipCadenzaflow`, while a local/full build includes
+         everything.
+         NOTE: the blocker is a version pin, not a technical impossibility. Once 1.2.0 lands on
+         Central (or the pin moves down to a compatible version already there), the module can be
+         published like the others.
+         The dependency is `provided`, so it is not transitive — consumers bring their own engine. -->
+    <modules>
+        <module>nats-core</module>
+        <module>flowable-nats-channel</module>
+        <module>camunda-nats-channel</module>
+        <!-- cibseven-nats-channel: byte-mirror of camunda-nats-channel targeting CIBSeven
+             (org.cibseven.bpm:cibseven-engine, Camunda 7 community fork). Unlike
+             cadenzaflow-engine, cibseven-engine IS on Maven Central, so this module is a
+             first-class default reactor member (public, CI-buildable, Central-publishable)
+             and is NOT gated behind the -DskipCadenzaflow profile. -->
+        <module>cibseven-nats-channel</module>
+        <module>nats-bpm-bench</module>
+        <module>nats-history-projection</module>
+    </modules>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <scm child.scm.connection.inherit.append.path="false"
+         child.scm.developerConnection.inherit.append.path="false"
+         child.scm.url.inherit.append.path="false">
+        <connection>scm:git:https://github.com/3eAI-Labs/nats-bpm-channels.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/3eAI-Labs/nats-bpm-channels.git</developerConnection>
+        <url>https://github.com/3eAI-Labs/nats-bpm-channels</url>
+    </scm>
+
+    <developers>
+        <developer>
+            <name>Levent Sezgin Genc</name>
+            <email>oss@3eai-labs.com</email>
+            <organization>3eAI Labs Ltd</organization>
+            <organizationUrl>https://3eai-labs.com</organizationUrl>
+        </developer>
+    </developers>
+
+    <!-- No distributionManagement: publishing to the Central Portal is done through
+         central-publishing-maven-plugin (release profile). The old OSSRH endpoints
+         (s01.oss.sonatype.org) shut down on 30 June 2025; portal accounts have no access to them. -->
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <spring-boot.version>3.3.6</spring-boot.version>
+        <flowable.version>7.1.0</flowable.version>
+        <camunda.version>7.24.0</camunda.version>
+        <cibseven.version>2.2.0</cibseven.version>
+        <cadenzaflow.version>1.2.0</cadenzaflow.version>
+        <jnats.version>2.20.5</jnats.version>
+        <testcontainers.version>2.0.4</testcontainers.version>
+        <logstash-logback.version>8.0</logstash-logback.version>
+        <resilience4j.version>2.2.0</resilience4j.version>
+        <datasource-proxy.version>1.10</datasource-proxy.version>
+        <h2.version>2.3.232</h2.version>
+        <jacoco.version>0.8.12</jacoco.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-bom</artifactId>
+                <version>${resilience4j.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- NATS -->
+            <dependency>
+                <groupId>io.nats</groupId>
+                <artifactId>jnats</artifactId>
+                <version>${jnats.version}</version>
+            </dependency>
+            <!-- Logstash -->
+            <dependency>
+                <groupId>net.logstash.logback</groupId>
+                <artifactId>logstash-logback-encoder</artifactId>
+                <version>${logstash-logback.version}</version>
+            </dependency>
+            <!-- Flowable -->
+            <dependency>
+                <groupId>org.flowable</groupId>
+                <artifactId>flowable-event-registry-spring</artifactId>
+                <version>${flowable.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flowable</groupId>
+                <artifactId>flowable-engine</artifactId>
+                <version>${flowable.version}</version>
+            </dependency>
+            <!-- Camunda -->
+            <dependency>
+                <groupId>org.camunda.bpm</groupId>
+                <artifactId>camunda-engine</artifactId>
+                <version>${camunda.version}</version>
+            </dependency>
+            <!-- CIBSeven (Camunda 7 community fork; org.cibseven.* packages, on Maven Central) -->
+            <dependency>
+                <groupId>org.cibseven.bpm</groupId>
+                <artifactId>cibseven-engine</artifactId>
+                <version>${cibseven.version}</version>
+            </dependency>
+            <!-- CadenzaFlow -->
+            <dependency>
+                <groupId>org.cadenzaflow.bpm</groupId>
+                <artifactId>cadenzaflow-engine</artifactId>
+                <version>${cadenzaflow.version}</version>
+            </dependency>
+            <!-- Internal -->
+            <dependency>
+                <groupId>com.3eai-labs</groupId>
+                <artifactId>nats-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!-- Guard-test / bench SQL introspection -->
+            <dependency>
+                <groupId>net.ttddyy</groupId>
+                <artifactId>datasource-proxy</artifactId>
+                <version>${datasource-proxy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.h2database</groupId>
+                <artifactId>h2</artifactId>
+                <version>${h2.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.13.0</version>
+                    <configuration>
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.5.2</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <!-- Places LICENSE + NOTICE into the META-INF/ of every jar. The <licenses>
+                 declaration in the POM covers the machine-readable side (Central, license scanners
+                 and SBOM tools read it there); this covers the human who holds the jar on its own
+                 and needs to find the license text inside it — the spirit of Apache-2.0 §4(a) and
+                 the Central producer-terms obligation to include "all applicable copyright
+                 notices".
+
+                 The root directory is resolved as ${project.basedir}/..: ALL modules are DIRECT
+                 children of the root. maven.multiModuleProjectDirectory and
+                 session.executionRootDirectory were deliberately not used, because with no .mvn/
+                 in the repository both fall back to the directory `mvn` was invoked from, which
+                 points at the wrong place when the build is run from inside a submodule.
+                 A new module must therefore be a direct child of the root.
+
+                 For the parent (packaging=pom) the source directory does not exist, so this
+                 execution is silently skipped; it produces no jar anyway. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-license-into-jar</id>
+                        <phase>process-resources</phase>
+                        <goals><goal>copy-resources</goal></goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/..</directory>
+                                    <includes>
+                                        <include>LICENSE</include>
+                                        <include>NOTICE</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- QA review: module-level line/branch coverage measurement.
+                 Reporting-only plugin, no production code/behavior impact. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>test</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Adds cadenzaflow-nats-channel to the reactor. Active while the `skipCadenzaflow`
+             property is NOT defined (the default for a local/full build). In CI the PINNED VERSION
+             of the fork engine (cadenzaflow-engine ${cadenzaflow.version}=1.2.0) cannot be
+             resolved, so `mvn ... -DskipCadenzaflow` deactivates this profile and the module leaves
+             the reactor. The engine itself is on Central (1.0.0/1.0.1/1.1.0); only 1.2.0 is
+             missing. -->
+        <profile>
+            <id>cadenzaflow-mirror</id>
+            <activation>
+                <property>
+                    <name>!skipCadenzaflow</name>
+                </property>
+            </activation>
+            <modules>
+                <module>cadenzaflow-nats-channel</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals><goal>jar-no-fork</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.10.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals><goal>jar</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                                <configuration>
+                                    <!-- There is no TTY in CI; without loopback, gpg tries to
+                                         prompt for the passphrase and dies with "Inappropriate
+                                         ioctl for device". The passphrase comes from the
+                                         MAVEN_GPG_PASSPHRASE environment variable. -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Central Portal publisher. Replaces nexus-staging-maven-plugin: that plugin
+                         talked to OSSRH (s01.oss.sonatype.org), OSSRH shut down on 30 June 2025,
+                         and central.sonatype.com accounts have no access to it. -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.11.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <!-- false: upload + validation happen automatically, but "Publish" is
+                                 pressed by hand in the portal. A published artifact can NEVER be
+                                 deleted from Central; for the early releases this final review gate
+                                 is deliberately left in place. -->
+                            <autoPublish>false</autoPublish>
+                            <waitUntil>validated</waitUntil>
+                            <deploymentName>nats-bpm-channels ${project.version}</deploymentName>
+                            <!-- nats-bpm-bench stays in the reactor (its benchmarks still run) but
+                                 is not shipped to Central: leaf module, nothing depends on it,
+                                 "nightly/manual only". CAUTION: this plugin does NOT honour the
+                                 `maven.deploy.skip` property (upstream request mavenplugins#22), so
+                                 excluding the module here is the only way. cadenzaflow-nats-channel
+                                 already leaves the reactor via -DskipCadenzaflow, so it does not
+                                 need to be listed here. -->
+                            <excludeArtifacts>
+                                <excludeArtifact>nats-bpm-bench</excludeArtifact>
+                            </excludeArtifacts>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>
