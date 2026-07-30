@@ -1,0 +1,82 @@
+name: Bug report
+description: Something does not behave as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here — use
+        [private vulnerability reporting](https://github.com/3eAI-Labs/nats-bpm-channels/security/advisories/new)
+        instead.
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      options:
+        - nats-core
+        - flowable-nats-channel
+        - camunda-nats-channel
+        - cibseven-nats-channel
+        - cadenzaflow-nats-channel
+        - nats-history-projection
+        - nats-bpm-bench
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Adapter version
+      placeholder: "0.7.0"
+    validations:
+      required: true
+
+  - type: input
+    id: engine
+    attributes:
+      label: Engine and version
+      description: Most reports turn on this. Include the exact version.
+      placeholder: "Camunda 7.24.0 / Flowable 7.x / CIBSeven 2.2.0 / CadenzaFlow 1.2.1"
+    validations:
+      required: true
+
+  - type: input
+    id: nats
+    attributes:
+      label: NATS server version
+      placeholder: "2.10.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        A failing test or a minimal Spring Boot application is the fastest route to a fix. Otherwise
+        list the steps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: Your `spring.nats.*` and adapter configuration. Remove credentials.
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or stack trace
+      description: Remove anything sensitive — subjects and payloads may carry personal data.
+      render: text

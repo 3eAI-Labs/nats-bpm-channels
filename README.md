@@ -440,7 +440,16 @@ await nc.subscribe("task.send-sms", queue="sms-workers", cb=handler)
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss what you would like to change.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, what the tests
+need, and the one rule that is easy to miss: the three Camunda-lineage adapters are byte-mirrors of
+each other, so a change to one belongs in all three. Please open an issue first for anything beyond
+a small fix.
+
+Found a security problem? Do not open a public issue — see [SECURITY.md](SECURITY.md).
+
+> **About this repository.** Development happens in a private repository; this one is published as a
+> full-tree snapshot per release, which is why the history is short and starts at 0.7.0. Issues and
+> pull requests are read and answered here as normal.
 
 ## License
 

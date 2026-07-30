@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: >
+        Describe the situation you are in, not the solution you have in mind. The underlying problem
+        is what determines whether a change fits the project.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered?
+      description: Including why the existing configuration does not cover it.
+
+  - type: dropdown
+    id: engines
+    attributes:
+      label: Which engines would this affect?
+      multiple: true
+      options:
+        - Flowable
+        - Camunda 7
+        - CIBSeven
+        - CadenzaFlow
+        - Engine-neutral (nats-core)
+        - Not sure
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you open this
+      options:
+        - label: >
+            I have read the [roadmap](https://github.com/3eAI-Labs/nats-bpm-channels#roadmap) and
+            this is not already planned
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/3eAI-Labs/nats-bpm-channels/security/advisories/new
+    about: Report privately — do not open a public issue.
+  - name: Documentation
+    url: https://github.com/3eAI-Labs/nats-bpm-channels#documentation
+    about: Quick start, user guide, architecture overview and white paper.
