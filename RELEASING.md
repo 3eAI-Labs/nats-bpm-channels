@@ -78,14 +78,13 @@ Delete `private-key.asc` afterwards.
 | `flowable-nats-channel` | ✅ | |
 | `camunda-nats-channel` | ✅ | |
 | `cibseven-nats-channel` | ✅ | |
+| `cadenzaflow-nats-channel` | ✅ | |
 | `nats-history-projection` | ✅ | |
 | `nats-bpm-bench` | ❌ | Benchmark harness; leaf module, nothing depends on it |
-| `cadenzaflow-nats-channel` | ❌ | `cadenzaflow-engine` is not on Central — consumers could not resolve it |
 
 `nats-bpm-bench` is excluded via `<excludeArtifacts>` in the parent pom's
 `central-publishing-maven-plugin` configuration. **`maven.deploy.skip` alone is not enough** — that
 plugin does not honour the property (upstream request: mavenplugins/central-publishing-maven-plugin#22).
-`cadenzaflow-nats-channel` leaves the reactor entirely via `-DskipCadenzaflow`.
 
 ## Release Process
 
@@ -97,13 +96,13 @@ a doc comment.
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
-mvn verify -P release -DskipTests -DskipCadenzaflow -Dgpg.skip=true
+mvn verify -P release -DskipTests -Dgpg.skip=true
 ```
 
 To see *every* javadoc problem in one pass instead of module-by-module:
 
 ```bash
-mvn verify -P release -DskipTests -DskipCadenzaflow -Dgpg.skip=true \
+mvn verify -P release -DskipTests -Dgpg.skip=true \
     -Dmaven.javadoc.failOnError=false --fail-at-end 2>&1 | grep "error:"
 ```
 

@@ -70,6 +70,22 @@ roadmap.
 - NATS 2.10+ (for JetStream `nakWithDelay`)
 - `spring.threads.virtual.enabled: true` (recommended)
 
+## Building from source
+
+Most users should take the artifacts from Maven Central and skip this section. To build the
+repository itself:
+
+```bash
+git clone https://github.com/3eAI-Labs/nats-bpm-channels.git
+cd nats-bpm-channels
+mvn install
+```
+
+The full reactor builds with no profile flags — all four engines resolve from Maven Central. Java 21
+is required; a newer JDK will fail the tests. Integration tests use
+[Testcontainers](https://testcontainers.com), so a running Docker daemon is needed; `mvn install
+-DskipTests` builds without one.
+
 ## Shared configuration (NATS connection)
 
 ```yaml
@@ -288,11 +304,10 @@ CadenzaFlow is a community-maintained fork of Camunda 7 with `org.camunda.* → 
 
 ### Dependency
 
-> **Not on Maven Central.** The build pins `cadenzaflow-engine` **1.2.0**, which is not on Central
-> (1.1.0 is the latest published there) and is resolved from a local/private repository. CI cannot
-> resolve it, so the module is excluded from the release via `-DskipCadenzaflow`. Build it from
-> source instead — `mvn install` without `-DskipCadenzaflow`, with 1.2.0 available locally. Every
-> other adapter above **is** on Central.
+> **The adapter artifact is not on Central yet.** `cadenzaflow-engine` 1.2.1 *is* on Central, so
+> this module builds and tests like any other — but `cadenzaflow-nats-channel` itself was excluded
+> from the 0.7.0 release and ships to Central from the next release onward. Until then, build it
+> from source: `git clone`, then `mvn install`.
 
 ```xml
 <dependency>

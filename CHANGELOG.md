@@ -4,6 +4,25 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [Unreleased]
+
+### Changed
+
+- **The full reactor now builds with no profile flags.** `cadenzaflow-engine` **1.2.1** is published
+  to Maven Central, so the version pin moves from 1.2.0 (never published there) to 1.2.1 and
+  `cadenzaflow-nats-channel` becomes an ordinary reactor module. The `cadenzaflow-mirror` profile
+  and the `-DskipCadenzaflow` flag are **removed** — `git clone && mvn install` now works from a
+  clean checkout, which it did not before: the profile was active by default and pulled in an
+  engine version that could only be resolved from a private repository. 293 tests pass against
+  1.2.1 with no source change.
+- `cadenzaflow-nats-channel` will be **published to Central** with the next release, bringing the
+  published artifact count from 6 to 7. It is no longer excluded from the deployment.
+
+### Added
+
+- README **Building from source** section — prerequisites (Java 21, Docker for Testcontainers) and
+  the build command, which the README previously never stated.
+
 ## [0.7.0] — 2026-07-25 — Maven Central publishing (`com.3eai-labs`)
 
 First release actually published to Maven Central. No functional change to the adapters; the

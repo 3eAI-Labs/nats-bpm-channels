@@ -21,28 +21,19 @@
          Maven 3.8.7 (the same attribute does work for <scm>, and is used below). -->
     <url>https://github.com/3eAI-Labs/nats-bpm-channels</url>
 
-    <!-- cadenzaflow-nats-channel is a leaf module (no module depends on it) and it depends on the
-         fork engine (org.cadenzaflow.bpm:cadenzaflow-engine, provided).
-         org.cadenzaflow.bpm:cadenzaflow-engine IS on Maven Central — but only versions
-         1.0.0/1.0.1/1.1.0. This build pins ${cadenzaflow.version}=1.2.0, and that version is not
-         on Central; it resolves only from a local/private repository. Because CI cannot resolve it,
-         the module is kept in the `cadenzaflow-mirror` profile (active while skipCadenzaflow is NOT
-         defined); CI SKIPS it with `-DskipCadenzaflow`, while a local/full build includes
-         everything.
-         NOTE: the blocker is a version pin, not a technical impossibility. Once 1.2.0 lands on
-         Central (or the pin moves down to a compatible version already there), the module can be
-         published like the others.
-         The dependency is `provided`, so it is not transitive — consumers bring their own engine. -->
+    <!-- Every engine adapter is a leaf module (nothing depends on them) and takes its engine as a
+         `provided` dependency, so the engine is never transitive — consumers bring their own.
+         All four engines resolve from Maven Central, so the whole reactor builds anywhere with no
+         profile flags. -->
     <modules>
         <module>nats-core</module>
         <module>flowable-nats-channel</module>
         <module>camunda-nats-channel</module>
-        <!-- cibseven-nats-channel: byte-mirror of camunda-nats-channel targeting CIBSeven
-             (org.cibseven.bpm:cibseven-engine, Camunda 7 community fork). Unlike
-             cadenzaflow-engine, cibseven-engine IS on Maven Central, so this module is a
-             first-class default reactor member (public, CI-buildable, Central-publishable)
-             and is NOT gated behind the -DskipCadenzaflow profile. -->
+        <!-- cibseven-nats-channel and cadenzaflow-nats-channel are byte-mirrors of
+             camunda-nats-channel targeting the two Camunda 7 community forks
+             (org.cibseven.bpm:cibseven-engine, org.cadenzaflow.bpm:cadenzaflow-engine). -->
         <module>cibseven-nats-channel</module>
+        <module>cadenzaflow-nats-channel</module>
         <module>nats-bpm-bench</module>
         <module>nats-history-projection</module>
     </modules>
@@ -85,7 +76,7 @@
         <flowable.version>7.1.0</flowable.version>
         <camunda.version>7.24.0</camunda.version>
         <cibseven.version>2.2.0</cibseven.version>
-        <cadenzaflow.version>1.2.0</cadenzaflow.version>
+        <cadenzaflow.version>1.2.1</cadenzaflow.version>
         <jnats.version>2.20.5</jnats.version>
         <testcontainers.version>2.0.4</testcontainers.version>
         <logstash-logback.version>8.0</logstash-logback.version>
@@ -261,23 +252,6 @@
     </build>
 
     <profiles>
-        <!-- Adds cadenzaflow-nats-channel to the reactor. Active while the `skipCadenzaflow`
-             property is NOT defined (the default for a local/full build). In CI the PINNED VERSION
-             of the fork engine (cadenzaflow-engine ${cadenzaflow.version}=1.2.0) cannot be
-             resolved, so `mvn ... -DskipCadenzaflow` deactivates this profile and the module leaves
-             the reactor. The engine itself is on Central (1.0.0/1.0.1/1.1.0); only 1.2.0 is
-             missing. -->
-        <profile>
-            <id>cadenzaflow-mirror</id>
-            <activation>
-                <property>
-                    <name>!skipCadenzaflow</name>
-                </property>
-            </activation>
-            <modules>
-                <module>cadenzaflow-nats-channel</module>
-            </modules>
-        </profile>
         <profile>
             <id>release</id>
             <build>
@@ -347,9 +321,7 @@
                                  is not shipped to Central: leaf module, nothing depends on it,
                                  "nightly/manual only". CAUTION: this plugin does NOT honour the
                                  `maven.deploy.skip` property (upstream request mavenplugins#22), so
-                                 excluding the module here is the only way. cadenzaflow-nats-channel
-                                 already leaves the reactor via -DskipCadenzaflow, so it does not
-                                 need to be listed here. -->
+                                 excluding the module here is the only way. -->
                             <excludeArtifacts>
                                 <excludeArtifact>nats-bpm-bench</excludeArtifact>
                             </excludeArtifacts>

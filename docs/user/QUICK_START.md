@@ -152,6 +152,6 @@ gpg --verify nats-core-0.7.0.jar.asc nats-core-0.7.0.jar   # → Good signature:
 | Redelivery loop → DLQ | Raise `ackWait`, not `maxDeliver` |
 | External task reclaimed mid-run | Raise `lock-duration-seconds` |
 | `NoClassDefFoundError` Micrometer | Add Actuator + a registry to your app |
-| `cadenzaflow-engine` unresolved | Not on Central — build from source or use `-DskipCadenzaflow` |
+| `cadenzaflow-nats-channel` unresolved | Adapter not yet on Central — build from source with `mvn install` |
 
 Full reference: [USER_GUIDE.md](USER_GUIDE.md)
