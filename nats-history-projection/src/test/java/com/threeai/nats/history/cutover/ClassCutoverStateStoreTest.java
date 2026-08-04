@@ -38,6 +38,7 @@ class ClassCutoverStateStoreTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V6__cutover_state_english_names.sql");
         store = new ClassCutoverStateStore(dataSource);
     }
 
@@ -79,11 +80,11 @@ class ClassCutoverStateStoreTest {
     void recordCleanCycle_advancesStreakAndState() {
         store.findOrCreate("camunda", HistoryClassNames.INCIDENT, ConsistencyPath.AUDIT_CRITICAL, 7);
 
-        store.recordCleanCycle("camunda", HistoryClassNames.INCIDENT, 7, 0, CutoverState.N_GUN_TEMIZ);
+        store.recordCleanCycle("camunda", HistoryClassNames.INCIDENT, 7, 0, CutoverState.CLEAN_STREAK);
 
         ClassCutoverState state = store.find("camunda", HistoryClassNames.INCIDENT).orElseThrow();
         assertThat(state.cleanStreakDays()).isEqualTo(7);
-        assertThat(state.state()).isEqualTo(CutoverState.N_GUN_TEMIZ);
+        assertThat(state.state()).isEqualTo(CutoverState.CLEAN_STREAK);
         assertThat(state.lastReconciledAt()).isNotNull();
     }
 
@@ -103,16 +104,16 @@ class ClassCutoverStateStoreTest {
     @Test
     void cutoverLifecycle_requestApplyRollback() {
         store.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
-        store.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+        store.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.CLEAN_STREAK);
 
         store.markCutoverRequested("camunda", HistoryClassNames.OP_LOG);
         assertThat(store.find("camunda", HistoryClassNames.OP_LOG).orElseThrow().state())
-                .isEqualTo(CutoverState.CUTOVER_TALEP);
+                .isEqualTo(CutoverState.CUTOVER_REQUESTED);
 
         Instant appliedAt = Instant.now();
         store.markCutoverApplied("camunda", HistoryClassNames.OP_LOG, appliedAt);
         ClassCutoverState applied = store.find("camunda", HistoryClassNames.OP_LOG).orElseThrow();
-        assertThat(applied.state()).isEqualTo(CutoverState.CUTOVERLANMIS);
+        assertThat(applied.state()).isEqualTo(CutoverState.CUTOVER_APPLIED);
         assertThat(applied.cutoverAppliedAt()).isNotNull();
 
         store.rollback("camunda", HistoryClassNames.OP_LOG, Instant.now());
@@ -126,13 +127,13 @@ class ClassCutoverStateStoreTest {
     @Test
     void revertCutoverRequest_backToNGunTemiz() {
         store.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
-        store.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+        store.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.CLEAN_STREAK);
         store.markCutoverRequested("camunda", HistoryClassNames.OP_LOG);
 
         store.revertCutoverRequest("camunda", HistoryClassNames.OP_LOG);
 
         assertThat(store.find("camunda", HistoryClassNames.OP_LOG).orElseThrow().state())
-                .isEqualTo(CutoverState.N_GUN_TEMIZ);
+                .isEqualTo(CutoverState.CLEAN_STREAK);
     }
 
     @Test

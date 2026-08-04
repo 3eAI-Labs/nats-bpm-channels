@@ -15,8 +15,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Operator/automation-triggered cutover request (BR-CUT-002 + BR-HDL-005, ADR-0015+0009,
  * ARCH-Q5). Rejects if the gate is not open (state
- * != N_GUN_TEMIZ). On success: writes the {@code history-cutover-state} KV key (LLD-Q3 mechanism)
- * and sets {@code class_cutover_state.state=CUTOVER_TALEP}. The rolling-restart trigger itself
+ * != CLEAN_STREAK). On success: writes the {@code history-cutover-state} KV key (LLD-Q3 mechanism)
+ * and sets {@code class_cutover_state.state=CUTOVER_REQUESTED}. The rolling-restart trigger itself
  * and its completion confirmation are deployment-specific — this repo does NOT provide the
  * trigger, it only produces the KV signal.
  *
@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
  * {@code Connection} parameter was added — writing to a KV bucket requires a live NATS
  * connection, which {@code JetStreamKvManager} (bucket PROVISIONING only) does not itself carry;
  * (2) {@link #confirmCutoverApplied} was added because the {@code
- * CUTOVER_TALEP -> CUTOVERLANMIS} transition is explicitly described as observed via a
+ * CUTOVER_REQUESTED -> CUTOVER_APPLIED} transition is explicitly described as observed via a
  * health-check/deployment-status signal SEPARATE from {@code requestCutover(...)} itself — the
  * LLD's single-method sketch has no other entry point for this transition to ever complete.
  */
@@ -48,7 +48,7 @@ public class CutoverControlPlane {
 
     public CutoverOutcome requestCutover(String engineId, String historyClass) {
         ClassCutoverState state = stateStore.find(engineId, historyClass).orElse(null);
-        if (state == null || state.state() != CutoverState.N_GUN_TEMIZ) {
+        if (state == null || state.state() != CutoverState.CLEAN_STREAK) {
             log.warn("Cutover requested but gate not met — rejected", kv("engine_id", engineId),
                     kv("history_class", historyClass),
                     kv("current_state", state != null ? state.state() : "NONE")); // BUS_CUTOVER_GATE_NOT_MET
@@ -80,7 +80,7 @@ public class CutoverControlPlane {
     /**
      * Deployment tooling calls this once the rolling-restart health-check confirms every engine
      * node replica has re-read {@code ClassCutoverStateRegistry.loadAtBootstrap()} with the new
-     * KV value. {@code CUTOVER_TALEP -> CUTOVERLANMIS}.
+     * KV value. {@code CUTOVER_REQUESTED -> CUTOVER_APPLIED}.
      */
     public void confirmCutoverApplied(String engineId, String historyClass) {
         stateStore.markCutoverApplied(engineId, historyClass, Instant.now());

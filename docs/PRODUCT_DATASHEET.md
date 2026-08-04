@@ -1,6 +1,6 @@
 # Product Datasheet
 
-**nats-bpm-channels 0.7.0** · NATS.io messaging and database offload for open-source BPM engines
+**nats-bpm-channels 0.8.0** · NATS.io messaging and database offload for open-source BPM engines
 Apache License 2.0 · 3eAI Labs Ltd · Maven Central namespace `com.3eai-labs`
 
 ---
@@ -45,7 +45,9 @@ Signing key `E610505884534DB9` (`oss@3eai-labs.com`) is on `keyserver.ubuntu.com
 | Transport security | TLS with client certificate, key and CA |
 | Concurrency | Java 21 virtual threads for non-blocking I/O |
 
-### Database offload
+### Database offload — Camunda 7, CIBSeven and CadenzaFlow
+
+Flowable ships the messaging set above but none of these four paths; parity is on the roadmap.
 
 | Capability | Version | Prefix | Effect |
 |---|---|---|---|

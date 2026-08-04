@@ -19,6 +19,10 @@ public key is on `keyserver.ubuntu.com`.
 | [CIBSeven](https://cibseven.org/) 2.x | [`cibseven-nats-channel`](./cibseven-nats-channel) | `com.3eai-labs:cibseven-nats-channel` |
 | [CadenzaFlow](https://cadenzaflow.com/) 1.x | [`cadenzaflow-nats-channel`](./cadenzaflow-nats-channel) | `com.3eai-labs:cadenzaflow-nats-channel` |
 
+Every adapter declares its engine as a `provided` dependency. Adding one therefore pulls no engine
+into your build and cannot override the version you already run — put the adapter alongside the
+engine dependency your application already declares, not in place of it.
+
 ## Why this project?
 
 [Camunda 8](https://camunda.com/) (v8.6+, October 2024) moved all components — including Zeebe — to a paid enterprise license at **$50K+/year**. Camunda 7 reached End of Life with no more security patches (October 2025).
@@ -59,8 +63,11 @@ the engine database.
 
 See the [User Guide](docs/user/USER_GUIDE.md) for configuration of each.
 
-Flowable 0.7.0 ships the Event Registry NATS adapter. Full Flowable history/offload parity is on the
-roadmap.
+**Flowable has none of the four offload paths above.** It ships the messaging foundation — Event
+Registry channels, JetStream delivery and the DLQ — and its outbound publishing routes failures to a
+DLQ rather than going through a transactional outbox, so it does not carry the at-least-once
+guarantee the Camunda-lineage adapters do. Bringing Flowable to parity is on the
+[roadmap](#roadmap).
 
 ## Requirements
 
@@ -120,7 +127,7 @@ spring:
 <dependency>
     <groupId>com.3eai-labs</groupId>
     <artifactId>flowable-nats-channel</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -181,7 +188,7 @@ spring:
 <dependency>
     <groupId>com.3eai-labs</groupId>
     <artifactId>camunda-nats-channel</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -254,7 +261,7 @@ Messages on configured subjects are correlated to waiting process instances via 
 <dependency>
     <groupId>com.3eai-labs</groupId>
     <artifactId>cibseven-nats-channel</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -304,16 +311,15 @@ CadenzaFlow is a community-maintained fork of Camunda 7 with `org.camunda.* → 
 
 ### Dependency
 
-> **The adapter artifact is not on Central yet.** `cadenzaflow-engine` 1.2.1 *is* on Central, so
-> this module builds and tests like any other — but `cadenzaflow-nats-channel` itself was excluded
-> from the 0.7.0 release and ships to Central from the next release onward. Until then, build it
-> from source: `git clone`, then `mvn install`.
+> **New in 0.8.0.** This adapter is published to Maven Central for the first time. In 0.7.0 it was
+> excluded from the release because the build pinned an engine version that was never published; if
+> you are on 0.7.0 you had to build it from source.
 
 ```xml
 <dependency>
     <groupId>com.3eai-labs</groupId>
     <artifactId>cadenzaflow-nats-channel</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -400,6 +406,7 @@ await nc.subscribe("task.send-sms", queue="sms-workers", cb=handler)
 | Outbound handoff (dual-write safe) | v0.5.0 | :white_check_mark: Complete |
 | CIBSeven adapter | v0.6.0 | :white_check_mark: Complete |
 | Published to Maven Central | v0.7.0 | :white_check_mark: Complete |
+| Flowable database-offload parity | | :crystal_ball: Planned |
 | Sharding | | :crystal_ball: Planned |
 | NATS-native execution core | | :crystal_ball: Planned |
 

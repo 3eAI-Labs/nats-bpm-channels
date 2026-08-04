@@ -1,6 +1,6 @@
 # Architecture Overview
 
-**nats-bpm-channels 0.7.0** · Apache License 2.0 · 3eAI Labs Ltd
+**nats-bpm-channels 0.8.0** · Apache License 2.0 · 3eAI Labs Ltd
 
 ---
 

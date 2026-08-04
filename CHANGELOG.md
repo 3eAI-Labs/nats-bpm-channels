@@ -4,24 +4,62 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
-## [Unreleased]
+## [0.8.0] — 2026-07-30 — Buildable from a clean clone; CadenzaFlow on Central
 
-### Changed
+No functional change to any adapter. This release fixes the fact that nobody outside the project
+could build it, and publishes the fourth engine adapter.
 
-- **The full reactor now builds with no profile flags.** `cadenzaflow-engine` **1.2.1** is published
-  to Maven Central, so the version pin moves from 1.2.0 (never published there) to 1.2.1 and
-  `cadenzaflow-nats-channel` becomes an ordinary reactor module. The `cadenzaflow-mirror` profile
-  and the `-DskipCadenzaflow` flag are **removed** — `git clone && mvn install` now works from a
-  clean checkout, which it did not before: the profile was active by default and pulled in an
-  engine version that could only be resolved from a private repository. 293 tests pass against
-  1.2.1 with no source change.
-- `cadenzaflow-nats-channel` will be **published to Central** with the next release, bringing the
-  published artifact count from 6 to 7. It is no longer excluded from the deployment.
+### Fixed
+
+- **A clean clone could not be built.** The `cadenzaflow-mirror` profile activated on
+  `!skipCadenzaflow` — that is, *by default* — and pulled `cadenzaflow-nats-channel` into the
+  reactor, which pinned `cadenzaflow-engine` 1.2.0. That version was never published to Maven
+  Central, and a `provided` scope still has to resolve, so `git clone && mvn install` failed on
+  dependency resolution for everyone without a private repository. The README documented no build
+  command at all, and the only mention of `-DskipCadenzaflow` sat in a blockquote 290 lines down.
+
+- **Documentation overstated Flowable's coverage.** The README promised "full Flowable
+  history/offload parity is on the roadmap" while the roadmap table carried no such row, and the
+  datasheet listed the four offload paths under a heading with no engine scope at all — a reader
+  could reasonably conclude Flowable had them. Both now state plainly that Flowable ships the
+  messaging foundation and none of the four offload paths, that its outbound publishing is
+  DLQ-on-failure rather than outbox-backed, and the roadmap has a tracked
+  **Flowable database-offload parity** row.
 
 ### Added
 
-- README **Building from source** section — prerequisites (Java 21, Docker for Testcontainers) and
-  the build command, which the README previously never stated.
+- **`cadenzaflow-nats-channel` is published to Maven Central**, taking the published artifact count
+  from 6 to 7. It carries the same increment 1–4 feature set as the other Camunda-lineage adapters.
+- README **Building from source** section: Java 21, a Docker daemon for the Testcontainers
+  integration tests, and the command itself.
+- `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, issue forms and a pull request template.
+  `CONTRIBUTING.md` records the constraint that cannot be inferred from the code: the three
+  Camunda-lineage adapters are byte-mirrors of one another, so a change to one belongs in all three.
+
+### Changed
+
+- **BREAKING — three `CutoverState` values are renamed.** `ClassCutoverState.CutoverState` is public
+  API of the published `nats-history-projection` artifact, and three of its values were
+  Turkish-derived: `N_GUN_TEMIZ` → **`CLEAN_STREAK`**, `CUTOVER_TALEP` → **`CUTOVER_REQUESTED`**,
+  `CUTOVERLANMIS` → **`CUTOVER_APPLIED`**. `CLEAN_STREAK` matches the vocabulary the table already
+  used in `clean_streak_days` / `clean_streak_target`. The values are also persisted, so migration
+  `V6__cutover_state_english_names.sql` swaps the `chk_class_cutover_state_state` constraint and
+  rewrites existing rows. `V3` is deliberately left untouched — it is published DDL a tenant may
+  have adopted into their own Flyway/Liquibase chain, where editing it in place would break the
+  checksum; a fresh install runs V3 then V6, an existing install runs only V6. Apply V6 with the
+  rest of your projection-schema chain. Only code that references these enum values or matches on
+  the stored string is affected; the state machine itself is unchanged.
+- **`cadenzaflow-engine` 1.2.0 → 1.2.1**, which *is* on Central. The `cadenzaflow-mirror` profile
+  and the `-DskipCadenzaflow` flag are removed from the parent pom, both workflows, `RELEASING.md`
+  and the user documentation. The full reactor now builds with no profile flags. Verified against a
+  pristine local Maven repository, and 293 module tests pass against 1.2.1 with no source change.
+- **Source comments are now English throughout.** Roughly 340 files had Turkish comments and
+  references to internal design documents; both are gone. Decision identifiers (`D-A'..D-G'`,
+  `ADR-00NN`, `DP-N`, `FINDING-00N`) are unchanged — they remain the traceability anchors. Five
+  user-visible strings were affected: the history query API returned Turkish error messages, and two
+  exception messages plus a log message carried an internal increment label.
+- Development moved to a private repository; this one is published as a full-tree snapshot per
+  release. Issues and pull requests are still handled here.
 
 ## [0.7.0] — 2026-07-25 — Maven Central publishing (`com.3eai-labs`)
 

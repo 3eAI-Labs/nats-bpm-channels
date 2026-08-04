@@ -77,7 +77,7 @@ public class ClassCutoverStateStore {
         return results;
     }
 
-    /** {@code RECONCILING -> N_GUN_TEMIZ} progress (or continued RECONCILING) — clean cycle. */
+    /** {@code RECONCILING -> CLEAN_STREAK} progress (or continued RECONCILING) — clean cycle. */
     public void recordCleanCycle(String engineId, String historyClass, int newStreakDays, long diffCount,
             CutoverState resultingState) {
         String sql = "UPDATE class_cutover_state SET clean_streak_days = ?, last_diff_count = ?, "
@@ -93,28 +93,28 @@ public class ClassCutoverStateStore {
         execute(sql, diffCount, engineId, historyClass);
     }
 
-    /** {@code N_GUN_TEMIZ -> CUTOVER_TALEP}. */
+    /** {@code CLEAN_STREAK -> CUTOVER_REQUESTED}. */
     public void markCutoverRequested(String engineId, String historyClass) {
-        String sql = "UPDATE class_cutover_state SET state = 'CUTOVER_TALEP', updated_at = now() "
+        String sql = "UPDATE class_cutover_state SET state = 'CUTOVER_REQUESTED', updated_at = now() "
                 + "WHERE engine_id = ? AND history_class = ?";
         execute(sql, engineId, historyClass);
     }
 
-    /** {@code CUTOVER_TALEP -> CUTOVERLANMIS}. */
+    /** {@code CUTOVER_REQUESTED -> CUTOVER_APPLIED}. */
     public void markCutoverApplied(String engineId, String historyClass, Instant appliedAt) {
-        String sql = "UPDATE class_cutover_state SET state = 'CUTOVERLANMIS', cutover_applied_at = ?, updated_at = now() "
+        String sql = "UPDATE class_cutover_state SET state = 'CUTOVER_APPLIED', cutover_applied_at = ?, updated_at = now() "
                 + "WHERE engine_id = ? AND history_class = ?";
         execute(sql, Timestamp.from(appliedAt), engineId, historyClass);
     }
 
-    /** {@code CUTOVER_TALEP -> N_GUN_TEMIZ} (apply failed, fail-safe — dual-run continues). */
+    /** {@code CUTOVER_REQUESTED -> CLEAN_STREAK} (apply failed, fail-safe — dual-run continues). */
     public void revertCutoverRequest(String engineId, String historyClass) {
-        String sql = "UPDATE class_cutover_state SET state = 'N_GUN_TEMIZ', updated_at = now() "
+        String sql = "UPDATE class_cutover_state SET state = 'CLEAN_STREAK', updated_at = now() "
                 + "WHERE engine_id = ? AND history_class = ?";
         execute(sql, engineId, historyClass);
     }
 
-    /** {@code CUTOVERLANMIS -> DUAL_RUN} (operator-triggered rollback). */
+    /** {@code CUTOVER_APPLIED -> DUAL_RUN} (operator-triggered rollback). */
     public void rollback(String engineId, String historyClass, Instant rolledBackAt) {
         String sql = "UPDATE class_cutover_state SET state = 'DUAL_RUN', clean_streak_days = 0, "
                 + "rollback_count = rollback_count + 1, last_rollback_at = ?, updated_at = now() "

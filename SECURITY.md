@@ -7,8 +7,9 @@ support branches.
 
 | Version | Supported |
 |---------|-----------|
-| 0.7.x   | ✅ |
-| < 0.7.0 | ❌ — upgrade; 0.5.1 fixed two high-severity bugs present in 0.3.0–0.5.0 |
+| 0.8.x   | ✅ |
+| 0.7.x   | ❌ — superseded by 0.8.0 |
+| < 0.7.0 | ❌ — never reached Maven Central |
 
 ## Reporting a vulnerability
 

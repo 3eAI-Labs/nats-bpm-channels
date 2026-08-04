@@ -21,5 +21,5 @@ public record ClassCutoverState(
 
     public enum ConsistencyPath { AUDIT_CRITICAL, BULK }
 
-    public enum CutoverState { DUAL_RUN, RECONCILING, N_GUN_TEMIZ, CUTOVER_TALEP, CUTOVERLANMIS }
+    public enum CutoverState { DUAL_RUN, RECONCILING, CLEAN_STREAK, CUTOVER_REQUESTED, CUTOVER_APPLIED }
 }

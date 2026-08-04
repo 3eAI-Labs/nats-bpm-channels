@@ -31,7 +31,7 @@ import org.springframework.scheduling.annotation.Scheduled;
  * judgement externally. This class raises the escalated {@code
  * RES_RECONCILIATION_DIFF_THRESHOLD_EXCEEDED} log (vs. the routine {@code
  * BUS_RECONCILIATION_DIFF_DETECTED} WARN) specifically when a class that had ALREADY reached
- * {@code N_GUN_TEMIZ} or {@code CUTOVER_TALEP} regresses — a clean-readiness REGRESSION is a
+ * {@code CLEAN_STREAK} or {@code CUTOVER_REQUESTED} regresses — a clean-readiness REGRESSION is a
  * stronger ops signal than an ordinary in-progress diff.
  */
 public class ReconciliationJob {
@@ -83,7 +83,7 @@ public class ReconciliationJob {
     private void reconcileClass(String historyClass) throws SQLException {
         ConsistencyPath path = isAuditCritical(historyClass) ? ConsistencyPath.AUDIT_CRITICAL : ConsistencyPath.BULK;
         ClassCutoverState state = stateStore.findOrCreate(engineId, historyClass, path, properties.cleanStreakTargetFor(historyClass));
-        if (state.state() == CutoverState.CUTOVERLANMIS) {
+        if (state.state() == CutoverState.CUTOVER_APPLIED) {
             return; // already cut over -- nothing left to reconcile
         }
 
@@ -99,7 +99,7 @@ public class ReconciliationJob {
     protected void evaluateGate(ClassCutoverState state, long diffCount) {
         boolean clean = isClean(state, diffCount);
         if (!clean) {
-            boolean wasNearCutover = state.state() == CutoverState.N_GUN_TEMIZ || state.state() == CutoverState.CUTOVER_TALEP;
+            boolean wasNearCutover = state.state() == CutoverState.CLEAN_STREAK || state.state() == CutoverState.CUTOVER_REQUESTED;
             if (wasNearCutover) {
                 log.error("Reconciliation diff detected on a class that had already reached cutover-readiness — regression",
                         kv("history_class", state.historyClass()), kv("engine_id", state.engineId()),
@@ -113,7 +113,7 @@ public class ReconciliationJob {
         }
 
         int newStreak = state.cleanStreakDays() + 1;
-        CutoverState resultingState = newStreak >= state.cleanStreakTarget() ? CutoverState.N_GUN_TEMIZ : CutoverState.RECONCILING;
+        CutoverState resultingState = newStreak >= state.cleanStreakTarget() ? CutoverState.CLEAN_STREAK : CutoverState.RECONCILING;
         stateStore.recordCleanCycle(state.engineId(), state.historyClass(), newStreak, diffCount, resultingState);
     }
 

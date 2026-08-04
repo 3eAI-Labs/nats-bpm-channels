@@ -2,7 +2,7 @@
 
 **nats-bpm-channels** — NATS.io messaging for open-source BPM engines.
 
-Applies to version **0.7.0**. All artifacts are published to Maven Central under the
+Applies to version **0.8.0**. All artifacts are published to Maven Central under the
 `com.3eai-labs` namespace.
 
 ---
@@ -57,16 +57,16 @@ so you do not declare it separately.
 <dependency>
     <groupId>com.3eai-labs</groupId>
     <artifactId>camunda-nats-channel</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
 Replace the artifact id with `flowable-nats-channel`, `cibseven-nats-channel` or
 `cadenzaflow-nats-channel` as appropriate.
 
-> `cadenzaflow-nats-channel` is **not on Maven Central yet** — it was excluded from the 0.7.0
-> release and ships from the next release onward. Its engine, `cadenzaflow-engine` 1.2.1, is on
-> Central, so building the adapter from source with `mvn install` needs no extra setup.
+> `cadenzaflow-nats-channel` is published to Maven Central for the first time in **0.8.0**. It was
+> excluded from 0.7.0 because the build pinned an engine version that was never published there; on
+> 0.7.0 it had to be built from source.
 
 History offload additionally requires:
 
@@ -74,7 +74,7 @@ History offload additionally requires:
 <dependency>
     <groupId>com.3eai-labs</groupId>
     <artifactId>nats-history-projection</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -84,7 +84,7 @@ Every artifact is signed. To check a download against the published key:
 
 ```bash
 gpg --keyserver keyserver.ubuntu.com --recv-keys E610505884534DB9
-gpg --verify nats-core-0.7.0.jar.asc nats-core-0.7.0.jar
+gpg --verify nats-core-0.8.0.jar.asc nats-core-0.8.0.jar
 ```
 
 A valid result reports `Good signature from "oss@3eai-labs.com"`.
@@ -515,9 +515,8 @@ Increase `ackWait` rather than `maxDeliver`.
 
 ### `Could not resolve dependencies: cadenzaflow-nats-channel`
 
-The adapter artifact was excluded from the 0.7.0 release and ships to Central from the next release
-onward. Build it from source with `mvn install`; its engine resolves from Central, so nothing else
-is needed.
+That artifact exists from **0.8.0** onward. It was excluded from the 0.7.0 release, so a 0.7.0
+coordinate will not resolve — either upgrade to 0.8.0 or build 0.7.0 from source with `mvn install`.
 
 ### External tasks are locked but never completed
 

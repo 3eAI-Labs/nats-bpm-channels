@@ -10,7 +10,7 @@
          A hyphen is legal in a groupId; Java packages stay separate as com.threeai.*. -->
     <groupId>com.3eai-labs</groupId>
     <artifactId>nats-channel-parent</artifactId>
-    <version>0.7.0</version>
+    <version>0.8.0</version>
     <packaging>pom</packaging>
 
     <name>NATS BPM Channels</name>

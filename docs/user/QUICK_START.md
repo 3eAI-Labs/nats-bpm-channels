@@ -1,6 +1,6 @@
 # Quick Start
 
-**nats-bpm-channels 0.7.0** — NATS.io messaging for Flowable, Camunda 7, CIBSeven and CadenzaFlow.
+**nats-bpm-channels 0.8.0** — NATS.io messaging for Flowable, Camunda 7, CIBSeven and CadenzaFlow.
 Requires Java 21+, Spring Boot 3.x, NATS 2.10+.
 
 ## 1. Start NATS
@@ -14,10 +14,14 @@ docker run -p 4222:4222 nats:2.10 --jetstream
 ```xml
 <dependency>
     <groupId>com.3eai-labs</groupId>
-    <artifactId>camunda-nats-channel</artifactId>   <!-- or flowable- / cibseven- -->
-    <version>0.7.0</version>
+    <artifactId>camunda-nats-channel</artifactId>   <!-- or flowable- / cibseven- / cadenzaflow- -->
+    <version>0.8.0</version>
 </dependency>
 ```
+
+The engine itself is not pulled in: each adapter declares its engine `provided`, so the
+version already on your classpath is the one that gets used. Add the adapter next to the
+engine dependency you have, do not replace it.
 
 ## 3. Connect
 
@@ -141,7 +145,7 @@ Needs `nats-history-projection` on the classpath.
 
 ```bash
 gpg --keyserver keyserver.ubuntu.com --recv-keys E610505884534DB9
-gpg --verify nats-core-0.7.0.jar.asc nats-core-0.7.0.jar   # → Good signature: oss@3eai-labs.com
+gpg --verify nats-core-0.8.0.jar.asc nats-core-0.8.0.jar   # → Good signature: oss@3eai-labs.com
 ```
 
 ## Common fixes
@@ -152,6 +156,6 @@ gpg --verify nats-core-0.7.0.jar.asc nats-core-0.7.0.jar   # → Good signature:
 | Redelivery loop → DLQ | Raise `ackWait`, not `maxDeliver` |
 | External task reclaimed mid-run | Raise `lock-duration-seconds` |
 | `NoClassDefFoundError` Micrometer | Add Actuator + a registry to your app |
-| `cadenzaflow-nats-channel` unresolved | Adapter not yet on Central — build from source with `mvn install` |
+| `cadenzaflow-nats-channel` unresolved | That artifact exists from 0.8.0 onward — upgrade |
 
 Full reference: [USER_GUIDE.md](USER_GUIDE.md)

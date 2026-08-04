@@ -50,6 +50,7 @@ class CutoverRollbackTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V6__cutover_state_english_names.sql");
         stateStore = new ClassCutoverStateStore(dataSource);
 
         natsContainer = new GenericContainer<>("nats:2.10-alpine").withCommand("--jetstream").withExposedPorts(4222);
@@ -76,7 +77,7 @@ class CutoverRollbackTest {
     @Test
     void rollback_cutoverlanmisClass_returnsToDualRun_writesKvFalse() throws Exception {
         stateStore.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
-        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.CLEAN_STREAK);
         stateStore.markCutoverRequested("camunda", HistoryClassNames.OP_LOG);
         stateStore.markCutoverApplied("camunda", HistoryClassNames.OP_LOG, java.time.Instant.now());
 

@@ -64,6 +64,7 @@ class HistoryProjectionConsumerTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V6__cutover_state_english_names.sql");
         // FINDING-001 (code review): a dated partition (rather than relying on the catch-all
         // _default) so the redelivery test below can prove the row's PARTITION ANCHOR is driven
         // by the engine's real event_time header, not the consumer's ingest-time clock.

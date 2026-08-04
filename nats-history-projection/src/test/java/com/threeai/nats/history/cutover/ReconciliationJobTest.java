@@ -39,6 +39,7 @@ class ReconciliationJobTest {
         SqlMigrationRunner.applyClasspathScript(projectionDataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(projectionDataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(projectionDataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(projectionDataSource, "db/migration/projection/V6__cutover_state_english_names.sql");
         stateStore = new ClassCutoverStateStore(projectionDataSource);
 
         enginePostgres = new PostgreSQLContainer<>("postgres:16");
@@ -139,7 +140,7 @@ class ReconciliationJobTest {
 
         ClassCutoverState after = stateStore.find("camunda", HistoryClassNames.INCIDENT).orElseThrow();
         assertThat(after.cleanStreakDays()).isEqualTo(2);
-        assertThat(after.state()).isEqualTo(CutoverState.N_GUN_TEMIZ);
+        assertThat(after.state()).isEqualTo(CutoverState.CLEAN_STREAK);
     }
 
     @Test

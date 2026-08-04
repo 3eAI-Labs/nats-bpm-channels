@@ -46,6 +46,7 @@ class CutoverControlPlaneTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V6__cutover_state_english_names.sql");
         stateStore = new ClassCutoverStateStore(dataSource);
 
         natsContainer = new GenericContainer<>("nats:2.10-alpine").withCommand("--jetstream").withExposedPorts(4222);
@@ -87,13 +88,13 @@ class CutoverControlPlaneTest {
     @Test
     void requestCutover_gateOpen_writesKvAndTransitionsState() throws Exception {
         stateStore.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
-        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.CLEAN_STREAK);
 
         CutoverOutcome outcome = newControlPlane().requestCutover("camunda", HistoryClassNames.OP_LOG);
 
         assertThat(outcome).isEqualTo(CutoverOutcome.REQUESTED);
         assertThat(stateStore.find("camunda", HistoryClassNames.OP_LOG).orElseThrow().state())
-                .isEqualTo(CutoverState.CUTOVER_TALEP);
+                .isEqualTo(CutoverState.CUTOVER_REQUESTED);
 
         KeyValue kv = natsConnection.keyValue("history-cutover-state");
         assertThat(new String(kv.get("cutover.camunda.OP_LOG").getValue(), StandardCharsets.UTF_8)).isEqualTo("true");
@@ -102,13 +103,13 @@ class CutoverControlPlaneTest {
     @Test
     void confirmCutoverApplied_transitionsToCutoverlanmis() {
         stateStore.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
-        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.CLEAN_STREAK);
         newControlPlane().requestCutover("camunda", HistoryClassNames.OP_LOG);
 
         newControlPlane().confirmCutoverApplied("camunda", HistoryClassNames.OP_LOG);
 
         ClassCutoverState state = stateStore.find("camunda", HistoryClassNames.OP_LOG).orElseThrow();
-        assertThat(state.state()).isEqualTo(CutoverState.CUTOVERLANMIS);
+        assertThat(state.state()).isEqualTo(CutoverState.CUTOVER_APPLIED);
         assertThat(state.cutoverAppliedAt()).isNotNull();
     }
 
@@ -125,7 +126,7 @@ class CutoverControlPlaneTest {
     @Test
     void requestCutover_kvConnectionUnreachable_returnsApplyFailed_stateUnchanged() throws Exception {
         stateStore.findOrCreate("camunda", HistoryClassNames.OP_LOG, ConsistencyPath.AUDIT_CRITICAL, 7);
-        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.N_GUN_TEMIZ);
+        stateStore.recordCleanCycle("camunda", HistoryClassNames.OP_LOG, 7, 0, CutoverState.CLEAN_STREAK);
 
         io.nats.client.Connection deadConnection =
                 Nats.connect("nats://" + natsContainer.getHost() + ":" + natsContainer.getMappedPort(4222));
@@ -137,7 +138,7 @@ class CutoverControlPlaneTest {
 
         assertThat(outcome).isEqualTo(CutoverOutcome.APPLY_FAILED);
         assertThat(stateStore.find("camunda", HistoryClassNames.OP_LOG).orElseThrow().state())
-                .isEqualTo(CutoverState.N_GUN_TEMIZ); // never transitioned -- dual-run continues
+                .isEqualTo(CutoverState.CLEAN_STREAK); // never transitioned -- dual-run continues
     }
 
     /**
@@ -149,7 +150,7 @@ class CutoverControlPlaneTest {
     @Test
     void requestCutover_stateStoreWriteFailsAfterKvSucceeded_returnsApplyFailed_kvStillWritten() {
         ClassCutoverState gateOpenState = new ClassCutoverState("camunda", HistoryClassNames.OP_LOG,
-                ConsistencyPath.AUDIT_CRITICAL, CutoverState.N_GUN_TEMIZ, 7, 7, Instant.now(), 0, null, 0, null);
+                ConsistencyPath.AUDIT_CRITICAL, CutoverState.CLEAN_STREAK, 7, 7, Instant.now(), 0, null, 0, null);
         ClassCutoverStateStore failingStore = org.mockito.Mockito.mock(ClassCutoverStateStore.class);
         org.mockito.Mockito.when(failingStore.find("camunda", HistoryClassNames.OP_LOG))
                 .thenReturn(java.util.Optional.of(gateOpenState));

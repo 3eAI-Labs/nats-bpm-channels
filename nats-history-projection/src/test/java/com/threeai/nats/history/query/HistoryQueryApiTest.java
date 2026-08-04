@@ -62,6 +62,7 @@ class HistoryQueryApiTest {
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        SqlMigrationRunner.applyClasspathScript(dataSource, "db/migration/projection/V6__cutover_state_english_names.sql");
         projectionStore = new ProjectionStore(dataSource);
         queryApi = new HistoryQueryApi(dataSource, new PiiMaskingService(), ALLOW_ALL);
     }
