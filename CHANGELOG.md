@@ -4,7 +4,7 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
-## [0.8.0] — 2026-07-30 — Buildable from a clean clone; CadenzaFlow on Central
+## [0.8.0] — 2026-08-04 — Buildable from a clean clone; CadenzaFlow on Central
 
 No functional change to any adapter. This release fixes the fact that nobody outside the project
 could build it, and publishes the fourth engine adapter.
