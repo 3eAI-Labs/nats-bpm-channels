@@ -1,6 +1,6 @@
 # From tables to a log
 
-*Part 3 of 3 — [Part 1: The licence wall](01-the-licence-wall.md) · [Part 2: Your ceiling is your database](02-your-ceiling-is-your-database.md)*
+*Part 3 of 3 — [Part 1: Four BPM engines, one NATS layer](01-four-engines-one-nats-layer.md) · [Part 2: Your ceiling is your database](02-your-ceiling-is-your-database.md)*
 
 ---
 
@@ -75,7 +75,10 @@ And the semantics are already proven under real conditions rather than assumed:
 
 - Leader election on a NATS KV lease with compare-and-swap — split-brain measured at zero against
   an N-candidate race
-- Relay failover — RPO of zero across a real 3-replica JetStream KV failover
+- Relay failover — RPO of zero across a leader handover, with three competing relay instances
+  racing for one real JetStream KV lease and the successor draining every seeded audit row. That
+  is the application-level lease and outbox contract; the test broker is a single node, so broker
+  replication is not part of the measurement.
 - Custody transfer: acknowledge only once persistence has actually changed hands, in every role
 - At-least-once everywhere, with `Nats-Msg-Id` dedup and idempotent completion
 
@@ -119,4 +122,4 @@ Apache-2.0, on Maven Central, GPG-signed.
 
 ---
 
-*Series: [1 — The licence wall](01-the-licence-wall.md) · [2 — Your ceiling is your database](02-your-ceiling-is-your-database.md) · 3 — From tables to a log*
+*Series: [1 — Four BPM engines, one NATS layer](01-four-engines-one-nats-layer.md) · [2 — Your ceiling is your database](02-your-ceiling-is-your-database.md) · 3 — From tables to a log*

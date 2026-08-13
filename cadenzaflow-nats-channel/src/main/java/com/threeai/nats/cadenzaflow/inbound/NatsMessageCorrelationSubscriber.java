@@ -43,7 +43,12 @@ public class NatsMessageCorrelationSubscriber {
     public void subscribe() {
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.dispatcher = connection.createDispatcher();
-        dispatcher.subscribe(config.getSubject(), msg -> executor.submit(() -> handleMessage(msg)));
+        String deliverGroup = config.resolveDeliverGroup();
+        if (deliverGroup != null) {
+            dispatcher.subscribe(config.getSubject(), deliverGroup, msg -> executor.submit(() -> handleMessage(msg)));
+        } else {
+            dispatcher.subscribe(config.getSubject(), msg -> executor.submit(() -> handleMessage(msg)));
+        }
         log.info("Subscribed to NATS subject for CadenzaFlow correlation",
                 kv("subject", config.getSubject()),
                 kv("message_name", config.getMessageName()));

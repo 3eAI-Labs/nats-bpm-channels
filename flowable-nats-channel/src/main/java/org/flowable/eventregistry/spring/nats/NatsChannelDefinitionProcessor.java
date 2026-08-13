@@ -135,9 +135,13 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
             dlqSubject = "dlq." + model.getSubject();
         }
 
+        // queueGroup/durableName were declared on the channel model but only ever read on the core
+        // path, so a JetStream channel silently ignored both — a setting that is accepted and
+        // discarded is worse than one that does not exist.
         JetStreamInboundEventChannelAdapter adapter = new JetStreamInboundEventChannelAdapter(
                 connection, jetStream, model.getSubject(), model.getMaxDeliver(),
-                dlqSubject, metrics, model.getKey(), dlqPublisher);
+                dlqSubject, metrics, model.getKey(), dlqPublisher,
+                model.getQueueGroup(), model.getDurableName());
 
         model.setInboundEventChannelAdapter(adapter);
         adapter.setInboundChannelModel(model);

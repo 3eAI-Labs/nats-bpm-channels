@@ -13,6 +13,18 @@ public class A2ConsumerConfig {
     private String subject;
     private String messageName;
     private String durableName;
+    /**
+     * JetStream deliver (queue) group. A durable push consumer WITHOUT one is exclusive: only the
+     * first subscriber binds and every later one gets {@code [SUB-90012] Consumer is already bound
+     * to a subscription}, which fails the Spring context of every engine node but the first. Set
+     * it and the same durable is shared by all nodes, each reply going to exactly one of them —
+     * which is the semantics A2 already assumes, since {@code complete()} works from any node
+     * (engine state lives in the shared database).
+     */
+    private String deliverGroup;
+    /** When to write the reply body to {@code natsPayload}; see {@link A2Properties.ReplyPayloadVariable}. */
+    private A2Properties.ReplyPayloadVariable replyPayloadVariable =
+            A2Properties.ReplyPayloadVariable.WHEN_PRESENT;
     /** W — must stay aligned with {@link UmbrellaLockResolver}'s topic-override W. */
     private long ackWaitSeconds = 30;
     /** M — asyncapi {@code a2JobReply.x-jetstream.maxDeliver=4}, ADR-0001 default. */
@@ -50,6 +62,22 @@ public class A2ConsumerConfig {
 
     public void setDurableName(String durableName) {
         this.durableName = durableName;
+    }
+
+    public String getDeliverGroup() {
+        return deliverGroup;
+    }
+
+    public A2Properties.ReplyPayloadVariable getReplyPayloadVariable() {
+        return replyPayloadVariable;
+    }
+
+    public void setReplyPayloadVariable(A2Properties.ReplyPayloadVariable replyPayloadVariable) {
+        this.replyPayloadVariable = replyPayloadVariable;
+    }
+
+    public void setDeliverGroup(String deliverGroup) {
+        this.deliverGroup = deliverGroup;
     }
 
     public long getAckWaitSeconds() {

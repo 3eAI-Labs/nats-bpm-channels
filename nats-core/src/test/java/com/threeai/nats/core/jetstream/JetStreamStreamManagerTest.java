@@ -12,16 +12,22 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.time.Duration;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.nats.client.Connection;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.JetStreamManagement;
 import io.nats.client.api.RetentionPolicy;
+import io.nats.client.api.ServerInfo;
 import io.nats.client.api.StreamConfiguration;
 import io.nats.client.api.StreamInfo;
 import io.nats.client.api.SubjectTransform;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 
 class JetStreamStreamManagerTest {
 
@@ -56,6 +62,61 @@ class JetStreamStreamManagerTest {
         manager.ensureStream("ORDERS", "order.>", connection);
 
         verify(jsm).addStream(any(StreamConfiguration.class));
+    }
+
+    /**
+     * The replica count reaches the stream configuration — without this the setting would be
+     * accepted, stored and silently dropped, which is the failure mode that produced most of this
+     * class's history.
+     */
+    @Test
+    void ensureStream_notFound_appliesConfiguredReplicaCount() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("ORDERS")).thenThrow(notFound);
+
+        new JetStreamStreamManager(3).ensureStream("ORDERS", "order.>", connection);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getReplicas()).isEqualTo(3);
+    }
+
+    @Test
+    void constructor_rejectsReplicaCountBelowOne() {
+        assertThatThrownBy(() -> new JetStreamStreamManager(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be >= 1");
+    }
+
+    /**
+     * A standalone server reports no cluster name, so the single-replica warning must stay silent
+     * — every single-node dev and test environment creates streams this way, and a warning they
+     * cannot act on is one they learn to scroll past. The clustered counterpart lives in
+     * {@code NatsClusterNodeFailureReliabilityTest}, which needs three real nodes.
+     */
+    @Test
+    void ensureStream_singleReplica_onStandaloneServer_doesNotWarn() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("ORDERS")).thenThrow(notFound);
+        ServerInfo standalone = mock(ServerInfo.class);
+        when(standalone.getCluster()).thenReturn("");
+        when(connection.getServerInfo()).thenReturn(standalone);
+
+        Logger logger = (Logger) LoggerFactory.getLogger(JetStreamStreamManager.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new JetStreamStreamManager(1).ensureStream("ORDERS", "order.>", connection);
+            assertThat(appender.list)
+                    .filteredOn(e -> e.getLevel() == Level.WARN)
+                    .as("no cluster means no exposure, so no warning")
+                    .isEmpty();
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test

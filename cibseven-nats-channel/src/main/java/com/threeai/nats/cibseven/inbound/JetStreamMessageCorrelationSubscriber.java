@@ -66,11 +66,18 @@ public class JetStreamMessageCorrelationSubscriber {
             if (config.getDurableName() != null) {
                 ccBuilder.durable(config.getDurableName());
             }
+            String deliverGroup = config.resolveDeliverGroup();
+            if (deliverGroup != null) {
+                ccBuilder.deliverGroup(deliverGroup);
+            }
             PushSubscribeOptions opts = PushSubscribeOptions.builder()
                     .configuration(ccBuilder.build())
                     .build();
-            JetStreamSubscription sub = jetStream.subscribe(config.getSubject(), dispatcher,
-                    msg -> executor.submit(() -> handleMessage(msg)), false, opts);
+            JetStreamSubscription sub = deliverGroup != null
+                    ? jetStream.subscribe(config.getSubject(), deliverGroup, dispatcher,
+                            msg -> executor.submit(() -> handleMessage(msg)), false, opts)
+                    : jetStream.subscribe(config.getSubject(), dispatcher,
+                            msg -> executor.submit(() -> handleMessage(msg)), false, opts);
             log.info("Subscribed to JetStream for CibSeven correlation",
                     kv("subject", config.getSubject()),
                     kv("message_name", config.getMessageName()));

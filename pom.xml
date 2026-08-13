@@ -10,7 +10,7 @@
          A hyphen is legal in a groupId; Java packages stay separate as com.threeai.*. -->
     <groupId>com.3eai-labs</groupId>
     <artifactId>nats-channel-parent</artifactId>
-    <version>0.8.0</version>
+    <version>0.8.1</version>
     <packaging>pom</packaging>
 
     <name>NATS BPM Channels</name>
@@ -180,6 +180,13 @@
                     <configuration>
                         <source>${java.version}</source>
                         <target>${java.version}</target>
+                        <!-- Retain parameter names in the bytecode. Spring falls back to matching a
+                             by-type injection point against the bean NAME when several beans share
+                             the type, and since Framework 6.1 dropped the debug-info discoverer that
+                             fallback works only with this flag. Spring Boot's own parent sets it;
+                             this project does not use that parent. Injection points also carry
+                             @Qualifier so wiring does not depend on this alone. -->
+                        <parameters>true</parameters>
                     </configuration>
                 </plugin>
                 <plugin>

@@ -32,6 +32,36 @@ public class A2Properties {
      * preserved unless a topic explicitly opts in (PII minimization by default).
      */
     private Map<String, List<String>> variableAllowlist = new HashMap<>();
+    /**
+     * When the completion bridge writes the reply body to the {@code natsPayload} process
+     * variable. See {@link ReplyPayloadVariable}.
+     */
+    private ReplyPayloadVariable replyPayloadVariable = ReplyPayloadVariable.WHEN_PRESENT;
+
+    /**
+     * The reply body reaches the process as a single {@code natsPayload} variable because its
+     * shape is tenant-defined and this layer does not interpret it (asyncapi
+     * {@code JobSuccessPayload}: {@code type} required, everything else opaque). That is a real
+     * need — a worker's result has no other way in — but a reply carrying ONLY the {@code type}
+     * discriminator has no result to deliver, and writing it still costs a variable row plus its
+     * history row on every completion.
+     */
+    public enum ReplyPayloadVariable {
+        /** Write only when the body has a field other than {@code type}. Default. */
+        WHEN_PRESENT,
+        /** Always write, even for a bare {@code {"type":"SUCCESS"}}. Behaviour before 0.8.1. */
+        ALWAYS,
+        /** Never write. The process cannot read worker results at all — opt in knowingly. */
+        NEVER
+    }
+
+    public ReplyPayloadVariable getReplyPayloadVariable() {
+        return replyPayloadVariable;
+    }
+
+    public void setReplyPayloadVariable(ReplyPayloadVariable replyPayloadVariable) {
+        this.replyPayloadVariable = replyPayloadVariable;
+    }
 
     public String getSentinelWorkerId() {
         return sentinelWorkerId;

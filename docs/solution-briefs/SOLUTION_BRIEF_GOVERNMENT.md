@@ -149,13 +149,19 @@ normally.
 
 Measured against real infrastructure rather than asserted:
 
-| Property | Result |
-|---|---|
-| Audit-critical data loss on relay failover | RPO = 0, across a real 3-replica JetStream KV failover |
-| Recovery time | RTO ≤ 60 s, bounded by lease TTL |
-| Leader-lease split-brain | 0, under an N-candidate race against real compare-and-swap |
-| Test suite | 1,416 tests, real PostgreSQL and NATS, fault injection |
-| Line coverage | ≥ 90% per production module, 93.0% weighted |
+| Property | Result | Suite |
+|---|---|---|
+| Test suite | 1,416 tests, real PostgreSQL and NATS, fault injection | default |
+| Line coverage | ≥ 90% per production module, 93.0% weighted | default |
+| Audit-critical data loss on relay failover | RPO = 0, across a leader handover between three competing relay instances contending for one real JetStream KV lease | `bench` |
+| Recovery time | ≈ lease TTL — measured 60.4 s against a 60 s TTL; TTL-driven, so a floor rather than a bound with headroom | `bench` |
+| Leader-lease split-brain | 0, under an N-candidate race against real compare-and-swap | `reliability` |
+
+The `reliability` and `bench` suites are excluded from the default `mvn verify` run and from CI, so
+they are not counted in the 1,416. The failover test covers the application-level lease and outbox
+contract: the test broker is a single node and the lease bucket is created with one replica.
+Production auto-configuration provisions leader buckets with three replicas, but a
+replicated-broker failover has not been measured.
 
 Delivery is at-least-once by design. Exactly-once is not offered, because it is not achievable
 across two systems; duplicates are suppressed by message id and idempotent completion.

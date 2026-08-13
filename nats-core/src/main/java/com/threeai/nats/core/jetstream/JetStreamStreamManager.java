@@ -46,6 +46,54 @@ public class JetStreamStreamManager {
     private static final String JOBS_SUBJECT_PREFIX = "jobs.";
     private static final Duration DLQ_DEFAULT_MAX_AGE = Duration.ofDays(14);
 
+    private final int replicas;
+
+    /** Single-replica streams — the historical behaviour, and what a single-node server allows. */
+    public JetStreamStreamManager() {
+        this(1);
+    }
+
+    /**
+     * @param replicas replica count for streams this instance creates, from {@code
+     *                 spring.nats.jetstream.stream-replicas}. Existing streams are never
+     *                 reconfigured, so changing this does not touch what is already provisioned.
+     */
+    public JetStreamStreamManager(int replicas) {
+        if (replicas < 1) {
+            throw new IllegalArgumentException("stream replicas must be >= 1, got " + replicas);
+        }
+        this.replicas = replicas;
+    }
+
+    /**
+     * A single-replica stream on a clustered server is a silent trap: it works perfectly until the
+     * one node holding it is lost, at which point the stream stops serving entirely — no failover,
+     * no degraded mode. Nothing here changes that (the replica count is the operator's call, and 1
+     * is a legitimate choice for a dev stream on a shared cluster), but it is said out loud rather
+     * than left to be discovered during the outage.
+     *
+     * <p>Deliberately keyed off {@code ServerInfo.getCluster()} — the server's own statement about
+     * how it is running — rather than the stream's {@code ClusterInfo}, which describes the
+     * stream's replicas and therefore looks identical for a single-replica stream whether or not a
+     * cluster exists around it.
+     */
+    private void warnIfSingleReplicaOnCluster(String streamName, Connection connection) {
+        if (replicas > 1) {
+            return;
+        }
+        var serverInfo = connection.getServerInfo();
+        String clusterName = serverInfo != null ? serverInfo.getCluster() : null;
+        if (clusterName == null || clusterName.isBlank()) {
+            return;
+        }
+        log.warn("Stream created with a single replica on a clustered server — it will stop "
+                        + "serving if the node holding it is lost. Set "
+                        + "spring.nats.jetstream.stream-replicas to change this.",
+                kv("stream", streamName),
+                kv("replicas", replicas),
+                kv("cluster", clusterName));
+    }
+
     /**
      * Convenience overload — {@code maxAge} defaults per {@link #defaultMaxAgeFor(String)},
      * {@code retentionPolicy} defaults per {@link #defaultRetentionPolicyFor(String)}.
@@ -101,6 +149,7 @@ public class JetStreamStreamManager {
                             .name(streamName)
                             .subjects(subject)
                             .retentionPolicy(resolvedRetention)
+                            .replicas(replicas)
                             .storageType(StorageType.File);
                     if (maxAge != null && !maxAge.isZero()) {
                         configBuilder.maxAge(maxAge);
@@ -109,6 +158,7 @@ public class JetStreamStreamManager {
                         configBuilder.subjectTransform(subjectTransform);
                     }
                     jsm.addStream(configBuilder.build());
+                    warnIfSingleReplicaOnCluster(streamName, connection);
                     log.info("Stream created", kv("stream", streamName), kv("subject", subject),
                             kv("retention_policy", resolvedRetention),
                             kv("max_age_seconds", maxAge != null ? maxAge.toSeconds() : null),

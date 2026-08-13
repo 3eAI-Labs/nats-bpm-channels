@@ -57,6 +57,8 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
     private final A2TopicConfig topicConfig;
     private final UmbrellaLockValidator lockValidator;
     private final JetStreamKvManager kvManager;
+    /** Replica count for {@code a2-sweep-leader}; see {@code NatsProperties.Jetstream#kvReplicas}. */
+    private final int kvReplicas;
 
     private final List<A2CompletionBridge> completionBridges = new ArrayList<>();
     private A2IncidentBridge incidentBridge;
@@ -67,7 +69,8 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
     public A2SubscriptionRegistrar(A2Properties properties, Connection connection, JetStream jetStream,
             ExternalTaskService externalTaskService, DlqPublisher dlqPublisher, NatsChannelMetrics metrics,
             MeterRegistry meterRegistry, ProcessEngine processEngine, UmbrellaLockResolver lockResolver,
-            A2TopicConfig topicConfig, UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager) {
+            A2TopicConfig topicConfig, UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager,
+            int kvReplicas) {
         this.properties = properties;
         this.connection = connection;
         this.jetStream = jetStream;
@@ -80,6 +83,7 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         this.topicConfig = topicConfig;
         this.lockValidator = lockValidator;
         this.kvManager = kvManager;
+        this.kvReplicas = kvReplicas;
     }
 
     @Override
@@ -104,6 +108,11 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         A2ConsumerConfig incidentConfig = new A2ConsumerConfig();
         incidentConfig.setSubject("dlq." + A2_RESERVED_PREFIX + ">");
         incidentConfig.setMessageName("a2-incident-bridge");
+        // Durable + queue group: shared by every engine node, so a DLQ message raises exactly one
+        // incident. Leaving these unset made the consumer ephemeral and therefore per-node, which
+        // is silent duplicate work rather than a visible failure.
+        incidentConfig.setDurableName("a2-incident-bridge");
+        incidentConfig.setDeliverGroup("a2-incident-bridge");
         incidentConfig.setAckWaitSeconds(properties.getDefaults().getAckWaitSeconds());
         incidentConfig.setMaxDeliver(properties.getDefaults().getMaxDeliver());
         incidentBridge = new A2IncidentBridge(connection, jetStream, externalTaskService,
@@ -112,7 +121,7 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         log.info("Registered A2 incident bridge (wildcard dlq.jobs.>)");
 
         kvManager.ensureBucket("a2-sweep-leader", java.time.Duration.ofSeconds(
-                2 * properties.getDefaults().getSweepPeriodSeconds()), 3, connection);
+                2 * properties.getDefaults().getSweepPeriodSeconds()), kvReplicas, connection);
         sweepLeaderLease = new SweepLeaderLease(jetStream, kvManager, connection, ENGINE_ID, resolveNodeId(),
                 java.time.Duration.ofSeconds(2 * properties.getDefaults().getSweepPeriodSeconds()));
         orphanSweep = new A2OrphanSweep(processEngine, sweepLeaderLease, jetStream, topicConfig,
@@ -149,9 +158,12 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         config.setSubject(A2_RESERVED_PREFIX + topic + ".reply");
         config.setMessageName(topic);
         config.setDurableName("a2-completion-" + topic);
+        // Shared by every engine node — see A2ConsumerConfig#deliverGroup.
+        config.setDeliverGroup("a2-completion-" + topic);
         config.setAckWaitSeconds(ackWait);
         config.setMaxDeliver(maxDeliver);
         config.setDlqSubject("dlq." + A2_RESERVED_PREFIX + topic);
+        config.setReplyPayloadVariable(properties.getReplyPayloadVariable());
         config.setRetryTimeoutMillis(retryTimeoutMillis);
         return config;
     }

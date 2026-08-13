@@ -63,7 +63,9 @@ class NatsMessageCorrelationSubscriberTest {
 
         freshSubscriber.subscribe();
 
-        verify(dispatcher).subscribe(eq(config.getSubject()), any(io.nats.client.MessageHandler.class));
+        // Queue overload: one correlation per message across the cluster, not one per node.
+        verify(dispatcher).subscribe(eq(config.getSubject()), eq(config.resolveDeliverGroup()),
+                any(io.nats.client.MessageHandler.class));
     }
 
     @Test

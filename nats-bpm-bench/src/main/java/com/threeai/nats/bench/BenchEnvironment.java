@@ -17,6 +17,7 @@ import com.threeai.nats.camunda.a2.A2Properties;
 import com.threeai.nats.camunda.a2.A2TopicConfig;
 import com.threeai.nats.camunda.a2.UmbrellaLockResolver;
 import com.threeai.nats.camunda.a2.UmbrellaLockValidator;
+import com.threeai.nats.core.NatsProperties;
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -176,12 +177,38 @@ public class BenchEnvironment implements AutoCloseable {
      *  boot-time-fixed — fork-verified — so a single shared
      *  engine cannot flip between DB_HISTORY_BASELINE/HISTORY_OFFLOAD; see that class's
      *  CODER-NOTE). */
+    /** Single-node broker: KV buckets must be unreplicated. See {@link #natsProperties()}. */
+    private final NatsProperties natsProperties = singleNodeBrokerProperties();
+
+    private static NatsProperties singleNodeBrokerProperties() {
+        NatsProperties props = new NatsProperties();
+        props.getJetstream().setKvReplicas(1);
+        return props;
+    }
+
     public io.nats.client.Connection natsConnection() {
         return natsConnection;
     }
 
     public JetStream jetStream() {
         return jetStream;
+    }
+
+    /**
+     * The broker settings this environment runs under, expressed the way a deployment expresses
+     * them. The bench broker is a single-node Testcontainers NATS, which rejects any KV bucket with
+     * more than one replica ({@code replicas > 1 not supported in non-clustered mode [10074]}),
+     * while production defaults to three.
+     *
+     * <p>That difference is real and unavoidable, but it belongs in ONE place, stated as
+     * configuration. Previously each scenario passed a literal {@code 1} to
+     * {@code ensureBucket(...)} while the auto-configurations passed a literal {@code 3}: two code
+     * paths that could never exercise each other, which is how a hardcoded replica count survived
+     * to release. Routing both through {@code NatsProperties} means the bench proves the same
+     * mechanism a deployment uses, at a different setting.
+     */
+    public NatsProperties natsProperties() {
+        return natsProperties;
     }
 
     private static DataSource buildDataSource(PostgreSQLContainer<?> postgres) {
@@ -334,7 +361,11 @@ public class BenchEnvironment implements AutoCloseable {
                     NatsMessage reply = NatsMessage.builder()
                             .subject("jobs." + topic + ".reply")
                             .headers(replyHeaders)
-                            .data("{}".getBytes(StandardCharsets.UTF_8))
+                            // A2 replies carry a mandatory `type` discriminator (asyncapi
+                            // JobSuccessPayload). "{}" has none, so every reply was routed to the
+                            // DLQ and no external task ever completed — the bench simply timed out
+                            // after 60s with nothing in the log to say why.
+                            .data("{\"type\":\"SUCCESS\"}".getBytes(StandardCharsets.UTF_8))
                             .build();
                     jetStream.publish(reply);
                     msg.ack();

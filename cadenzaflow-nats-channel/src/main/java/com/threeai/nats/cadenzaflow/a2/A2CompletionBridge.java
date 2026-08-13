@@ -76,9 +76,17 @@ public class A2CompletionBridge {
             if (config.getDurableName() != null) {
                 ccBuilder.durable(config.getDurableName());
             }
+            // Queue group => the durable is shared by every engine node and each reply is handled
+            // exactly once. Without it the durable is exclusive and only one node can ever bind.
+            if (config.getDeliverGroup() != null) {
+                ccBuilder.deliverGroup(config.getDeliverGroup());
+            }
             PushSubscribeOptions opts = PushSubscribeOptions.builder().configuration(ccBuilder.build()).build();
-            JetStreamSubscription sub = jetStream.subscribe(config.getSubject(), dispatcher,
-                    msg -> executor.submit(() -> handleReply(msg)), false, opts);
+            JetStreamSubscription sub = config.getDeliverGroup() != null
+                    ? jetStream.subscribe(config.getSubject(), config.getDeliverGroup(), dispatcher,
+                            msg -> executor.submit(() -> handleReply(msg)), false, opts)
+                    : jetStream.subscribe(config.getSubject(), dispatcher,
+                            msg -> executor.submit(() -> handleReply(msg)), false, opts);
             log.info("Subscribed to A2 completion reply subject",
                     kv("subject", config.getSubject()), kv("message_name", config.getMessageName()));
         } catch (Exception e) {
@@ -136,10 +144,10 @@ public class A2CompletionBridge {
 
             switch (replyType.get()) {
                 case SUCCESS -> externalTaskService.complete(externalTaskId, sentinelWorkerId,
-                        A2ReplyPayloadDecoder.variablesOf(msg));
+                        A2ReplyPayloadDecoder.variablesOf(msg, config.getReplyPayloadVariable()));
                 case BPMN_ERROR -> externalTaskService.handleBpmnError(externalTaskId, sentinelWorkerId,
                         A2ReplyPayloadDecoder.errorCodeOf(msg), A2ReplyPayloadDecoder.errorMessageOf(msg),
-                        A2ReplyPayloadDecoder.variablesOf(msg));
+                        A2ReplyPayloadDecoder.variablesOf(msg, config.getReplyPayloadVariable()));
                 case TRANSIENT -> externalTaskService.handleFailure(externalTaskId, sentinelWorkerId,
                         A2ReplyPayloadDecoder.errorMessageOf(msg), A2ReplyPayloadDecoder.errorDetailsOf(msg),
                         A2ReplyPayloadDecoder.retriesOf(msg), config.getRetryTimeoutMillis());

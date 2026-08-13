@@ -8,6 +8,15 @@ public class SubscriptionConfig {
     private String businessKeyVariable;
     private boolean jetstream;
     private String durableName;
+    /**
+     * Queue group shared by every engine node subscribing to this subject. Correlation must happen
+     * once per message: without a queue group a durable JetStream consumer is exclusive (only the
+     * first node binds, the rest fail with {@code [SUB-90012]}), and a non-durable one — or a plain
+     * core-NATS subscription — is private to each node, so every node correlates the same message
+     * independently. Defaults to a name derived from {@code messageName}; set it explicitly only to
+     * override that.
+     */
+    private String deliverGroup;
     private int maxDeliver = 5;
     private String dlqSubject;
     private boolean autoCreateStream;
@@ -59,6 +68,25 @@ public class SubscriptionConfig {
 
     public void setDurableName(String durableName) {
         this.durableName = durableName;
+    }
+
+    public String getDeliverGroup() {
+        return deliverGroup;
+    }
+
+    public void setDeliverGroup(String deliverGroup) {
+        this.deliverGroup = deliverGroup;
+    }
+
+    /**
+     * The configured queue group, or a stable default derived from the message name. Null only when
+     * neither is available, in which case the subscription falls back to fan-out.
+     */
+    public String resolveDeliverGroup() {
+        if (deliverGroup != null && !deliverGroup.isBlank()) {
+            return deliverGroup;
+        }
+        return messageName != null && !messageName.isBlank() ? "correlation-" + messageName : null;
     }
 
     public int getMaxDeliver() {

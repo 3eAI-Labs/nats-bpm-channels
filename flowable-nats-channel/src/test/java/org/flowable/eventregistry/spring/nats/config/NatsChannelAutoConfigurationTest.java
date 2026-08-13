@@ -14,6 +14,11 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.flowable.eventregistry.api.EventRegistry;
+import org.flowable.eventregistry.impl.EventRegistryEngineConfiguration;
+import org.flowable.eventregistry.json.converter.ChannelJsonConverter;
+import org.flowable.eventregistry.model.ChannelModel;
+import org.flowable.eventregistry.spring.nats.channel.NatsInboundChannelModel;
+import org.flowable.eventregistry.spring.nats.channel.NatsOutboundChannelModel;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
 import org.flowable.eventregistry.spring.nats.escalation.FailureEventBridge;
 import org.junit.jupiter.api.Test;
@@ -176,5 +181,63 @@ class NatsChannelAutoConfigurationTest {
         EventRegistry eventRegistry() {
             return org.mockito.Mockito.mock(EventRegistry.class);
         }
+    }
+
+    /**
+     * The channel definition in QUICK_START.md, run through Flowable's own converter.
+     *
+     * <p>Flowable resolves a {@code .channel} resource by looking up {@code <channelType>-<type>}
+     * in {@code ChannelJsonConverter}, whose defaults are jms, rabbit, kafka, camel and expression.
+     * Nothing registered {@code nats}, so the documented definition threw
+     * {@code FlowableEventJsonException: Not supported inbound channel model type was found nats}
+     * and the adapter could not be used the documented way at all — only by constructing
+     * {@link org.flowable.eventregistry.spring.nats.channel.NatsInboundChannelModel} in Java, which
+     * is what every other test in this module does, which is why nothing caught it.
+     */
+    @Test
+    void documentedChannelDefinition_deploysToTheNatsChannelModel() {
+        EventRegistryEngineConfiguration engineConfiguration = new EventRegistryEngineConfiguration();
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(FlowableNatsAutoConfiguration.class))
+                .withUserConfiguration(MockConnectionConfig.class)
+                .withBean(EventRegistryEngineConfiguration.class, () -> engineConfiguration)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    ChannelJsonConverter converter = engineConfiguration.getChannelJsonConverter();
+                    assertThat(converter.getChannelModelClasses())
+                            .containsKeys("inbound-nats", "outbound-nats");
+
+                    ChannelModel model = converter.convertToChannelModel("""
+                            { "key": "orderInboundChannel", "channelType": "inbound", "type": "nats",
+                              "deserializerType": "json",
+                              "channelEventKeyDetection": { "fixedValue": "orderEvent" },
+                              "subject": "order.new" }
+                            """);
+
+                    assertThat(model).isInstanceOf(NatsInboundChannelModel.class);
+                    assertThat(((NatsInboundChannelModel) model).getKey()).isEqualTo("orderInboundChannel");
+                    assertThat(((NatsInboundChannelModel) model).getSubject()).isEqualTo("order.new");
+                });
+    }
+
+    @Test
+    void documentedOutboundChannelDefinition_deploysToTheNatsChannelModel() {
+        EventRegistryEngineConfiguration engineConfiguration = new EventRegistryEngineConfiguration();
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(FlowableNatsAutoConfiguration.class))
+                .withUserConfiguration(MockConnectionConfig.class)
+                .withBean(EventRegistryEngineConfiguration.class, () -> engineConfiguration)
+                .run(context -> {
+                    ChannelModel model = engineConfiguration.getChannelJsonConverter().convertToChannelModel("""
+                            { "key": "orderOutboundChannel", "channelType": "outbound", "type": "nats",
+                              "serializerType": "json",
+                              "subject": "order.completed" }
+                            """);
+
+                    assertThat(model).isInstanceOf(NatsOutboundChannelModel.class);
+                });
     }
 }

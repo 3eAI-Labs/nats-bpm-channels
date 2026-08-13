@@ -42,15 +42,32 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
     private final NatsChannelMetrics metrics;
     private final String channelKey;
     private final DlqPublisher dlqPublisher;
+    private final String queueGroup;
+    private final String durableName;
 
     private EventRegistry eventRegistry;
     private InboundChannelModel inboundChannelModel;
     private Dispatcher dispatcher;
     private ExecutorService executor;
 
+    /** Single-subscriber form: no queue group, no durable. Equivalent to passing null for both. */
     public JetStreamInboundEventChannelAdapter(Connection connection, JetStream jetStream,
             String subject, int maxDeliver, String dlqSubject,
             NatsChannelMetrics metrics, String channelKey, DlqPublisher dlqPublisher) {
+        this(connection, jetStream, subject, maxDeliver, dlqSubject, metrics, channelKey, dlqPublisher, null, null);
+    }
+
+    /**
+     * @param queueGroup  JetStream deliver group, from {@code NatsInboundChannelModel#queueGroup}.
+     *                    Without one, every Flowable node receives every event on this subject and
+     *                    processes it independently — the same duplication the core-NATS adapter
+     *                    has always avoided by honouring this setting.
+     * @param durableName consumer durable, from {@code NatsInboundChannelModel#durableName}.
+     */
+    public JetStreamInboundEventChannelAdapter(Connection connection, JetStream jetStream,
+            String subject, int maxDeliver, String dlqSubject,
+            NatsChannelMetrics metrics, String channelKey, DlqPublisher dlqPublisher,
+            String queueGroup, String durableName) {
         this.connection = connection;
         this.jetStream = jetStream;
         this.subject = subject;
@@ -59,6 +76,8 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
         this.metrics = metrics;
         this.channelKey = channelKey;
         this.dlqPublisher = dlqPublisher;
+        this.queueGroup = queueGroup;
+        this.durableName = durableName;
     }
 
     @Override
@@ -77,15 +96,24 @@ public class JetStreamInboundEventChannelAdapter implements InboundEventChannelA
         try {
             // Allow one extra delivery beyond the DLQ threshold so the adapter
             // can detect maxDeliver exceeded and route to the dead-letter subject.
-            ConsumerConfiguration cc = ConsumerConfiguration.builder()
+            ConsumerConfiguration.Builder ccBuilder = ConsumerConfiguration.builder()
                     .ackWait(Duration.ofSeconds(30))
-                    .maxDeliver(maxDeliver + 1)
-                    .build();
+                    .maxDeliver(maxDeliver + 1);
+            if (durableName != null && !durableName.isBlank()) {
+                ccBuilder.durable(durableName);
+            }
+            boolean queued = queueGroup != null && !queueGroup.isBlank();
+            if (queued) {
+                ccBuilder.deliverGroup(queueGroup);
+            }
             PushSubscribeOptions opts = PushSubscribeOptions.builder()
-                    .configuration(cc)
+                    .configuration(ccBuilder.build())
                     .build();
-            JetStreamSubscription sub = jetStream.subscribe(subject, dispatcher,
-                    msg -> executor.submit(() -> handleMessage(msg)), false, opts);
+            JetStreamSubscription sub = queued
+                    ? jetStream.subscribe(subject, queueGroup, dispatcher,
+                            msg -> executor.submit(() -> handleMessage(msg)), false, opts)
+                    : jetStream.subscribe(subject, dispatcher,
+                            msg -> executor.submit(() -> handleMessage(msg)), false, opts);
             log.info("Subscribed to JetStream",
                     kv("channel", channelKey),
                     kv("subject", subject));

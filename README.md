@@ -25,14 +25,17 @@ engine dependency your application already declares, not in place of it.
 
 ## Why this project?
 
-[Camunda 8](https://camunda.com/) (v8.6+, October 2024) moved all components — including Zeebe — to a paid enterprise license at **$50K+/year**. Camunda 7 reached End of Life with no more security patches (October 2025).
+A large installed base runs BPMN on the Camunda 7 lineage and on Flowable. Those engines are
+durable because they persist through a relational database — and past a certain load, that database
+is the ceiling rather than the engine.
 
-This project provides a **high-performance, zero-cost messaging layer** built on [NATS.io](https://nats.io) for four open-source BPM engines:
+This project gives those engines a shared messaging layer built on [NATS.io](https://nats.io), under
+Apache 2.0:
 
-- **Flowable** — Apache 2.0, full BPMN/CMMN/DMN, Event Registry channel integration
-- **Camunda 7** — community fork users on EOL versions can keep modern messaging
-- **CIBSeven** — Apache 2.0 Camunda 7 community fork (CIB software GmbH), published on Maven Central and actively maintained (v2.x); the drop-in public successor for Camunda 7 EOL
-- **CadenzaFlow** — Camunda 7 community fork (3eAI Labs), continues Camunda 7 lineage with rebranded packages and ongoing security maintenance
+- **Flowable** — Apache 2.0, full BPMN/CMMN/DMN; integrates through the Event Registry channel
+- **Camunda 7** — a shared NATS layer built on the engine's public extension points
+- **CIBSeven** — Apache 2.0 Camunda 7 community fork (CIB software GmbH), published on Maven Central and actively maintained (v2.x)
+- **CadenzaFlow** — Camunda 7 community fork (3eAI Labs), continues the Camunda 7 lineage with rebranded packages and ongoing security maintenance
 
 All four engines share the same NATS foundation. Engine-specific capabilities vary by adapter.
 
@@ -57,7 +60,7 @@ high-volume work off that transaction. Each is independent and opt-in; orchestra
 the engine database.
 
 - **External task dispatch over JetStream** (`spring.nats.<engine>.a2`) — workers receive tasks by push instead of polling the engine database
-- **History offload** (`spring.nats.<engine>.history`) — `ACT_HI_*` traffic routed to NATS and projected into a separate PostgreSQL database; audit-critical classes go through a transactional outbox (at-least-once), the rest post-commit
+- **History offload** (`spring.nats.<engine>.history`) — `ACT_HI_*` traffic routed to NATS and projected into a separate PostgreSQL database; audit-critical classes go through a transactional outbox (at-least-once), the rest post-commit. Runs dual-write until you cut a history class over: until then the engine still writes its own `ACT_HI_*` rows, so the database sees the same writes *plus* the publish
 - **Large variable externalization** (`history.large-variable`) — variables above a threshold move to a content-addressed store with SHA-256 deduplication and reference counting, instead of the engine's variable table
 - **Outbound handoff** (`spring.nats.outbound`) — message-throw and send-task delivery that survives the dual-write problem: critical types via transactional outbox, the rest post-commit
 
@@ -431,7 +434,7 @@ await nc.subscribe("task.send-sms", queue="sms-workers", cb=handler)
 
 | | |
 |---|---|
-| [1 — The licence wall](docs/blog/01-the-licence-wall.md) | Camunda 8 pricing, Camunda 7 EOL, and the gap the migration guides do not mention |
+| [1 — Four BPM engines, one NATS layer](docs/blog/01-four-engines-one-nats-layer.md) | The four engines, the missing NATS binding, and the ceiling we found behind it |
 | [2 — Your ceiling is your database](docs/blog/02-your-ceiling-is-your-database.md) | The synchronous request-reply trap, and four workloads moved off the transaction |
 | [3 — From tables to a log](docs/blog/03-from-tables-to-a-log.md) | Why each offload increment is shaped the way it is |
 

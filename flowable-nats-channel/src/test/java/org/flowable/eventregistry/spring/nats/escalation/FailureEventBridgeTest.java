@@ -149,7 +149,7 @@ class FailureEventBridgeTest {
         Connection connection = mock(Connection.class);
         when(connection.createDispatcher()).thenReturn(mock(Dispatcher.class));
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 org.mockito.ArgumentMatchers.anyBoolean(), any(PushSubscribeOptions.class)))
                 .thenThrow(new java.io.IOException("simulated broker failure"));
         FailureEventBridge subscribingBridge = new FailureEventBridge(connection, jetStream, "dlq.>",
@@ -166,7 +166,7 @@ class FailureEventBridgeTest {
         Dispatcher dispatcher = mock(Dispatcher.class);
         when(connection.createDispatcher()).thenReturn(dispatcher);
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 org.mockito.ArgumentMatchers.anyBoolean(), any(PushSubscribeOptions.class)))
                 .thenReturn(mock(JetStreamSubscription.class));
         FailureEventBridge subscribingBridge = new FailureEventBridge(connection, jetStream, "dlq.>",
@@ -185,7 +185,7 @@ class FailureEventBridgeTest {
         when(connection.createDispatcher()).thenReturn(dispatcher);
         doThrow(new RuntimeException("drain failed")).when(dispatcher).drain(any(Duration.class));
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 org.mockito.ArgumentMatchers.anyBoolean(), any(PushSubscribeOptions.class)))
                 .thenReturn(mock(JetStreamSubscription.class));
         FailureEventBridge subscribingBridge = new FailureEventBridge(connection, jetStream, "dlq.>",

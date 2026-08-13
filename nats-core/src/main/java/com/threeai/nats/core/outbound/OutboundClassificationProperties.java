@@ -37,6 +37,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "spring.nats.outbound")
 public class OutboundClassificationProperties {
 
+    /**
+     * Master switch for the outbound-handoff capability. When false the relay, its leader
+     * lease and the outbox writer are not created and BPMN message-throw/send-task keep the
+     * engine's own behaviour.
+     *
+     * <p>Like history offload, this was previously gated only on a DataSource bean being
+     * present — which every engine has — so the capability activated on classpath presence
+     * alone and provisioned its KV leader bucket at every boot.     *
+     * <p>Default is OFF. The capability activates only when this is set explicitly, which is
+     * what "independent and opt-in" has to mean if the phrase is to be true: putting the
+     * library on the classpath for one capability must not start the others.
+     */
+    private boolean enabled = false;
+
     /** D-C' — tenant opt-in into the critical/at-least-once outbox+relay path. Default: none (best-effort). */
     private Set<String> criticalTypes = new LinkedHashSet<>();
 
@@ -47,6 +61,14 @@ public class OutboundClassificationProperties {
      * (processInstanceId/businessKey/messageType) is preserved unless a type explicitly opts in.
      */
     private Map<String, List<String>> variableAllowlist = new LinkedHashMap<>();
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
 
     public Set<String> getCriticalTypes() {
         return criticalTypes;

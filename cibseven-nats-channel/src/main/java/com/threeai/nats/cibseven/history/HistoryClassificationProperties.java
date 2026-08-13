@@ -18,6 +18,23 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "spring.nats.cibseven.history")
 public class HistoryClassificationProperties {
 
+    /**
+     * Master switch for the whole history-offload capability. When false, none of the
+     * offload beans are created and the engine keeps its own default DB history handler —
+     * ACT_HI_* behaves exactly as it does without this library on the classpath.
+     *
+     * <p>It exists because the capability was previously gated only on the presence of a
+     * DataSource, and every engine has one: putting the jar on the classpath to use A2
+     * alone silently activated history offload too, which then requires the HISTORY /
+     * DLQ_HISTORY streams and the compact_history_outbox table or every event fails to
+     * publish. The datasheet's "every capability is independent and opt-in" was not true
+     * of this one.     *
+     * <p>Default is OFF. The capability activates only when this is set explicitly, which is
+     * what "independent and opt-in" has to mean if the phrase is to be true: putting the
+     * library on the classpath for one capability must not start the others.
+     */
+    private boolean enabled = false;
+
     /** PO-Q5 default — tenants may override. */
     private Set<String> auditCriticalClasses = new LinkedHashSet<>(HistoryClassNames.DEFAULT_AUDIT_CRITICAL_CLASSES);
 
@@ -29,6 +46,14 @@ public class HistoryClassificationProperties {
 
     /** Rotation tracking. */
     private int tenantKeyVersion = 1;
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
 
     public Set<String> getAuditCriticalClasses() {
         return auditCriticalClasses;

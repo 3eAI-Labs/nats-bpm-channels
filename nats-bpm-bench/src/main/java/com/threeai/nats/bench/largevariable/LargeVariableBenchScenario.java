@@ -104,6 +104,11 @@ public class LargeVariableBenchScenario implements AutoCloseable {
         SqlMigrationRunner.applyClasspathScript(ds, "db/migration/projection/V2__append_log_tables.sql");
         SqlMigrationRunner.applyClasspathScript(ds, "db/migration/projection/V3__control_plane_and_compliance.sql");
         SqlMigrationRunner.applyClasspathScript(ds, "db/migration/projection/V4__large_payload_content_addressing.sql");
+        // V5 was skipped here, so runtime_large_variable_ref never existed and every
+        // externalization failed with "relation ... does not exist" — the value stayed inline
+        // and the scenario measured no byte reduction, which is exactly what it then asserted
+        // was a regression.
+        SqlMigrationRunner.applyClasspathScript(ds, "db/migration/projection/V5__runtime_large_variable_reference.sql");
         SqlMigrationRunner.applyClasspathScript(ds, "db/migration/projection/V6__cutover_state_english_names.sql");
         benchDataSource = ds;
         payloadStore = new ContentAddressedLargePayloadStore(ds);

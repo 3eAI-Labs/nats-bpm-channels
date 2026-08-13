@@ -67,9 +67,13 @@ spring:
 ```
 
 Leader election runs on a NATS KV lease with compare-and-swap, so exactly one relay publishes and
-the lease expires if the holder dies. This is measured, not asserted: **RPO = 0** across a real
-3-replica JetStream KV failover, **zero split-brain** under an N-candidate leader race, and
-**RTO ≤ 60 s** bounded by the lease TTL.
+the lease expires if the holder dies. This is measured, not asserted: **RPO = 0** across a leader
+handover between three competing relay instances contending for one real JetStream KV lease, and
+**zero split-brain** under an N-candidate leader race. Recovery is TTL-driven and lands at
+approximately the lease TTL — measured **60.4 s** against a 60 s TTL, a floor rather than a bound
+with headroom. The measurement covers the application-level lease and outbox contract; the test
+broker is a single node, so broker-level replication is not part of it, though production
+auto-configuration provisions leader buckets with three replicas.
 
 Consumers must be idempotent — delivery is at-least-once by design, and duplicate suppression uses
 `Nats-Msg-Id` plus idempotent completion. Exactly-once is not offered, because it is not available.
@@ -156,9 +160,11 @@ Financial institutions run on-premise, segregate networks, and change infrastruc
 - **Apache-2.0 throughout** — engine, broker, client and this library; no licence renegotiation, no
   per-instance metering, no feature gating
 
-Reliability evidence: 1,416 tests against real PostgreSQL and NATS with fault injection, ≥ 90% line
-coverage on every production module, and the failover results quoted above measured against real
-infrastructure rather than mocks.
+Reliability evidence: 1,416 tests against real PostgreSQL and NATS with fault injection in the
+default `mvn verify` run, ≥ 90% line coverage on every production module, and the failover results
+quoted above measured against real infrastructure rather than mocks — in a separate suite tagged
+`reliability` / `bench` that is excluded from the default run and from CI, so it is not counted in
+the 1,416.
 
 ---
 

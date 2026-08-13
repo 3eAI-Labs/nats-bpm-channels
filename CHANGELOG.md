@@ -4,6 +4,125 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.8.1] — 2026-08-13 — multi-node engines, and four offload paths that are actually opt-in
+
+Brought up against a real three-node engine cluster for the first time (Scenario-3 performance lab,
+100,000 external tasks over JetStream). Everything below was found by that exercise, not by review.
+
+### Fixed
+
+- **No engine cluster could start.** Every JetStream subscription the library owns was bound as a
+  single-consumer subscription. A durable push consumer without a deliver group is exclusive, so the
+  first engine node bound it and every other node failed with `[SUB-90012] Consumer is already bound
+  to a subscription`, taking its Spring context down. This affected the A2 completion bridge, the A2
+  incident bridge, inbound message correlation on both transports, and the history DLQ inspection
+  consumer in `nats-history-projection`. All are now queue consumers, which is the semantics these
+  paths already assumed — any node may act, because engine state is shared through the database.
+
+- **Silent duplicate work, hidden behind the failure above.** Subscriptions with no durable name at
+  all were not exclusive but *private to each node*, so every node received every message and
+  processed it independently: one incident per DLQ message per node, one correlation per BPMN
+  message per node. Nothing errored and no metric distinguished it from healthy operation. It was
+  unreachable until now only because a second node could never start. Affected the A2 incident
+  bridge, Flowable's `FailureEventBridge`, and Flowable's JetStream inbound adapter — which also
+  silently ignored the `queueGroup` and `durableName` its own channel model has always carried,
+  while the core-NATS adapter honoured them.
+
+- **The context could not start with a DataSource present** — which is every real engine.
+  `historyOutboxRelay` and two sibling injection points select among three `SweepLeaderLease` beans
+  by parameter name, and the build never set `-parameters`, so the fallback Spring needs was not
+  there. Inside the reactor, not only in the published jar. Injection points now carry `@Qualifier`
+  and the compiler plugin sets `<parameters>true</parameters>`.
+
+- **`HistoryBootstrapValidator` threw on every boot with the default configuration.** It ran from
+  `preInit()`, where `configuration.getHistoryLevel()` is always null — the level resolves in
+  `init()`, after every plugin's `preInit`. Moved to `postInit()`; handler wiring stays in
+  `preInit`, where it has to be.
+
+- **A single-node NATS server could not run an engine at all.** KV buckets were provisioned with a
+  hardcoded three replicas, which a non-clustered server rejects with `replicas > 1 not supported in
+  non-clustered mode [10074]` while the engine is starting. The quick start told you to run exactly
+  such a server. Now `spring.nats.jetstream.kv-replicas`, default 3.
+
+- **The Flowable adapter could not be used the way the documentation describes.** Deploying the
+  channel definition from the quick start threw `FlowableEventJsonException: Not supported inbound
+  channel model type was found nats`. Flowable resolves a `.channel` resource by looking up
+  `<channelType>-<type>` in `ChannelJsonConverter`, whose defaults are jms, rabbit, kafka, camel and
+  expression; the converter has public registration hooks for exactly this case and the adapter
+  never called them. A second error sat behind the first: once the type resolved, the documented
+  JSON was rejected with `Unrecognized field "channelFields"`, because `NatsInboundChannelModel`
+  carries its settings as direct properties, as Flowable's own typed channel models do. The
+  `channelFields` shape came from an assumption in the phase-2 spec that is not true of typed
+  models, and travelled from there into the user documentation. Both are fixed, and the
+  documentation now shows `subject` and `queueGroup` directly.
+
+  Nothing caught either problem because every test in that module built the channel model in Java.
+  The deployment path is the only one a user has, and it had never been executed — the same shape as
+  the rest of this release. There is now an integration test that starts from the documented JSON
+  and ends at an event received over a real NATS server.
+
+### Changed
+
+- **History offload and outbound handoff are off by default.** They were gated on nothing but a
+  `DataSource` bean, and every engine has one, so adding the library for one capability started the
+  others — history offload then expects the `HISTORY` / `DLQ_HISTORY` streams and the
+  `compact_history_outbox` table to exist or every publish fails. The datasheet's "every capability
+  is independent and opt-in" was not true. Set `spring.nats.<engine>.history.enabled` or
+  `spring.nats.outbound.enabled` to `true` to restore the previous behaviour.
+
+- **The `natsPayload` process variable is no longer written for a reply that carries only its
+  `type` discriminator.** The reply body reaches the process as one opaque variable because its
+  shape is tenant-defined, which is a real need — but `type` is this layer's own routing signal, not
+  a worker result, and persisting it cost one variable row plus one history row per completion. Over
+  100,000 tasks that was 120,000 rows nothing read, and removing it also removed 100,000 history
+  events. `spring.nats.<engine>.a2.reply-payload-variable=ALWAYS` restores the old behaviour;
+  `NEVER` disables the variable entirely.
+
+### Added
+
+- `spring.nats.jetstream.kv-replicas` — replica count for the KV buckets the library provisions.
+  Default 3; set to 1 for a single-node development broker.
+- `spring.nats.jetstream.stream-replicas` — replica count for streams created by the opt-in
+  `auto-create-stream` path (production streams are provisioned by ops and are unaffected). Default
+  1, which is what that path has always produced and what a single-node server requires; a clustered
+  default of 3 would make every single-node environment unbootable, which is exactly how
+  `kv-replicas` behaved before it became configurable. Creating a single-replica stream against a
+  clustered server now logs a warning — it works until the one node holding it is lost and then
+  stops serving entirely, with nothing beforehand to distinguish it from a healthy stream.
+- `spring.nats.<engine>.history.enabled`, `spring.nats.outbound.enabled` — per-capability switches,
+  both default false.
+- `spring.nats.<engine>.a2.reply-payload-variable` — `WHEN_PRESENT` (default) / `ALWAYS` / `NEVER`.
+
+### Testing
+
+- **Losing a NATS node is now exercised against a real three-node cluster.** Every Testcontainers
+  test in the repository ran a single JetStream server. That is the right shape for protocol
+  guarantees, but on one node a stream with one replica and a stream with three behave identically,
+  and nothing is ever pulled out from under a subscriber — so the entire failure class went
+  untested, including the recovery path that the subscription fixes above depend on.
+  `NatsClusterTestHarness` runs three clustered nodes and hard-kills one with SIGKILL, then brings
+  the same node back with its store directory intact. Testcontainers' own `stop()`/`start()` cannot
+  express this: `stop()` removes the container, so the following `start()` returns a blank one,
+  which models node replacement rather than node recovery.
+
+  Five tests: a single-replica stream goes offline with its node while a three-replica control
+  stream keeps taking writes; a three-replica stream survives leader loss with its data; a durable
+  queue group neither fans out while healthy nor loses messages across the crash and the recovery;
+  the KV leader lease holds through a node loss without split-brain; and the new single-replica
+  warning fires on a cluster while staying silent off one. Tagged `reliability`, so they are
+  excluded from the default run.
+
+### Upgrading
+
+Three behaviour changes. Existing deployments that want the previous behaviour must set
+`history.enabled=true`, `outbound.enabled=true`, and — only if a process reads `natsPayload` from a
+reply with no business fields — `reply-payload-variable=ALWAYS`. Existing `a2-completion-*` and
+inbound durable consumers were created without a deliver group; JetStream refuses to add one to a
+consumer that already exists (`[SUB-90016]`), so those consumers must be deleted before the upgrade.
+Deleting a durable consumer resets its delivery position, so replies still retained in the stream
+are redelivered — they land on already-completed tasks and are swallowed idempotently, but expect
+the noise.
+
 ## [0.8.0] — 2026-08-04 — Buildable from a clean clone; CadenzaFlow on Central
 
 No functional change to any adapter. This release fixes the fact that nobody outside the project
@@ -337,10 +456,16 @@ is untouched (D-G — Flowable deferred to a later Flowable-specific increment).
   (ADR-0013, increment 1 ADR-0006 pattern's history projection) with a mandatory
   `X-Cadenzaflow-History-Event-Time` header (engine event-time carried on the wire — dedup key and
   date-partition anchor for audit-critical append-log classes).
-- **`nats-bpm-bench` history mode** — `RelayFailoverBenchScenario` real multi-replica KV-lease
-  failover measurement (`@Tag("bench")`, nightly/manual): proves RPO=0 (zero audit-critical row
-  loss across a real 3-replica JetStream KV failover) and documents the RTO≤60s structural lower
-  bound (TTL-expiry-driven handover).
+- **`nats-bpm-bench` history mode** — `RelayFailoverBenchScenario` real KV-lease failover
+  measurement (`@Tag("bench")`, nightly/manual): proves RPO=0 (zero audit-critical row loss across
+  a leader handover between three competing relay instances contending for one real JetStream KV
+  lease) and documents the structural recovery-time lower bound of approximately the lease TTL
+  (TTL-expiry-driven handover). *Corrected 2026-08-09: this entry originally said "a real 3-replica
+  JetStream KV failover". The three replicas are relay instances, not broker replicas — the test
+  broker is a single node and the lease bucket is created with one replica, so the measurement
+  covers the application-level lease and outbox contract, not broker replication. The entry also
+  said "RTO≤60s", which reads as a bound with headroom; recovery is TTL-driven and lands at
+  approximately the TTL.*
 - **11 new ADRs** (ADR-0009 through ADR-0019): composite history-event-handler
   plug-in strategy, hybrid publish topology, separate-Postgres projection store, merge-upsert
   stream-sequence tie-break, history wire-contract, history query API (core-4, read-only),

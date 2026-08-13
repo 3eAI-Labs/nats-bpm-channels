@@ -57,6 +57,8 @@ public class FailureEventBridge {
     private static final Logger log = LoggerFactory.getLogger(FailureEventBridge.class);
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
     private static final String A2_RESERVED_PREFIX = "jobs.";
+    /** Durable and deliver group in one — shared by every node, so each DLQ event escalates once. */
+    private static final String DURABLE_NAME = "flowable-failure-event-bridge";
 
     private final Connection connection;
     private final JetStream jetStream;
@@ -91,11 +93,16 @@ public class FailureEventBridge {
         this.dispatcher = connection.createDispatcher();
         registerCorrelationMissConsumer();
         try {
+            // Durable + queue group shared by every Flowable node: one escalation per DLQ event.
+            // With neither, the consumer is ephemeral and therefore private to each node, so every
+            // node escalated every failure independently — no error, just N times the work.
             ConsumerConfiguration cc = ConsumerConfiguration.builder()
+                    .durable(DURABLE_NAME)
+                    .deliverGroup(DURABLE_NAME)
                     .ackWait(Duration.ofSeconds(30))
                     .build();
             PushSubscribeOptions opts = PushSubscribeOptions.builder().configuration(cc).build();
-            JetStreamSubscription sub = jetStream.subscribe(dlqWildcardSubject, dispatcher,
+            JetStreamSubscription sub = jetStream.subscribe(dlqWildcardSubject, DURABLE_NAME, dispatcher,
                     msg -> executor.submit(() -> handleDlqMessage(msg)), false, opts);
             log.info("Subscribed to FailureEventBridge DLQ subject", kv("subject", dlqWildcardSubject));
         } catch (Exception e) {

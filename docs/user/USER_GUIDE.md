@@ -119,7 +119,16 @@ docker run -p 4222:4222 nats:2.10 --jetstream
 spring:
   nats:
     url: nats://localhost:4222
+    jetstream:
+      kv-replicas: 1        # the single-node server above cannot do more
 ```
+
+`kv-replicas` is the replica count for the KV buckets this library provisions (leader election and
+cutover state). It defaults to `3` for a clustered production NATS; a single-node server rejects
+that with `replicas > 1 not supported in non-clustered mode [10074]` while the engine is starting,
+and the application does not come up. Buckets are only provisioned once you enable external task
+dispatch or one of the offload paths — plain messaging needs none of them — so on a single-node
+development broker this matters from section 4.4 onward.
 
 ### Step 3 — subscribe a message to a process
 
@@ -151,10 +160,8 @@ For Flowable, define an Event Registry channel instead:
   "type": "nats",
   "deserializerType": "json",
   "channelEventKeyDetection": { "fixedValue": "orderEvent" },
-  "channelFields": [
-    { "name": "subject", "stringValue": "order.new" },
-    { "name": "queueGroup", "stringValue": "order-service" }
-  ]
+  "subject": "order.new",
+  "queueGroup": "order-service"
 }
 ```
 
@@ -293,7 +300,14 @@ matters when variables carry personal data.
 
 Engine history writes (`ACT_HI_*`) are a large share of database traffic and are rarely needed
 transactionally. This capability routes history events to NATS and projects them into a separate
-PostgreSQL database, so history load leaves the engine database.
+PostgreSQL database. History load leaves the engine database per history class, once that class
+has been cut over.
+
+Until then the capability runs dual-write (`BR-HDL-005`): the engine still writes its own
+`ACT_HI_*` rows and the events are published to NATS as well, so a freshly enabled installation
+does strictly more database work than one without the library, not less. Cut over a class only
+after you have verified the projection is complete for it. That phase is the safe migration path,
+and it is where the database saving actually arrives.
 
 Events are classified. Audit-critical classes go through a transactional outbox with a
 leader-elected relay, giving at-least-once delivery with no loss. Everything else is published
@@ -541,8 +555,17 @@ implementation to your application.
 ## 7. FAQ
 
 **Do I have to adopt the offload features?**
-No. The messaging features work on their own. External task dispatch, history offload, large
-variable externalization and outbound handoff are independent and each is opt-in.
+No. The messaging features work on their own, and each offload capability has its own switch:
+
+| Capability | Switch | Default |
+|---|---|---|
+| External task dispatch | `spring.nats.<engine>.a2.topics` | empty — nothing is dispatched until you list a topic |
+| History offload | `spring.nats.<engine>.history.enabled` | `false` |
+| Large variable externalization | `history.large-variable.projection-datasource.jdbc-url` | unset — the capability never activates without it |
+| Outbound handoff | `spring.nats.outbound.enabled` | `false` |
+
+Everything is off until you ask for it, so adding the library for one capability leaves the rest
+inert. Messaging needs no switch at all — connection configuration is enough.
 
 **Does this replace my engine's database?**
 No. Orchestration state stays in the engine database. What moves off it is high-volume work around

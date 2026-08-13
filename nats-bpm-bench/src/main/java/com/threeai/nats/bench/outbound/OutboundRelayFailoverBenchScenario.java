@@ -71,7 +71,8 @@ public class OutboundRelayFailoverBenchScenario {
 
         String bucket = "outbound-relay-leader-failover-" + UUID.randomUUID();
         JetStreamKvManager kvManager = new JetStreamKvManager();
-        kvManager.ensureBucket(bucket, ttl, 1, env.natsConnection());
+        kvManager.ensureBucket(bucket, ttl, env.natsProperties().getJetstream().getKvReplicas(),
+                env.natsConnection());
 
         List<SweepLeaderLease> leases = new ArrayList<>(engineNodeReplicaCount);
         List<OutboundMessageRelay> relays = new ArrayList<>(engineNodeReplicaCount);

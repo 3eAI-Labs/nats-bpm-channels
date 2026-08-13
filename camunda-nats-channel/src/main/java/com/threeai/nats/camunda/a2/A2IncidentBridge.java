@@ -67,9 +67,17 @@ public class A2IncidentBridge {
             if (config.getDurableName() != null) {
                 ccBuilder.durable(config.getDurableName());
             }
+            // Queue group => one incident per DLQ message across the cluster. Without it the
+            // consumer is per-node and every node raises the same incident independently.
+            if (config.getDeliverGroup() != null) {
+                ccBuilder.deliverGroup(config.getDeliverGroup());
+            }
             PushSubscribeOptions opts = PushSubscribeOptions.builder().configuration(ccBuilder.build()).build();
-            JetStreamSubscription sub = jetStream.subscribe(config.getSubject(), dispatcher,
-                    msg -> executor.submit(() -> handleDlqMessage(msg)), false, opts);
+            JetStreamSubscription sub = config.getDeliverGroup() != null
+                    ? jetStream.subscribe(config.getSubject(), config.getDeliverGroup(), dispatcher,
+                            msg -> executor.submit(() -> handleDlqMessage(msg)), false, opts)
+                    : jetStream.subscribe(config.getSubject(), dispatcher,
+                            msg -> executor.submit(() -> handleDlqMessage(msg)), false, opts);
             log.info("Subscribed to A2 incident-bridge DLQ subject", kv("subject", config.getSubject()));
         } catch (Exception e) {
             log.error("Failed to subscribe to A2 incident-bridge DLQ subject", kv("subject", config.getSubject()), e);

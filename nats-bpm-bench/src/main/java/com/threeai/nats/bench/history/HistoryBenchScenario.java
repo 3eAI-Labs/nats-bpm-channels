@@ -160,7 +160,8 @@ public class HistoryBenchScenario implements AutoCloseable {
         HistoryPostCommitPublisher postCommitPublisher = new HistoryPostCommitPublisher(env.jetStream(), null);
 
         JetStreamKvManager kvManager = new JetStreamKvManager();
-        kvManager.ensureBucket(CUTOVER_BUCKET, Duration.ZERO, 1, env.natsConnection());
+        kvManager.ensureBucket(CUTOVER_BUCKET, Duration.ZERO,
+                env.natsProperties().getJetstream().getKvReplicas(), env.natsConnection());
         seedAllClassesCutOver();
         ClassCutoverStateRegistry cutoverRegistry =
                 new ClassCutoverStateRegistry(kvManager, env.natsConnection(), ENGINE_ID);

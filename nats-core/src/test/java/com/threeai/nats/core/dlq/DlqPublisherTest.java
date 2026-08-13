@@ -19,9 +19,14 @@ import io.nats.client.impl.Headers;
 import io.nats.client.impl.NatsJetStreamMetaData;
 import io.nats.client.impl.NatsMessage;
 import io.nats.client.support.NatsJetStreamConstants;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 
 class DlqPublisherTest {
 
@@ -133,6 +138,57 @@ class DlqPublisherTest {
         when(msg.getSubject()).thenReturn(subject);
         NatsJetStreamMetaData metaData = mock(NatsJetStreamMetaData.class);
         when(metaData.deliveredCount()).thenReturn(deliveryCount);
+        when(msg.metaData()).thenReturn(metaData);
+        return msg;
+    }
+
+    /**
+     * A message reaching the DLQ is a message the system refused to process — most often because a
+     * worker broke the wire contract. That decision used to produce no log line at all: only
+     * failures of the DLQ publish itself were logged, so from the engine's side a stream of
+     * contract violations looked exactly like healthy operation.
+     *
+     * <p>It cost real time. The bench fixture's simulated worker replies with {@code {}}, which has
+     * no {@code type} discriminator, so every reply was routed here and no external task ever
+     * completed — and the only symptom was a benchmark timing out after sixty seconds of silence.
+     *
+     * <p>ERROR_REGISTRY rows 4, 5 and 24 all prescribe WARN for these reasons. This asserts the
+     * line is emitted and carries enough to identify what was dropped and why.
+     */
+    @Test
+    void publish_success_logsWarnWithReasonAndIdentity() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(DlqPublisher.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            publisher.publish(message("task-7", "{}"), "dlq.jobs.orders",
+                    DlqReason.INVALID_REPLY_TYPE, "jobs.orders.reply", "orders");
+
+            assertThat(appender.list)
+                    .as("a refused message must not pass silently")
+                    .anySatisfy(event -> {
+                        assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                        assertThat(event.getFormattedMessage()).contains("DLQ");
+                        String args = String.valueOf(java.util.Arrays.toString(event.getArgumentArray()));
+                        assertThat(args).contains("INVALID_REPLY_TYPE");
+                        assertThat(args).contains("jobs.orders.reply");
+                        assertThat(args).contains("task-7");
+                    });
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    private Message message(String msgId, String body) {
+        Message msg = mock(Message.class);
+        when(msg.getData()).thenReturn(body.getBytes(StandardCharsets.UTF_8));
+        Headers headers = new Headers();
+        headers.add(NatsJetStreamConstants.MSG_ID_HDR, msgId);
+        when(msg.getHeaders()).thenReturn(headers);
+        when(msg.getSubject()).thenReturn("jobs.orders.reply");
+        NatsJetStreamMetaData metaData = mock(NatsJetStreamMetaData.class);
+        when(metaData.deliveredCount()).thenReturn(1L);
         when(msg.metaData()).thenReturn(metaData);
         return msg;
     }

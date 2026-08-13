@@ -47,7 +47,7 @@ history to a queryable projection makes it explicit — and enforceable in SQL.
 | Capability | Effect in a telecom workload |
 |---|---|
 | **External task dispatch over JetStream** | Provisioning and OTA workers stop polling the engine database for jobs. Scaling workers no longer scales database load; `fetchAndLock` is 0 on the happy path |
-| **History offload** | `ACT_HI_*` traffic — the dominant write volume in campaign processing — leaves the engine database for a separate PostgreSQL projection |
+| **History offload** | `ACT_HI_*` traffic — the dominant write volume in campaign processing — is published to NATS and projected into a separate PostgreSQL database, and leaves the engine database per history class once that class is cut over |
 | **Large variable externalisation** | Device profiles, provisioning payloads and attachments above 4 KB move to a content-addressed store, SHA-256 deduplicated and reference-counted. The same campaign template across two million instances is one row |
 | **Outbound handoff** | Events to BSS, OSS, charging and notification systems are delivered dual-write-safe: a committed process cannot silently fail to notify downstream |
 
@@ -135,13 +135,17 @@ conservative. The design suits that.
 - **Workers are language-agnostic.** Provisioning logic in Go, an SMPP bridge in Java, analytics in
   Python — all speak plain NATS, with no engine SDK.
 - **The engine is not forked.** Every capability is built on public extension points, so engine
-  security updates apply normally. For an engine lineage with a maintenance history worth watching,
-  that matters.
+  security updates from your engine vendor apply normally, on their own schedule.
 
 Reliability, measured against real infrastructure rather than asserted: **RPO = 0** for
-audit-critical data across a real 3-replica JetStream KV failover, **RTO ≤ 60 s** bounded by lease
-TTL, and **zero split-brain** under an N-candidate leader race. The full suite is 1,416 tests
-against real PostgreSQL and NATS with fault injection.
+audit-critical data across a leader handover between three competing relay instances contending for
+one real JetStream KV lease, and **zero split-brain** under an N-candidate leader race. Recovery is
+TTL-driven and lands at approximately the lease TTL — measured **60.4 s** against a 60 s TTL, a
+floor rather than a bound with headroom. That measurement covers the application-level lease and
+outbox contract; the test broker is a single node, so broker replication is not part of it, though
+production auto-configuration provisions leader buckets with three replicas. These results come
+from a suite tagged `reliability` / `bench` that is excluded from the default run and from CI. The
+default suite is 1,416 tests against real PostgreSQL and NATS with fault injection.
 
 ---
 

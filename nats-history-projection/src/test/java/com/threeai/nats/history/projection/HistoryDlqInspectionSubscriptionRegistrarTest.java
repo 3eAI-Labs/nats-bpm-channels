@@ -35,7 +35,7 @@ class HistoryDlqInspectionSubscriptionRegistrarTest {
         Dispatcher dispatcher = mock(Dispatcher.class);
         when(connection.createDispatcher()).thenReturn(dispatcher);
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 anyBoolean(), any(PushSubscribeOptions.class))).thenReturn(mock(JetStreamSubscription.class));
         HistoryDlqInspectionConsumer consumer = mock(HistoryDlqInspectionConsumer.class);
         HistoryDlqInspectionSubscriptionRegistrar registrar =
@@ -44,7 +44,10 @@ class HistoryDlqInspectionSubscriptionRegistrarTest {
         assertThatCode(registrar::afterPropertiesSet).doesNotThrowAnyException();
 
         verify(connection).createDispatcher();
-        verify(jetStream).subscribe(org.mockito.ArgumentMatchers.eq("dlq.history.>"), any(Dispatcher.class),
+        // Queue group == durable name: every projection instance shares one consumer, so the
+        // second instance can start and each DLQ record is inspected once.
+        verify(jetStream).subscribe(org.mockito.ArgumentMatchers.eq("dlq.history.>"),
+                org.mockito.ArgumentMatchers.eq("history-dlq-inspection"), any(Dispatcher.class),
                 any(MessageHandler.class), org.mockito.ArgumentMatchers.eq(false), any(PushSubscribeOptions.class));
     }
 
@@ -53,7 +56,7 @@ class HistoryDlqInspectionSubscriptionRegistrarTest {
         Connection connection = mock(Connection.class);
         when(connection.createDispatcher()).thenReturn(mock(Dispatcher.class));
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 anyBoolean(), any(PushSubscribeOptions.class))).thenThrow(new IOException("broker unreachable"));
         HistoryDlqInspectionConsumer consumer = mock(HistoryDlqInspectionConsumer.class);
         HistoryDlqInspectionSubscriptionRegistrar registrar =
@@ -79,7 +82,7 @@ class HistoryDlqInspectionSubscriptionRegistrarTest {
         Dispatcher dispatcher = mock(Dispatcher.class);
         when(connection.createDispatcher()).thenReturn(dispatcher);
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 anyBoolean(), any(PushSubscribeOptions.class))).thenReturn(mock(JetStreamSubscription.class));
         HistoryDlqInspectionSubscriptionRegistrar registrar = new HistoryDlqInspectionSubscriptionRegistrar(
                 connection, jetStream, mock(HistoryDlqInspectionConsumer.class));
@@ -97,7 +100,7 @@ class HistoryDlqInspectionSubscriptionRegistrarTest {
         when(connection.createDispatcher()).thenReturn(dispatcher);
         doThrow(new RuntimeException("drain failed")).when(dispatcher).drain(any(Duration.class));
         JetStream jetStream = mock(JetStream.class);
-        when(jetStream.subscribe(anyString(), any(Dispatcher.class), any(MessageHandler.class),
+        when(jetStream.subscribe(anyString(), anyString(), any(Dispatcher.class), any(MessageHandler.class),
                 anyBoolean(), any(PushSubscribeOptions.class))).thenReturn(mock(JetStreamSubscription.class));
         HistoryDlqInspectionSubscriptionRegistrar registrar = new HistoryDlqInspectionSubscriptionRegistrar(
                 connection, jetStream, mock(HistoryDlqInspectionConsumer.class));

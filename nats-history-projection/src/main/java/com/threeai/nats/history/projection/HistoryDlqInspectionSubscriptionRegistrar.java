@@ -49,13 +49,19 @@ public class HistoryDlqInspectionSubscriptionRegistrar implements InitializingBe
     public void afterPropertiesSet() {
         try {
             dispatcher = connection.createDispatcher();
+            // Queue group named after the durable: the projection service is deployed with more
+            // than one instance for availability, and a durable push consumer without a deliver
+            // group is exclusive — the second instance would fail to start with
+            // [SUB-90012] Consumer is already bound to a subscription.
             ConsumerConfiguration cc = ConsumerConfiguration.builder()
                     .durable(DURABLE_NAME)
+                    .deliverGroup(DURABLE_NAME)
                     .ackWait(Duration.ofSeconds(30))
                     .maxDeliver(MAX_DELIVER + 1)
                     .build();
             PushSubscribeOptions opts = PushSubscribeOptions.builder().configuration(cc).build();
-            jetStream.subscribe(DLQ_HISTORY_WILDCARD_SUBJECT, dispatcher, consumer::onMessage, false, opts);
+            jetStream.subscribe(DLQ_HISTORY_WILDCARD_SUBJECT, DURABLE_NAME, dispatcher, consumer::onMessage,
+                    false, opts);
             log.info("Registered history DLQ inspection subscription", kv("subject", DLQ_HISTORY_WILDCARD_SUBJECT));
         } catch (Exception e) {
             throw new IllegalStateException("Failed to subscribe history DLQ inspection consumer", e);

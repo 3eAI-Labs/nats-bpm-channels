@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Map;
 
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
@@ -63,6 +64,32 @@ class A2CompletionBridgeTest {
 
         verify(externalTaskService).complete(eq("task-1"), eq("a2-jetstream-bridge"), anyMap());
         verify(msg).ack();
+    }
+
+    /**
+     * End-to-end through the bridge with the shipped default: a bare discriminator must reach
+     * {@code complete} with NO variables. The wiring matters as much as the decoder — the mode
+     * travels config -> bridge -> decoder, and a default that never leaves A2Properties would
+     * look identical in a decoder-only test.
+     */
+    @Test
+    void handleReply_bareDiscriminator_completesWithNoVariables() {
+        Message msg = successMessage("task-1", "{\"type\":\"SUCCESS\"}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).complete(eq("task-1"), eq("a2-jetstream-bridge"), eq(Map.of()));
+        verify(msg).ack();
+    }
+
+    @Test
+    void handleReply_replyWithBusinessData_completesWithPayloadVariable() {
+        Message msg = successMessage("task-2", "{\"type\":\"SUCCESS\",\"orderId\":\"A-123\"}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).complete(eq("task-2"), eq("a2-jetstream-bridge"),
+                eq(Map.of("natsPayload", "{\"type\":\"SUCCESS\",\"orderId\":\"A-123\"}")));
     }
 
     @Test

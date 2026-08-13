@@ -1,6 +1,6 @@
 # Your engine's ceiling is your database
 
-*Part 2 of 3 — [Part 1: The licence wall](01-the-licence-wall.md) · [Part 3: From tables to a log](03-from-tables-to-a-log.md)*
+*Part 2 of 3 — [Part 1: Four BPM engines, one NATS layer](01-four-engines-one-nats-layer.md) · [Part 3: From tables to a log](03-from-tables-to-a-log.md)*
 
 ---
 
@@ -83,8 +83,10 @@ spring:
           lock-duration-seconds: 300
 ```
 
-**History offload (v0.3.0).** `ACT_HI_*` traffic leaves the engine database and gets projected into
-a separate PostgreSQL instance. You choose per history class whether it goes through a
+**History offload (v0.3.0).** `ACT_HI_*` traffic is published to NATS and projected into a separate
+PostgreSQL instance. It stops being written to the engine database per history class, once you cut
+that class over — until then the engine writes its own rows *and* publishes, so the saving arrives
+at cutover, not at adoption. You choose per history class whether it goes through a
 transactional outbox (at-least-once, one row insert in the transaction) or post-commit
 (at-most-once, zero extra writes):
 
@@ -112,10 +114,16 @@ What is measured, under real infrastructure:
 
 | | |
 |---|---|
-| Audit-critical loss on relay failover | **RPO = 0** (real 3-replica JetStream KV failover) |
+| Test suite | **1,416 tests**, real Testcontainers and fault injection (default `mvn verify` run) |
+| Audit-critical loss on relay failover | **RPO = 0** — three competing relay instances race for one real JetStream KV lease, the leader is killed mid-flight, the successor drains every seeded row |
 | Leader-lease split-brain | **0** (N-candidate race, real KV compare-and-swap) |
-| Recovery time | **RTO ≤ 60 s** (bounded by lease TTL) |
-| Test suite | **1,416 tests**, real Testcontainers and fault injection |
+| Recovery time | **≈ lease TTL** — measured 60.4 s against a 60 s TTL |
+
+The three failover rows come from a suite tagged `reliability` / `bench` that is excluded from the
+default run and from CI, so they are not inside the 1,416. Two things they do not say: the test
+broker is a single node with a one-replica lease bucket, so this is the application-level lease and
+outbox contract rather than broker replication; and recovery is TTL-driven, so 60 s is a floor —
+a standby cannot see the key free any sooner — not a ceiling with headroom.
 
 What is not measured: how much faster your system gets. That depends on your database, your load
 shape and which capabilities you turn on. There is a benchmark in the repository that compares

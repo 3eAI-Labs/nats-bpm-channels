@@ -70,6 +70,67 @@ class JetStreamInboundIntegrationTest {
         }
     }
 
+    /**
+     * Two Flowable nodes on one JetStream channel. {@code NatsInboundChannelModel} has carried a
+     * {@code queueGroup} since it was written and the core-NATS adapter has always honoured it; the
+     * JetStream adapter never read it, so the setting was accepted and discarded. Without it each
+     * node gets a private consumer and every node handles every event — for an inbound channel that
+     * starts or correlates a process, that is the process running once per node.
+     */
+    @Test
+    void inbound_twoNodesSharingQueueGroup_eachEventHandledOnce() throws Exception {
+        jsm.addStream(StreamConfiguration.builder()
+                .name("QUEUED")
+                .subjects("test.queued")
+                .build());
+
+        NatsInboundChannelModel channelModel = new NatsInboundChannelModel();
+        channelModel.setKey("test-queued");
+        channelModel.setSubject("test.queued");
+        channelModel.setQueueGroup("flowable-test-queued");
+        channelModel.setDurableName("flowable-test-queued");
+
+        CopyOnWriteArrayList<InboundEvent> received = new CopyOnWriteArrayList<>();
+        EventRegistry registry = new StubEventRegistry() {
+            @Override
+            public void eventReceived(InboundChannelModel model, InboundEvent event) {
+                received.add(event);
+            }
+        };
+
+        JetStreamInboundEventChannelAdapter nodeOne = queuedAdapter(channelModel, registry);
+        JetStreamInboundEventChannelAdapter nodeTwo = queuedAdapter(channelModel, registry);
+        nodeOne.subscribe();
+        nodeTwo.subscribe();
+
+        try {
+            int events = 20;
+            for (int i = 0; i < events; i++) {
+                jetStream.publish("test.queued",
+                        ("{\"orderId\":\"" + i + "\"}").getBytes(StandardCharsets.UTF_8));
+            }
+            connection.flush(Duration.ofSeconds(5));
+
+            await().atMost(Duration.ofSeconds(20)).until(() -> received.size() >= events);
+            Thread.sleep(2000); // a fan-out bug delivers to the other node after this point
+            assertThat(received).hasSize(events);
+        } finally {
+            nodeOne.unsubscribe();
+            nodeTwo.unsubscribe();
+        }
+    }
+
+    private JetStreamInboundEventChannelAdapter queuedAdapter(NatsInboundChannelModel channelModel,
+            EventRegistry registry) {
+        JetStreamInboundEventChannelAdapter adapter = new JetStreamInboundEventChannelAdapter(
+                connection, jetStream, channelModel.getSubject(), 5, "dlq." + channelModel.getSubject(),
+                metrics, channelModel.getKey(), dlqPublisher,
+                channelModel.getQueueGroup(), channelModel.getDurableName());
+        adapter.setEventRegistry(registry);
+        adapter.setInboundChannelModel(channelModel);
+        return adapter;
+    }
+
     @Test
     void inbound_receivesAndAcks() throws Exception {
         // Create stream

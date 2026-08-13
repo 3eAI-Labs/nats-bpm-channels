@@ -69,8 +69,21 @@ public class DlqPublisher {
             return DlqPublishOutcome.FAILED_NO_DLQ_SUBJECT;
         }
 
+        long deliveryCount = deliveryCountOf(originalMsg);
+
+        // A message reaching the DLQ is a message the system refused to process. Until now that
+        // decision produced no log line at all — only failures of the DLQ publish itself were
+        // logged — so a worker violating the wire contract looked identical to healthy operation
+        // from the engine's side. ERROR_REGISTRY rows 4, 5 and 24 all prescribe WARN with the
+        // reason and the message identity; this is where they are emitted, because every DLQ route
+        // in the project funnels through here.
+        log.warn("Routing message to DLQ — it will not be processed",
+                kv("dlq_reason", reason.name()), kv("subject", subjectTag), kv("channel", channelTag),
+                kv("dlq_subject", dlqSubject), kv("delivery_count", deliveryCount),
+                kv("message_id", extractOriginalMsgId(originalMsg, subjectTag)));
+
         Headers dlqHeaders = copyOriginalHeadersVerbatim(originalMsg.getHeaders());
-        appendMetaHeaders(dlqHeaders, originalMsg.getSubject(), deliveryCountOf(originalMsg), reason, Instant.now());
+        appendMetaHeaders(dlqHeaders, originalMsg.getSubject(), deliveryCount, reason, Instant.now());
         String originalMsgId = extractOriginalMsgId(originalMsg, subjectTag);
         dlqHeaders.put(NatsJetStreamConstants.MSG_ID_HDR, originalMsgId + ".dlq");
 

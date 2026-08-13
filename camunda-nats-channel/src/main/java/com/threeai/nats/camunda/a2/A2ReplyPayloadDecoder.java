@@ -62,15 +62,48 @@ final class A2ReplyPayloadDecoder {
     }
 
     /**
-     * CODER-QUESTION: full structured variable-map deserialization is tenant-defined
-     * (asyncapi {@code OpaqueBusinessPayload}) and out of this repo's contract — the raw
-     * payload is passed through under a single {@code natsPayload} variable, consistent with
-     * the existing {@code JetStreamMessageCorrelationSubscriber} convention.
+     * Full structured variable-map deserialization is tenant-defined (asyncapi
+     * {@code OpaqueBusinessPayload}) and out of this repo's contract — the raw payload is passed
+     * through under a single {@code natsPayload} variable, consistent with the existing
+     * {@code JetStreamMessageCorrelationSubscriber} convention.
+     *
+     * <p>Under {@link A2Properties.ReplyPayloadVariable#WHEN_PRESENT} (the default) a body whose
+     * only top-level field is {@code type} yields no variable at all: the discriminator is this
+     * layer's own routing signal, not a worker result, so persisting it buys the process nothing
+     * and costs a variable row plus a history row per completion. Any additional field — however
+     * this layer fails to understand it — means the worker returned something, and the whole body
+     * is passed through unchanged, {@code type} included.
      */
-    static Map<String, Object> variablesOf(Message msg) {
+    static Map<String, Object> variablesOf(Message msg, A2Properties.ReplyPayloadVariable mode) {
         Map<String, Object> variables = new HashMap<>();
-        variables.put("natsPayload", bodyAsString(msg));
+        if (mode == A2Properties.ReplyPayloadVariable.NEVER) {
+            return variables;
+        }
+        String body = bodyAsString(msg);
+        if (mode == A2Properties.ReplyPayloadVariable.WHEN_PRESENT && carriesOnlyDiscriminator(body)) {
+            return variables;
+        }
+        variables.put("natsPayload", body);
         return variables;
+    }
+
+    /**
+     * True when the body parses as an object whose single field is {@code type}. A body that does
+     * not parse, or is not an object, is NOT treated as discriminator-only — this method must
+     * never be the reason a worker's result is dropped, so anything it cannot positively identify
+     * as empty is passed through.
+     */
+    private static boolean carriesOnlyDiscriminator(String body) {
+        if (body == null || body.isBlank()) {
+            return false;
+        }
+        JsonNode root;
+        try {
+            root = OBJECT_MAPPER.readTree(body);
+        } catch (JsonProcessingException malformed) {
+            return false;
+        }
+        return root != null && root.isObject() && root.size() == 1 && root.has("type");
     }
 
     static String errorCodeOf(Message msg) {

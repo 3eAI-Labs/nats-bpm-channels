@@ -93,7 +93,8 @@ class NatsSubscriptionRegistrarTest {
         registrar.afterPropertiesSet();
 
         verify(streamManager, never()).ensureStream(anyString(), anyString(), any(Connection.class));
-        verify(jetStream).subscribe(eq("order.new"), any(), any(), eq(false), any(PushSubscribeOptions.class));
+        verify(jetStream).subscribe(eq("order.new"), org.mockito.ArgumentMatchers.anyString(), any(), any(),
+                eq(false), any(PushSubscribeOptions.class));
     }
 
     @Test
@@ -103,7 +104,8 @@ class NatsSubscriptionRegistrarTest {
         registrar.afterPropertiesSet();
 
         verify(streamManager).ensureStream("ORDERS", "order.new", connection);
-        verify(jetStream).subscribe(eq("order.new"), any(), any(), eq(false), any(PushSubscribeOptions.class));
+        verify(jetStream).subscribe(eq("order.new"), org.mockito.ArgumentMatchers.anyString(), any(), any(),
+                eq(false), any(PushSubscribeOptions.class));
     }
 
     @Test
@@ -122,7 +124,8 @@ class NatsSubscriptionRegistrarTest {
 
         registrar.afterPropertiesSet();
 
-        verify(dispatcher).subscribe(eq("order.legacy"), any(io.nats.client.MessageHandler.class));
+        verify(dispatcher).subscribe(eq("order.legacy"), org.mockito.ArgumentMatchers.anyString(),
+                any(io.nats.client.MessageHandler.class));
     }
 
     @Test
@@ -131,8 +134,10 @@ class NatsSubscriptionRegistrarTest {
 
         registrar.afterPropertiesSet();
 
-        verify(jetStream).subscribe(eq("order.new"), any(), any(), eq(false), any(PushSubscribeOptions.class));
-        verify(dispatcher).subscribe(eq("order.legacy"), any(io.nats.client.MessageHandler.class));
+        verify(jetStream).subscribe(eq("order.new"), org.mockito.ArgumentMatchers.anyString(), any(), any(),
+                eq(false), any(PushSubscribeOptions.class));
+        verify(dispatcher).subscribe(eq("order.legacy"), org.mockito.ArgumentMatchers.anyString(),
+                any(io.nats.client.MessageHandler.class));
     }
 
     @Test

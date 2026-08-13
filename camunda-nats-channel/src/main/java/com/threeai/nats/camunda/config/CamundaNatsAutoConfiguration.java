@@ -64,6 +64,7 @@ import org.camunda.bpm.engine.impl.variable.serializer.FileValueSerializer;
 import org.camunda.bpm.engine.impl.variable.serializer.JavaObjectSerializer;
 import org.camunda.bpm.engine.impl.variable.serializer.TypedValueSerializer;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -103,8 +104,8 @@ public class CamundaNatsAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public JetStreamStreamManager jetStreamStreamManager() {
-        return new JetStreamStreamManager();
+    public JetStreamStreamManager jetStreamStreamManager(NatsProperties props) {
+        return new JetStreamStreamManager(props.getJetstream().getStreamReplicas());
     }
 
     @Bean
@@ -197,9 +198,10 @@ public class CamundaNatsAutoConfiguration {
             @Autowired(required = false) NatsChannelMetrics metrics,
             @Autowired(required = false) MeterRegistry meterRegistry,
             ProcessEngine processEngine, UmbrellaLockResolver lockResolver, A2TopicConfig topicConfig,
-            UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager) {
+            UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager, NatsProperties natsProperties) {
         return new A2SubscriptionRegistrar(a2Properties, connection, jetStream, externalTaskService, dlqPublisher,
-                metrics, meterRegistry, processEngine, lockResolver, topicConfig, lockValidator, kvManager);
+                metrics, meterRegistry, processEngine, lockResolver, topicConfig, lockValidator, kvManager,
+                natsProperties.getJetstream().getKvReplicas());
     }
 
     // --- History Offload (increment 2) ---
@@ -254,6 +256,8 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
     public CompactHistoryOutboxWriter compactHistoryOutboxWriter(DataSource dataSource,
             PseudonymTokenGenerator pseudonymGenerator, HistoryClassificationProperties classification,
             @Autowired(required = false) NatsChannelMetrics metrics,
@@ -263,6 +267,8 @@ public class CamundaNatsAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
     public HistoryPostCommitPublisher historyPostCommitPublisher(JetStream jetStream,
             @Autowired(required = false) NatsChannelMetrics metrics) {
         return new HistoryPostCommitPublisher(jetStream, metrics);
@@ -277,8 +283,12 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
-    public ClassCutoverStateRegistry classCutoverStateRegistry(JetStreamKvManager kvManager, Connection connection) {
-        kvManager.ensureBucket(CUTOVER_STATE_BUCKET, Duration.ZERO, 3, connection);
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
+    public ClassCutoverStateRegistry classCutoverStateRegistry(JetStreamKvManager kvManager, Connection connection,
+            NatsProperties natsProperties) {
+        kvManager.ensureBucket(CUTOVER_STATE_BUCKET, Duration.ZERO,
+                natsProperties.getJetstream().getKvReplicas(), connection);
         ClassCutoverStateRegistry registry = new ClassCutoverStateRegistry(kvManager, connection, ENGINE_ID);
         registry.loadAtBootstrap();
         return registry;
@@ -288,10 +298,12 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = "historyRelayLeaderLease")
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
     public SweepLeaderLease historyRelayLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
-            Connection connection, HistoryOutboxProperties outboxProperties) {
+            Connection connection, HistoryOutboxProperties outboxProperties, NatsProperties natsProperties) {
         Duration ttl = Duration.ofSeconds(2 * outboxProperties.getRelayCyclePeriodSeconds());
-        kvManager.ensureBucket(RELAY_LEADER_BUCKET, ttl, 3, connection);
+        kvManager.ensureBucket(RELAY_LEADER_BUCKET, ttl, natsProperties.getJetstream().getKvReplicas(), connection);
         return new SweepLeaderLease(jetStream, kvManager, connection, RELAY_LEADER_BUCKET,
                 RELAY_LEADER_KEY_PREFIX, ENGINE_ID, resolveNodeId(), ttl);
     }
@@ -299,8 +311,11 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
     public HistoryOutboxRelay historyOutboxRelay(DataSource dataSource, JetStream jetStream,
-            SweepLeaderLease historyRelayLeaderLease, HistoryOutboxProperties outboxProperties,
+            @Qualifier("historyRelayLeaderLease") SweepLeaderLease historyRelayLeaderLease,
+            HistoryOutboxProperties outboxProperties,
             @Autowired(required = false) NatsChannelMetrics metrics) {
         return new HistoryOutboxRelay(dataSource, jetStream, historyRelayLeaderLease, outboxProperties, metrics, ENGINE_ID);
     }
@@ -308,6 +323,8 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
     public HistoryOutboxRelayScheduler historyOutboxRelayScheduler(HistoryOutboxRelay historyOutboxRelay,
             HistoryOutboxProperties outboxProperties) {
         return new HistoryOutboxRelayScheduler(historyOutboxRelay, outboxProperties.getRelayCyclePeriodSeconds(), ENGINE_ID);
@@ -316,14 +333,21 @@ public class CamundaNatsAutoConfiguration {
     /** Requires {@link ClassCutoverStateRegistry}, which is itself gated on a DataSource bean. */
     @Bean
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
+            havingValue = "true")
     public ProcessEnginePlugin historyProcessEnginePlugin(ClassCutoverStateRegistry cutoverStateRegistry,
             HistoryClassificationProperties classification,
             @Autowired(required = false) CompactHistoryOutboxWriter outboxWriter,
             HistoryPostCommitPublisher postCommitPublisher) {
         return new AbstractProcessEnginePlugin() {
+            /**
+             * The history level is resolved in {@code initHistoryLevel()}, which runs inside
+             * {@code init()} — after every plugin's {@code preInit}. Validating here would read a
+             * null level on every single boot, so the check lives in {@code postInit} below; only
+             * the handler wiring, which must be in place before {@code init()}, happens here.
+             */
             @Override
             public void preInit(ProcessEngineConfigurationImpl configuration) {
-                HistoryBootstrapValidator.validate(configuration, classification, ENGINE_ID);
                 NatsHistoryEventHandler handler = new NatsHistoryEventHandler(cutoverStateRegistry, classification,
                         outboxWriter, postCommitPublisher, new DbHistoryEventHandler(), ENGINE_ID);
                 // enableDefaultDbHistoryEventHandler ALWAYS false -- our composite owns its own
@@ -332,6 +356,12 @@ public class CamundaNatsAutoConfiguration {
                 List<HistoryEventHandler> customHandlers = new ArrayList<>(configuration.getCustomHistoryEventHandlers());
                 customHandlers.add(handler);
                 configuration.setCustomHistoryEventHandlers(customHandlers);
+            }
+
+            /** Runs once {@code initHistoryLevel()} has resolved the level (BA-Q4: WARN-only). */
+            @Override
+            public void postInit(ProcessEngineConfigurationImpl configuration) {
+                HistoryBootstrapValidator.validate(configuration, classification, ENGINE_ID);
             }
         };
     }
@@ -412,9 +442,11 @@ public class CamundaNatsAutoConfiguration {
     @ConditionalOnMissingBean(name = "largeVariableSweepLeaderLease")
     @ConditionalOnBean(LargeVariablePostCommitExternalizer.class)
     public SweepLeaderLease largeVariableSweepLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
-            Connection connection, LargeVariableExternalizationProperties properties) {
+            Connection connection, LargeVariableExternalizationProperties properties,
+            NatsProperties natsProperties) {
         Duration ttl = Duration.ofSeconds(2 * properties.getSweepCyclePeriodSeconds());
-        kvManager.ensureBucket(LARGE_VARIABLE_LEADER_BUCKET, ttl, 3, connection);
+        kvManager.ensureBucket(LARGE_VARIABLE_LEADER_BUCKET, ttl,
+                natsProperties.getJetstream().getKvReplicas(), connection);
         return new SweepLeaderLease(jetStream, kvManager, connection, LARGE_VARIABLE_LEADER_BUCKET,
                 "sweep-leader.", ENGINE_ID, resolveNodeId(), ttl);
     }
@@ -427,7 +459,7 @@ public class CamundaNatsAutoConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnBean(value = DataSource.class, name = {"largeVariableSweepLeaderLease", "largeVariablePostCommitExternalizer"})
     public LargeVariableExternalizationSweep largeVariableExternalizationSweep(DataSource dataSource,
-            SweepLeaderLease largeVariableSweepLeaderLease,
+            @Qualifier("largeVariableSweepLeaderLease") SweepLeaderLease largeVariableSweepLeaderLease,
             LargeVariablePostCommitExternalizer largeVariablePostCommitExternalizer,
             ContentAddressedLargePayloadStore largeVariablePayloadStore,
             LargeVariableExternalizationProperties properties) {
@@ -449,6 +481,8 @@ public class CamundaNatsAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
+            havingValue = "true")
     public OutboundMessageOutboxWriter outboundMessageOutboxWriter(
             @Autowired(required = false) NatsChannelMetrics metrics) {
         return new OutboundMessageOutboxWriter(metrics);
@@ -456,6 +490,8 @@ public class CamundaNatsAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
+            havingValue = "true")
     public OutboundPostCommitPublisher outboundPostCommitPublisher(JetStream jetStream,
             @Autowired(required = false) NatsChannelMetrics metrics) {
         return new OutboundPostCommitPublisher(jetStream, metrics);
@@ -472,6 +508,8 @@ public class CamundaNatsAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(name = "natsOutboundPublisher")
+    @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
+            havingValue = "true")
     public NatsOutboundPublisher natsOutboundPublisher(OutboundClassificationProperties classification,
             OutboundPostCommitPublisher postCommitPublisher,
             @Autowired(required = false) OutboundMessageOutboxWriter outboundMessageOutboxWriter,
@@ -484,10 +522,14 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = "outboundRelayLeaderLease")
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
+            havingValue = "true")
     public SweepLeaderLease outboundRelayLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
-            Connection connection, OutboundMessageOutboxProperties outboxProperties) {
+            Connection connection, OutboundMessageOutboxProperties outboxProperties,
+            NatsProperties natsProperties) {
         Duration ttl = Duration.ofSeconds(2 * outboxProperties.getRelayCyclePeriodSeconds());
-        kvManager.ensureBucket(OUTBOUND_RELAY_LEADER_BUCKET, ttl, 3, connection);
+        kvManager.ensureBucket(OUTBOUND_RELAY_LEADER_BUCKET, ttl,
+                natsProperties.getJetstream().getKvReplicas(), connection);
         return new SweepLeaderLease(jetStream, kvManager, connection, OUTBOUND_RELAY_LEADER_BUCKET,
                 RELAY_LEADER_KEY_PREFIX, ENGINE_ID, resolveNodeId(), ttl);
     }
@@ -495,8 +537,11 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
+            havingValue = "true")
     public OutboundMessageRelay outboundMessageRelay(DataSource dataSource, JetStream jetStream,
-            SweepLeaderLease outboundRelayLeaderLease, OutboundMessageOutboxProperties outboxProperties,
+            @Qualifier("outboundRelayLeaderLease") SweepLeaderLease outboundRelayLeaderLease,
+            OutboundMessageOutboxProperties outboxProperties,
             @Autowired(required = false) NatsChannelMetrics metrics) {
         return new OutboundMessageRelay(dataSource, jetStream, outboundRelayLeaderLease, outboxProperties, metrics, ENGINE_ID);
     }
@@ -504,6 +549,8 @@ public class CamundaNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(DataSource.class)
+    @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
+            havingValue = "true")
     public OutboundMessageRelayScheduler outboundMessageRelayScheduler(OutboundMessageRelay outboundMessageRelay,
             OutboundMessageOutboxProperties outboxProperties) {
         return new OutboundMessageRelayScheduler(outboundMessageRelay, outboxProperties.getRelayCyclePeriodSeconds(), ENGINE_ID);

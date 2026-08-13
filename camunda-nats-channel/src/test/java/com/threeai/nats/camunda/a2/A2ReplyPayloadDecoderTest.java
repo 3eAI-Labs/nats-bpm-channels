@@ -127,8 +127,60 @@ class A2ReplyPayloadDecoderTest {
     void variablesOf_wrapsRawBodyUnderNatsPayload() {
         Message msg = message("{\"type\":\"SUCCESS\",\"result\":\"ok\"}");
 
-        assertThat(A2ReplyPayloadDecoder.variablesOf(msg))
+        assertThat(A2ReplyPayloadDecoder.variablesOf(msg, A2Properties.ReplyPayloadVariable.WHEN_PRESENT))
                 .containsEntry("natsPayload", "{\"type\":\"SUCCESS\",\"result\":\"ok\"}");
+    }
+
+    /**
+     * A reply that carries only the discriminator has no worker result in it — {@code type} is
+     * this layer's routing signal, not data the process asked for. Writing it anyway cost one
+     * process-variable row plus one history row per completion; in a 100k-task run that was
+     * 120k rows nothing ever read.
+     */
+    @Test
+    void variablesOf_whenPresent_bareDiscriminator_writesNothing() {
+        Message msg = message("{\"type\":\"SUCCESS\"}");
+
+        assertThat(A2ReplyPayloadDecoder.variablesOf(msg, A2Properties.ReplyPayloadVariable.WHEN_PRESENT))
+                .isEmpty();
+    }
+
+    /** One unrecognised field is still a worker result: pass the whole body, {@code type} included. */
+    @Test
+    void variablesOf_whenPresent_anyExtraField_passesWholeBodyThrough() {
+        Message msg = message("{\"type\":\"SUCCESS\",\"orderId\":\"A-123\"}");
+
+        assertThat(A2ReplyPayloadDecoder.variablesOf(msg, A2Properties.ReplyPayloadVariable.WHEN_PRESENT))
+                .containsEntry("natsPayload", "{\"type\":\"SUCCESS\",\"orderId\":\"A-123\"}");
+    }
+
+    /** ALWAYS restores the pre-0.8.1 behaviour for anyone whose process reads the bare body. */
+    @Test
+    void variablesOf_always_bareDiscriminator_stillWritten() {
+        Message msg = message("{\"type\":\"SUCCESS\"}");
+
+        assertThat(A2ReplyPayloadDecoder.variablesOf(msg, A2Properties.ReplyPayloadVariable.ALWAYS))
+                .containsEntry("natsPayload", "{\"type\":\"SUCCESS\"}");
+    }
+
+    @Test
+    void variablesOf_never_writesNothingEvenWithBusinessData() {
+        Message msg = message("{\"type\":\"SUCCESS\",\"orderId\":\"A-123\"}");
+
+        assertThat(A2ReplyPayloadDecoder.variablesOf(msg, A2Properties.ReplyPayloadVariable.NEVER))
+                .isEmpty();
+    }
+
+    /**
+     * The emptiness check must never be the reason a result is dropped: a body this layer cannot
+     * parse is passed through rather than assumed empty.
+     */
+    @Test
+    void variablesOf_whenPresent_unparseableBody_passedThroughNotDropped() {
+        Message msg = message("not json at all");
+
+        assertThat(A2ReplyPayloadDecoder.variablesOf(msg, A2Properties.ReplyPayloadVariable.WHEN_PRESENT))
+                .containsEntry("natsPayload", "not json at all");
     }
 
     private Message message(String body) {

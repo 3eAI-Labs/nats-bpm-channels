@@ -84,15 +84,22 @@ around that state moves through NATS.
 | Worker scale-out | No database cost — dispatch is push over JetStream; `fetchAndLock` is **0** on the happy path |
 | Orphan sweep | Leader-only, amortised ≤ 1 read per period per cluster |
 | Task completion | **1 short transaction per task remains** — the token move is still the engine's, and this is the honest ceiling of the SPI approach |
-| History write path | Leaves the engine database entirely; projection scales independently by partition (default 8) |
+| History write path | Published to NATS and projected; leaves the engine database per history class, once that class is cut over (dual-write until then). Projection scales independently by partition (default 8) |
 | Worker fan-out | NATS queue group — exactly one worker takes each message |
 
 Target SLIs, **not yet measured**: dispatch p95 ≤ 200 ms, reduced HikariCP active connections,
 lock-wait ≈ 0. A benchmark harness (`nats-bpm-bench`) compares native polling against JetStream push
 and ships in the repository; its results have not been published.
 
-Measured: RPO = 0 and split-brain = 0 under real 3-replica JetStream KV failover; RTO ≤ 60 s bounded
-by lease TTL.
+Measured, in a suite tagged `reliability` / `bench` that is excluded from the default `mvn verify`
+run and from CI: RPO = 0 on relay failover, where three competing relay instances race for one real
+JetStream KV lease and the successor drains every seeded audit row; split-brain = 0 under an
+N-candidate compare-and-swap race. Two caveats. The test broker is a single node and the lease
+bucket is created with one replica, so this measures the application-level lease and outbox
+contract, not broker replication — production auto-configuration provisions leader buckets with
+three replicas, but a replicated-broker failover has not been measured. And recovery is TTL-driven:
+a standby cannot see the lease key free before the TTL elapses, so recovery lands at approximately
+the lease TTL (measured 60.4 s against a 60 s TTL) rather than under it.
 
 ---
 
@@ -124,8 +131,10 @@ The adapter is a library, not a service — it runs inside the application that 
 Only NATS and the projection database are additional infrastructure. Workers are independent
 processes and need nothing but a NATS client.
 
-Replication factor 3 is what the reliability evidence was produced against; the KV lease that drives
-leader election depends on it for the stated RPO.
+Replication factor 3 is the recommended production setting, and what the auto-configuration
+provisions for the leader-election buckets that the KV lease depends on. It is not the
+configuration the reliability evidence above was produced against — that measurement ran on a
+single-node broker.
 
 ---
 

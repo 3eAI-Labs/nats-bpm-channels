@@ -88,7 +88,8 @@ public class RelayFailoverBenchScenario {
 
         String bucket = "history-relay-leader-failover-" + UUID.randomUUID();
         JetStreamKvManager kvManager = new JetStreamKvManager();
-        kvManager.ensureBucket(bucket, ttl, 1, env.natsConnection());
+        kvManager.ensureBucket(bucket, ttl, env.natsProperties().getJetstream().getKvReplicas(),
+                env.natsConnection());
 
         List<SweepLeaderLease> leases = new ArrayList<>(engineNodeReplicaCount);
         List<HistoryOutboxRelay> relays = new ArrayList<>(engineNodeReplicaCount);

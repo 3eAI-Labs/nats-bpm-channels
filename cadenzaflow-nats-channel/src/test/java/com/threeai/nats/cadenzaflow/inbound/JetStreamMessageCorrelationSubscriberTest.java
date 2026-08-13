@@ -74,7 +74,9 @@ class JetStreamMessageCorrelationSubscriberTest {
 
         freshSubscriber.subscribe();
 
-        verify(freshJetStream).subscribe(eq(config.getSubject()), eq(dispatcher), any(), eq(false), any());
+        // Queue overload: the subscription is shared by every engine node (see SubscriptionConfig).
+        verify(freshJetStream).subscribe(eq(config.getSubject()), eq(config.resolveDeliverGroup()), eq(dispatcher),
+                any(), eq(false), any());
     }
 
     @Test
@@ -90,7 +92,8 @@ class JetStreamMessageCorrelationSubscriberTest {
 
         org.mockito.ArgumentCaptor<io.nats.client.PushSubscribeOptions> optsCaptor =
                 org.mockito.ArgumentCaptor.forClass(io.nats.client.PushSubscribeOptions.class);
-        verify(freshJetStream).subscribe(eq(config.getSubject()), any(), any(), eq(false), optsCaptor.capture());
+        verify(freshJetStream).subscribe(eq(config.getSubject()), org.mockito.ArgumentMatchers.anyString(), any(),
+                any(), eq(false), optsCaptor.capture());
         assertThat(optsCaptor.getValue().getConsumerConfiguration().getDurable()).isEqualTo("order-received-durable");
     }
 
@@ -99,7 +102,8 @@ class JetStreamMessageCorrelationSubscriberTest {
         Connection freshConnection = mock(Connection.class);
         JetStream freshJetStream = mock(JetStream.class);
         when(freshConnection.createDispatcher()).thenReturn(mock(io.nats.client.Dispatcher.class));
-        when(freshJetStream.subscribe(org.mockito.ArgumentMatchers.anyString(), any(), any(),
+        when(freshJetStream.subscribe(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), any(), any(),
                 org.mockito.ArgumentMatchers.anyBoolean(), any(io.nats.client.PushSubscribeOptions.class)))
                 .thenThrow(new IOException("subscribe failed"));
         JetStreamMessageCorrelationSubscriber freshSubscriber = new JetStreamMessageCorrelationSubscriber(

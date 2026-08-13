@@ -32,7 +32,33 @@ spring:
       enabled: true
   nats:
     url: nats://localhost:4222
+    jetstream:
+      kv-replicas: 1        # the single-node server started above cannot do more
 ```
+
+`kv-replicas` sets the replica count of the KV buckets this library provisions for leader election
+and cutover state. It defaults to `3`, which a clustered production NATS wants and which a
+single-node server rejects outright — `replicas > 1 not supported in non-clustered mode [10074]`,
+raised while the engine is starting, so the application does not come up at all.
+
+Plain messaging provisions no buckets, so you can leave this out until you reach section 7 or 8
+below; it is set here so the single-node server started above keeps working as you go. Leave the
+default in production.
+
+The offload capabilities are off until you switch them on, so the configuration above gives you
+messaging and nothing else. To add history offload:
+
+```yaml
+spring:
+  nats:
+    camunda:              # or cibseven / cadenzaflow
+      history:
+        enabled: true
+```
+
+That starts publishing every `ACT_HI_*` event, so the `HISTORY` and `DLQ_HISTORY` streams and the
+`compact_history_outbox` table have to exist first. Outbound handoff is
+`spring.nats.outbound.enabled`, off by the same default.
 
 ## 4. Receive a message into a process
 
@@ -58,7 +84,7 @@ nats pub order.new '{"orderId":"A-1001"}' -H X-Business-Key:A-1001
 { "key": "orderInboundChannel", "channelType": "inbound", "type": "nats",
   "deserializerType": "json",
   "channelEventKeyDetection": { "fixedValue": "orderEvent" },
-  "channelFields": [ { "name": "subject", "stringValue": "order.new" } ] }
+  "subject": "order.new" }
 ```
 
 ## 5. Durable delivery with a DLQ
@@ -128,6 +154,7 @@ spring:
   nats:
     camunda:
       history:
+        enabled: true                                             # off by default
         audit-critical-classes: [ PROCESS_INSTANCE, VARIABLE ]   # outbox, at-least-once
 history:                                                          # everything else: post-commit
   projection:

@@ -9,7 +9,8 @@ Apache License 2.0 · 3eAI Labs Ltd · Maven Central namespace `com.3eai-labs`
 
 A Spring Boot library that connects a BPM engine to NATS.io and moves high-volume engine work off
 the relational database transaction. Four engines are supported through their public extension
-points; no engine is forked or patched. Every capability is independent and opt-in.
+points; no engine is forked or patched. Every capability is independent and opt-in: the offload
+paths are off until switched on, so adding the library for one of them does not start the others.
 
 ---
 
@@ -52,7 +53,7 @@ Flowable ships the messaging set above but none of these four paths; parity is o
 | Capability | Version | Prefix | Effect |
 |---|---|---|---|
 | External task dispatch over JetStream | v0.2.0 | `spring.nats.<engine>.a2` | Workers stop polling the engine database; `fetchAndLock` = 0 on the happy path |
-| History offload | v0.3.0 | `spring.nats.<engine>.history` | `ACT_HI_*` traffic leaves the engine database for a separate PostgreSQL projection |
+| History offload | v0.3.0 | `spring.nats.<engine>.history` | `ACT_HI_*` traffic is published to NATS and projected into a separate PostgreSQL database; it leaves the engine database per history class, after that class is cut over |
 | Large variable externalisation | v0.4.0 | `history.large-variable` | Variables above threshold move to a content-addressed store with SHA-256 dedup and reference counting |
 | Outbound handoff | v0.5.0 | `spring.nats.outbound` | Dual-write-safe delivery of message-throw and send-task |
 
@@ -84,13 +85,19 @@ duplicates are suppressed with `Nats-Msg-Id` and idempotent complete/correlate.
 
 ## Reliability evidence
 
-| Property | Result | Method |
-|---|---|---|
-| Audit-critical loss on relay failover | RPO = 0 | Real 3-replica JetStream KV failover |
-| Recovery time | RTO ≤ 60 s | Structural bound from lease TTL |
-| Leader-lease split-brain | 0 | N-candidate race against real KV compare-and-swap |
-| Test suite | 1,416 tests passing | Testcontainers (PostgreSQL, NATS) + fault injection |
-| Line coverage | ≥ 90% per production module, 93.0% weighted | JaCoCo; branch 80.4% |
+| Property | Result | Method | Suite |
+|---|---|---|---|
+| Test suite | 1,416 tests passing | Testcontainers (PostgreSQL, NATS) + fault injection | default |
+| Line coverage | ≥ 90% per production module, 93.0% weighted | JaCoCo; branch 80.4% | default |
+| Audit-critical loss on relay failover | RPO = 0 | Three competing relay instances race for one real JetStream KV lease; successor drains every seeded row | `bench` |
+| Recovery time | ≈ lease TTL — measured 60.4 s against a 60 s TTL | TTL-expiry-driven handover; a floor, not a bound with headroom | `bench` |
+| Leader-lease split-brain | 0 | N-candidate race against real KV compare-and-swap | `reliability` |
+
+The `reliability` and `bench` suites are excluded from the default `mvn verify` run and from CI, so
+they are not counted in the 1,416 figure. The failover test exercises the application-level lease
+and outbox contract: the test broker is a single node and the lease bucket is created with one
+replica. Production auto-configuration provisions leader buckets with three replicas, but a
+replicated-broker failover has not been measured.
 
 **Not measured.** Throughput and latency improvement is unpublished. Target SLIs are dispatch
 p95 ≤ 200 ms, reduced connection-pool pressure and lock-wait ≈ 0. A two-mode benchmark comparing
@@ -137,7 +144,7 @@ Total licence cost for the stack: none.
 |---|---|
 | Embedded library | The adapter runs inside the application hosting the engine; it is not a separate service |
 | Additional infrastructure | NATS cluster and, for offload, a projection PostgreSQL instance |
-| NATS replication | Factor 3 — this is what the reliability evidence was produced against; the leader-election KV lease depends on it |
+| NATS replication | Factor 3 — recommended production setting, provisioned by the auto-configuration for the leader-election buckets the KV lease depends on. Not the configuration the reliability evidence was produced against; that measurement ran on a single-node broker |
 | Workers | Independent processes in any language; require only a NATS client |
 | Projection scaling | By partition, default 8 |
 | Container / Kubernetes | No special requirement — a standard Spring Boot deployment |
@@ -178,7 +185,7 @@ Full reference with types and defaults: [User Guide](user/USER_GUIDE.md).
 
 Apache License 2.0. No licence fee, no per-instance cost, no feature gating.
 
-Commercial services from 3eAI Labs: migration consulting from Camunda 8, NATS deployment and
+Commercial services from 3eAI Labs: adoption and integration consulting, NATS deployment and
 tuning, and support agreements.
 
 Repository <https://github.com/3eAI-Labs/nats-bpm-channels> · Contact `oss@3eai-labs.com`

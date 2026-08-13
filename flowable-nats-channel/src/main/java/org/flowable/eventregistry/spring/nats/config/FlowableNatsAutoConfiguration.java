@@ -15,8 +15,12 @@ import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import org.flowable.eventregistry.api.EventRegistry;
 import org.flowable.eventregistry.impl.EventRegistryEngineConfiguration;
+import org.flowable.eventregistry.json.converter.ChannelJsonConverter;
+import org.flowable.eventregistry.spring.nats.channel.NatsInboundChannelModel;
+import org.flowable.eventregistry.spring.nats.channel.NatsOutboundChannelModel;
 import org.flowable.eventregistry.spring.nats.NatsChannelDefinitionProcessor;
 import org.flowable.eventregistry.spring.nats.escalation.FailureEventBridge;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -30,6 +34,9 @@ import org.springframework.core.env.Environment;
 @ConditionalOnClass({ Connection.class, EventRegistry.class })
 @EnableConfigurationProperties(NatsProperties.class)
 public class FlowableNatsAutoConfiguration {
+
+    /** The {@code type} discriminator in a Flowable channel definition. */
+    private static final String CHANNEL_TYPE = "nats";
 
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
@@ -45,8 +52,8 @@ public class FlowableNatsAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public JetStreamStreamManager jetStreamStreamManager() {
-        return new JetStreamStreamManager();
+    public JetStreamStreamManager jetStreamStreamManager(NatsProperties props) {
+        return new JetStreamStreamManager(props.getJetstream().getStreamReplicas());
     }
 
     @Bean
@@ -67,6 +74,33 @@ public class FlowableNatsAutoConfiguration {
     public DlqPublisher dlqPublisher(JetStream jetStream, Connection connection,
             @Autowired(required = false) NatsChannelMetrics metrics) {
         return new DlqPublisher(jetStream, connection, metrics);
+    }
+
+    /**
+     * Teaches Flowable's {@code ChannelJsonConverter} that {@code "type": "nats"} means our channel
+     * models. Without this the documented channel definition does not deploy at all — the converter
+     * looks up {@code <channelType>-<type>} in its own map and throws
+     * {@code FlowableEventJsonException: Not supported inbound channel model type was found nats},
+     * because {@code addDefaultChannelModelClasses()} only knows jms, rabbit, kafka, camel and
+     * expression.
+     *
+     * <p>Every test in this module builds {@link NatsInboundChannelModel} with {@code new}, so the
+     * deployment path — the only one a user has — was never exercised. Registered here as an
+     * {@link InitializingBean} so it happens while the engine configuration is being built, before
+     * any {@code .channel} resource is deployed.
+     */
+    @Bean
+    @ConditionalOnBean(EventRegistryEngineConfiguration.class)
+    public InitializingBean natsChannelModelTypeRegistrar(
+            EventRegistryEngineConfiguration eventRegistryEngineConfiguration) {
+        return () -> {
+            ChannelJsonConverter converter = eventRegistryEngineConfiguration.getChannelJsonConverter();
+            if (converter == null) {
+                return;
+            }
+            converter.addInboundChannelModelClass(CHANNEL_TYPE, NatsInboundChannelModel.class);
+            converter.addOutboundChannelModelClass(CHANNEL_TYPE, NatsOutboundChannelModel.class);
+        };
     }
 
     @Bean

@@ -14,11 +14,10 @@ token move, wait state and variable write happens inside a JDBC transaction. Tha
 makes them reliable. It is also what limits them. Past a certain load, the ceiling is not the
 engine; it is the single database behind it.
 
-Two things happened in 2024 and 2025 that made this matter more. Camunda 8 moved every component,
-including the Zeebe engine, behind a paid enterprise licence at a published list price above
-$50,000 per year. Camunda 7 reached end of life in October 2025 and stopped receiving security
-patches. A large installed base was left choosing between a licence it had not budgeted for and an
-engine that no longer receives fixes.
+That matters most where the installed base is largest. A great deal of production BPMN runs on the
+Camunda 7 lineage — Camunda 7 itself, and the actively maintained forks CIBSeven and CadenzaFlow —
+and on Flowable. These are the engines teams already run, already know, and are not looking to
+replace.
 
 `nats-bpm-channels` addresses both. It gives four open-source engines a shared NATS.io messaging
 layer at zero licence cost — and, more consequentially, it moves four categories of high-volume
@@ -35,21 +34,20 @@ one.
 
 ## 1. The problem landscape
 
-### 1.1 The licence gap
+### 1.1 The engines in scope
 
-Camunda 8 version 8.6, released in October 2024, moved all self-managed components — Zeebe included
-— to a paid enterprise licence. Camunda 7 reached end of life in October 2025; no further security
-patches are issued. Organisations running Camunda 7 in production therefore face a choice between
-an enterprise licence and an unmaintained engine.
+Camunda 7 reached end of life in October 2025. The lineage did not stop there: CIBSeven, an
+Apache-2.0 fork by CIB software GmbH, is published on Maven Central and actively maintained, and
+CadenzaFlow continues the same lineage with ongoing security maintenance. Flowable, unrelated to
+Camunda, is Apache-2.0 and supports BPMN, CMMN and DMN in full.
 
-Community forks answered the maintenance half of the problem. CIBSeven, an Apache-2.0 fork by CIB
-software GmbH, is published on Maven Central and actively maintained. CadenzaFlow continues the same
-lineage. Flowable, unrelated to Camunda, is Apache-2.0 and supports BPMN, CMMN and DMN in full.
+These four engines are where this project works. They are widely deployed, they are open source, and
+teams running them have good reasons to keep running them.
 
-What none of them answered is messaging. Flowable's Event Registry ships adapters for Kafka,
-RabbitMQ and JMS — not NATS. The Camunda 7 forks inherited a messaging story designed before
-modern event infrastructure was common. Teams that wanted a lightweight, push-based broker had to
-write and maintain the integration themselves.
+What they do not share is a NATS integration. Flowable's Event Registry ships adapters for Kafka,
+RabbitMQ and JMS. The Camunda 7 lineage exposes public extension points but no NATS layer. A team
+that wanted a lightweight, push-based broker had to write and maintain that integration itself —
+four times over, if it ran more than one engine.
 
 ### 1.2 The performance ceiling
 
@@ -191,7 +189,9 @@ and the lease expires if the holder dies.
 
 ## 4. What has shipped
 
-Four increments, each independently deployable and independently opt-in.
+Four increments, each independently deployable and independently opt-in. Every offload path is off
+by default and activates only when its own switch is set, so adopting one of them leaves the rest
+inert.
 
 ### 4.1 External task dispatch over JetStream — v0.2.0
 
@@ -283,14 +283,29 @@ We distinguish between what has been measured and what has not.
 
 ### Measured
 
-| Property | Result | How |
-|---|---|---|
-| Audit-critical data loss on relay failover | **RPO = 0** | Real 3-replica JetStream KV failover, zero rows lost |
-| Recovery time on relay failover | **RTO ≤ 60s** | Structural bound set by lease TTL |
-| Leader-lease split-brain | **0** | N-candidate race against real KV compare-and-swap; single winner |
-| Test suite | **1,416 tests**, all passing | Real Testcontainers (PostgreSQL, NATS), fault injection |
-| Line coverage, production modules | **≥ 90% each; 93.0% weighted** | JaCoCo; branch coverage 80.4% |
-| Custody transfer under broker failure | Verified | Reliability suite under real broker restart |
+| Property | Result | How | Suite |
+|---|---|---|---|
+| Test suite | **1,416 tests**, all passing | Real Testcontainers (PostgreSQL, NATS), fault injection | default |
+| Line coverage, production modules | **≥ 90% each; 93.0% weighted** | JaCoCo; branch coverage 80.4% | default |
+| Audit-critical data loss on relay failover | **RPO = 0** | Three competing relay instances race for one real JetStream KV lease; leader killed mid-flight, successor drains every seeded row | `bench` |
+| Recovery time on relay failover | **≈ lease TTL**, measured 60.4 s against a 60 s TTL | TTL-expiry-driven handover — see the note below | `bench` |
+| Leader-lease split-brain | **0** | N-candidate race against real KV compare-and-swap; single winner | `reliability` |
+| Custody transfer under broker failure | Verified | Real broker restart | `reliability` |
+
+The `reliability` and `bench` suites are excluded from the default `mvn verify` run and from CI, so
+their results are **not** part of the 1,416 figure. Run them explicitly with
+`-Dreliability.excludedGroups=` and `-Dbench.excludedGroups=`.
+
+Two limits on how those failover numbers should be read:
+
+- **Scope of the failover test.** It exercises the application-level lease and outbox contract. The
+  test broker is a single node and the lease bucket is created with one replica. Production
+  auto-configuration provisions leader buckets with three replicas, but a failover under a
+  replicated broker has not been measured.
+- **Recovery time is a floor, not a ceiling.** A standby cannot observe the lease key as free
+  before the TTL has fully elapsed since the dead leader's last write, so recovery completes at
+  approximately the lease TTL rather than comfortably under it. Read "RTO 60 s" as "about 60 s, not
+  sooner" — not as a bound with headroom.
 
 The reliability suite is not a smoke test. It runs split-brain races, broker restarts, relay
 failover and dead-letter routing against real infrastructure. That work found and fixed four
@@ -333,6 +348,13 @@ All artifacts are published to Maven Central under `com.3eai-labs` and are GPG-s
 Messaging works with connection configuration alone. Each offload capability is opt-in and can be
 adopted independently — most teams start with whichever load is hurting most, which is usually
 history.
+
+| Capability | Switch | Default |
+|---|---|---|
+| External task dispatch | `spring.nats.<engine>.a2.topics` | empty — nothing is dispatched until a topic is listed |
+| History offload | `spring.nats.<engine>.history.enabled` | `false` |
+| Large variable externalization | `history.large-variable.projection-datasource.jdbc-url` | unset — the capability never activates without it |
+| Outbound handoff | `spring.nats.outbound.enabled` | `false` |
 
 Requirements: Java 21+, Spring Boot 3.x, NATS 2.10+, and PostgreSQL for the projection and
 content-addressed store.
