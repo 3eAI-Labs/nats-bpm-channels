@@ -32,6 +32,17 @@ public class A2OrphanSweep {
 
     private static final Logger log = LoggerFactory.getLogger(A2OrphanSweep.class);
 
+    /** Default for {@code sweep-batch-size} — see {@code A2Properties.UmbrellaLockDefaults#sweepBatchSize}. */
+    static final int DEFAULT_SWEEP_BATCH_SIZE = 5000;
+    /**
+     * A cycle that has republished NOTHING and failed this many publishes in a row aborts early:
+     * the broker is evidently unreachable, each further attempt costs up to a publish timeout,
+     * and the whole candidate set is retried next S anyway (rows are compensating-unlocked per
+     * attempt). 2026-08-20 plateau shape: without this, every cycle grinds the full candidate
+     * list against a dead stream.
+     */
+    static final int FAIL_FAST_THRESHOLD = 10;
+
     private final ProcessEngine processEngine;
     private final SweepLeaderLease leaderLease;
     private final JetStream jetStream;
@@ -40,10 +51,20 @@ public class A2OrphanSweep {
     private final UmbrellaLockResolver lockResolver;
     private final NatsChannelMetrics metrics;
     private final UmbrellaLockValidator lockValidator;
+    private final int sweepBatchSize;
 
+    /** Default-batch convenience overload ({@link #DEFAULT_SWEEP_BATCH_SIZE}). */
     public A2OrphanSweep(ProcessEngine processEngine, SweepLeaderLease leaderLease, JetStream jetStream,
             A2TopicConfig topicConfig, String sentinelWorkerId, UmbrellaLockResolver lockResolver,
             NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator) {
+        this(processEngine, leaderLease, jetStream, topicConfig, sentinelWorkerId, lockResolver,
+                metrics, lockValidator, DEFAULT_SWEEP_BATCH_SIZE);
+    }
+
+    /** @param sweepBatchSize per-cycle candidate cap; {@code <= 0} means unbounded */
+    public A2OrphanSweep(ProcessEngine processEngine, SweepLeaderLease leaderLease, JetStream jetStream,
+            A2TopicConfig topicConfig, String sentinelWorkerId, UmbrellaLockResolver lockResolver,
+            NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator, int sweepBatchSize) {
         this.processEngine = processEngine;
         this.leaderLease = leaderLease;
         this.jetStream = jetStream;
@@ -52,12 +73,24 @@ public class A2OrphanSweep {
         this.lockResolver = lockResolver;
         this.metrics = metrics;
         this.lockValidator = lockValidator;
+        this.sweepBatchSize = sweepBatchSize;
     }
 
     /** Invoked every S seconds (e.g. {@code @Scheduled(fixedDelayString = "${a2.sweep.period-seconds:120}000")}). */
     public void sweepCycle() {
         if (!leaderLease.tryAcquireOrRenew()) {
+            // The lease itself logs every leadership TRANSITION; the counter makes the steady
+            // state observable and separates the three states a silent sweep gets confused
+            // between: gated (flat not-leader everywhere), dead scheduler (zero increments),
+            // and working (leader + cycle summaries). The 2026-08-20 post-mortem initially
+            // could not tell these apart and misread a WORKING sweep as a flatlined one.
+            if (metrics != null) {
+                metrics.sweepCycleCount("not-leader").increment();
+            }
             return; // not the leader — zero DB reads (ADR-0002)
+        }
+        if (metrics != null) {
+            metrics.sweepCycleCount("leader").increment();
         }
         if (topicConfig.a2Topics().isEmpty()) {
             return;
@@ -69,12 +102,34 @@ public class A2OrphanSweep {
             log.error("Sweep fetchable-parity query failed — cycle skipped, retry next S", e); // SYS_SWEEP_QUERY_FAILED
             return;
         }
+        int republished = 0;
+        int failed = 0;
         for (ExternalTaskEntity candidate : fetchableCandidates) {
             if (lockValidator.isUnsafe(candidate.getTopicName())) {
                 log.warn("Topic running with unsafe umbrella-lock duration (L < floor) — "
                         + "allow-unsafe-lock-duration=true", kv("topic", candidate.getTopicName()));
             }
-            relockThenPublish(candidate);
+            if (relockThenPublish(candidate)) {
+                republished++;
+            } else {
+                failed++;
+                if (republished == 0 && failed >= FAIL_FAST_THRESHOLD) {
+                    log.warn("Sweep cycle aborted early — first attempts all failed to publish,"
+                            + " broker unreachable; full candidate set retried next cycle",
+                            kv("failed", failed),
+                            kv("deferred", fetchableCandidates.size() - failed));
+                    break;
+                }
+            }
+        }
+        // One summary line per working cycle. Quiet cycles stay at debug — but a cycle that FOUND
+        // work says so out loud: the absence of exactly this line let the 2026-08-20 post-mortem
+        // misread a working sweep (leader, cycling, republishing) as a flatlined one.
+        if (!fetchableCandidates.isEmpty()) {
+            log.info("Sweep cycle done", kv("candidates", fetchableCandidates.size()),
+                    kv("republished", republished), kv("failed", failed));
+        } else {
+            log.debug("Sweep cycle done — no orphans");
         }
     }
 
@@ -98,20 +153,29 @@ public class A2OrphanSweep {
      * this repo) — every {@code sweepCycle()} threw {@code InaccessibleObjectException} here,
      * silently disabling the entire orphan-sweep safety net (ADR-0002/0003). Materializing a
      * plain {@link ArrayList} before crossing into MyBatis/OGNL-reflected code avoids the
-     * JPMS-restricted view type entirely. Mirrors the camunda-nats-channel fix byte-for-byte
-     * (regression guard there: {@code A2OrphanSweepFetchableParityIntegrationTest}).
+     * JPMS-restricted view type entirely. Regression guard: {@code
+     * A2OrphanSweepFetchableParityIntegrationTest} (real embedded engine, no mocks).
      */
     private List<ExternalTaskEntity> fetchFetchableParity() {
         return execute(commandContext -> {
             Map<String, TopicFetchInstruction> instructions = topicConfig.a2Topics().stream()
                     .collect(toMap(identity(), topic -> new TopicFetchInstruction(topic, Integer.MAX_VALUE)));
+            // Per-cycle cap (sweep-batch-size, 0 = unbounded): the 2026-08-20 incident's first
+            // working cycle materialized 93,605 entities in one list — O(backlog) heap and a
+            // cycle that outlived the lease TTL. Remaining rows surface again next cycle.
+            int maxResults = sweepBatchSize <= 0 ? Integer.MAX_VALUE : sweepBatchSize;
             return commandContext.getExternalTaskManager().selectExternalTasksForTopics(
-                    new ArrayList<>(instructions.values()), Integer.MAX_VALUE, Collections.emptyList());
+                    new ArrayList<>(instructions.values()), maxResults, Collections.emptyList());
         });
     }
 
-    /** Re-lock first (BAQ-1 fixed order), then publish; compensating unlock on publish failure (ADR-0003). */
-    private void relockThenPublish(ExternalTaskEntity candidate) {
+    /**
+     * Re-lock first (BAQ-1 fixed order), then publish; compensating unlock on publish failure
+     * (ADR-0003).
+     *
+     * @return {@code true} when the candidate was republished, {@code false} on any failure path
+     */
+    private boolean relockThenPublish(ExternalTaskEntity candidate) {
         long lockDurationMillis = lockResolver.resolveMillis(candidate.getTopicName());
         try {
             // 1) RE-LOCK FIRST — always passes with the same sentinelWorkerId:
@@ -121,7 +185,7 @@ public class A2OrphanSweep {
         } catch (Exception relockEx) {
             log.error("Sweep re-lock failed — row skipped, unchanged, retried next cycle",
                     kv("external_task_id", candidate.getId()), relockEx); // SYS_SWEEP_RELOCK_FAILED
-            return; // row state unchanged — harmless, retried next S
+            return false; // row state unchanged — harmless, retried next S
         }
 
         // 2) PUBLISH SECOND
@@ -130,6 +194,7 @@ public class A2OrphanSweep {
             if (metrics != null) {
                 metrics.sweepRepublishCount(candidate.getTopicName()).increment();
             }
+            return true;
         } catch (Exception publishEx) {
             // 3) COMPENSATE (ADR-0003): re-lock succeeded, publish failed -> unlock() gives the
             //    lock back. Invisible-orphan window narrows from <=L to <=S.
@@ -152,6 +217,7 @@ public class A2OrphanSweep {
                         kv("external_task_id", candidate.getId()), unlockEx); // SYS_SWEEP_REPUBLISH_FAILED (worst case)
             }
         }
+        return false;
     }
 
     /**

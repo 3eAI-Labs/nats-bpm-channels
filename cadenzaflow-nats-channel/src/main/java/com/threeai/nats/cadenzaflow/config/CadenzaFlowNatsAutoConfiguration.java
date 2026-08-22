@@ -35,6 +35,8 @@ import com.threeai.nats.core.config.NatsTransportSecurityGuard;
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.history.PseudonymTokenGenerator;
 import com.threeai.nats.core.jetstream.JetStreamKvManager;
+import com.threeai.nats.core.jetstream.JetStreamTopologyCheck;
+import com.threeai.nats.core.jetstream.NatsTopologySelfCheck;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
 import com.threeai.nats.core.jetstream.SweepLeaderLease;
 import com.threeai.nats.core.largepayload.ContentAddressedLargePayloadStore;
@@ -134,6 +136,35 @@ public class CadenzaFlowNatsAutoConfiguration {
         return new DlqPublisher(jetStream, connection, metrics);
     }
 
+    /**
+     * Startup topology self-check ({@link JetStreamTopologyCheck}): reports broker state that
+     * cannot run multi-node — exclusive durables, single-replica streams on a cluster, KV
+     * replicas against a non-clustered server — BEFORE any subscription tries to bind. Both
+     * registrar beans below take this bean as a constructor dependency purely for ordering: the
+     * WARN must print before the [SUB-90012] it predicts, because that failure aborts startup.
+     * Subjects are resolved to streams on the live broker; a subject whose stream does not exist
+     * yet (first boot, auto-created streams) is skipped and picked up on the next start.
+     */
+    @Bean
+    public NatsTopologySelfCheck natsTopologySelfCheck(Connection connection, NatsProperties natsProperties,
+            CadenzaFlowNatsProperties properties, A2Properties a2Properties) {
+        java.util.List<JetStreamTopologyCheck.SubjectBinding> bindings = new java.util.ArrayList<>();
+        for (String topic : a2Properties.getTopics()) {
+            bindings.add(new JetStreamTopologyCheck.SubjectBinding(
+                    "jobs." + topic + ".reply", "a2-completion-" + topic));
+        }
+        if (!a2Properties.getTopics().isEmpty()) {
+            bindings.add(new JetStreamTopologyCheck.SubjectBinding("dlq.jobs.>", "a2-incident-bridge"));
+        }
+        for (com.threeai.nats.cadenzaflow.inbound.SubscriptionConfig subscription : properties.getSubscriptions()) {
+            if (subscription.getDurableName() != null && !subscription.getDurableName().isBlank()) {
+                bindings.add(new JetStreamTopologyCheck.SubjectBinding(
+                        subscription.getSubject(), subscription.getDurableName()));
+            }
+        }
+        return new NatsTopologySelfCheck(connection, bindings, natsProperties.getJetstream().getKvReplicas());
+    }
+
     @Bean
     public NatsSubscriptionRegistrar natsSubscriptionRegistrar(
             CadenzaFlowNatsProperties properties,
@@ -142,7 +173,8 @@ public class CadenzaFlowNatsAutoConfiguration {
             JetStreamStreamManager streamManager,
             RuntimeService runtimeService,
             @Autowired(required = false) NatsChannelMetrics metrics,
-            DlqPublisher dlqPublisher) {
+            DlqPublisher dlqPublisher,
+            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
         return new NatsSubscriptionRegistrar(
                 properties, connection, jetStream, streamManager, runtimeService, metrics, dlqPublisher);
     }
@@ -198,7 +230,8 @@ public class CadenzaFlowNatsAutoConfiguration {
             @Autowired(required = false) NatsChannelMetrics metrics,
             @Autowired(required = false) MeterRegistry meterRegistry,
             ProcessEngine processEngine, UmbrellaLockResolver lockResolver, A2TopicConfig topicConfig,
-            UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager, NatsProperties natsProperties) {
+            UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager, NatsProperties natsProperties,
+            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
         return new A2SubscriptionRegistrar(a2Properties, connection, jetStream, externalTaskService, dlqPublisher,
                 metrics, meterRegistry, processEngine, lockResolver, topicConfig, lockValidator, kvManager,
                 natsProperties.getJetstream().getKvReplicas());

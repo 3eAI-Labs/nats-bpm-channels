@@ -66,6 +66,8 @@ time on it.
 - Write comments in English, and only where they explain something the code cannot say itself
 - Update `CHANGELOG.md` under `## [Unreleased]` for anything user-visible
 - Make sure `mvn install` passes before opening the pull request
+- Accept the [contributor licence agreement](CLA.md) when the bot asks — once, on your first
+  pull request
 
 ## Reporting bugs
 
@@ -74,7 +76,24 @@ adapter version, and the NATS server version — most reports turn on one of tho
 
 Security vulnerabilities do **not** belong in a public issue. See [SECURITY.md](SECURITY.md).
 
-## Licence
+## Licence and contributor agreement
 
-Contributions are accepted under the [Apache License 2.0](LICENSE), the licence this project is
-released under.
+This project is released under the [Apache License 2.0](LICENSE), and every contribution is
+published under that licence.
+
+Before a contribution can be merged you also have to accept the
+[3eAI Labs Contributor Licence Agreement](CLA.md). You keep the copyright in what you write; the
+agreement grants 3eAI Labs the right to distribute your contribution, including under licence terms
+other than Apache 2.0. Read section 2 before accepting.
+
+Accepting takes one pull request comment. A bot asks for it on your first pull request:
+
+```
+I have read the CLA Document and I hereby sign the CLA
+```
+
+You do this once. Without it the pull request status check stays red and the contribution cannot be
+merged.
+
+If you are contributing in the course of your employment, say so in the pull request — see section
+4.2 of the agreement.

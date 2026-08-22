@@ -1,1 +1,2 @@
 org.flowable.eventregistry.spring.nats.config.FlowableNatsAutoConfiguration
+com.threeai.nats.flowable.externalworker.config.FlowableExternalWorkerAutoConfiguration

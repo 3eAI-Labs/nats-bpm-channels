@@ -47,9 +47,12 @@ public class OutboundMessageRelayScheduler implements InitializingBean, Disposab
     private void runCycleSafely() {
         try {
             outboxRelay.relayCycle();
-        } catch (Exception e) {
-            log.error("Uncaught exception in outbound-outbox relay cycle — will retry next cycle",
-                    kv("engine_id", engineId), e);
+        } catch (Throwable t) {
+            // Throwable, not Exception: an Error escaping into scheduleWithFixedDelay cancels
+            // the periodic task FOREVER, silently — the throwable is captured into a Future
+            // nobody reads. See OutboundMessageRelaySchedulerTest for the pinned contract.
+            log.error("Uncaught throwable in outbound-outbox relay cycle — cycle abandoned, task survives, will retry next cycle",
+                    kv("engine_id", engineId), t);
         }
     }
 

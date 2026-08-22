@@ -9,6 +9,7 @@ import io.nats.client.Connection;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.KeyValueManagement;
 import io.nats.client.api.KeyValueConfiguration;
+import io.nats.client.api.KeyValueStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,8 +25,19 @@ public class JetStreamKvManager {
         try {
             KeyValueManagement kvm = connection.keyValueManagement();
             try {
-                kvm.getBucketInfo(bucketName);
+                KeyValueStatus existing = kvm.getBucketInfo(bucketName);
                 log.debug("KV bucket exists", kv("bucket", bucketName));
+                if (!ttl.equals(existing.getTtl()) || existing.getReplicas() != replicas) {
+                    // ensureBucket never mutates a live bucket, so a bucket created by an older
+                    // configuration silently keeps its old TTL/replicas — and everything derived
+                    // from them (lease expiry = bucket TTL, quorum behaviour = replicas) follows
+                    // the EXISTING values, not the configured ones. Say so once, loudly.
+                    log.warn("KV bucket exists with different configuration than requested — existing"
+                            + " configuration stays in effect (ensureBucket never mutates a live bucket)",
+                            kv("bucket", bucketName),
+                            kv("existing_ttl", existing.getTtl()), kv("requested_ttl", ttl),
+                            kv("existing_replicas", existing.getReplicas()), kv("requested_replicas", replicas));
+                }
             } catch (JetStreamApiException e) {
                 if (e.getErrorCode() == 404) {
                     KeyValueConfiguration config = KeyValueConfiguration.builder()

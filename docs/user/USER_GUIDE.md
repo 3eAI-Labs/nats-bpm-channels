@@ -2,8 +2,11 @@
 
 **nats-bpm-channels** — NATS.io messaging for open-source BPM engines.
 
-Applies to version **0.8.0**. All artifacts are published to Maven Central under the
-`com.3eai-labs` namespace.
+Applies to version **0.10.0**. Releases up to **0.8.1** (Apache 2.0) are on Maven Central
+under `com.3eai-labs`; from 0.10.0 the project is source-available (BSL 1.1) — build from
+source for development and testing; production artifacts ship with the commercial license.
+Dependency snippets below pin 0.8.0, the last Maven Central release, and apply unchanged
+to source-built 0.10.0 artifacts.
 
 ---
 
@@ -296,6 +299,38 @@ unless you have measured the interaction.
 Use `variable-allowlist` to restrict which process variables are placed on the wire per topic. This
 matters when variables carry personal data.
 
+The worker answers on `jobs.<topic>.reply` with a JSON body whose `type` is `SUCCESS`,
+`BPMN_ERROR` or `TRANSIENT`. Two contracts are available for what else the reply carries:
+
+- **Opaque passthrough** (the original contract): any fields beside `type` are stored unparsed
+  under a single `natsPayload` process variable, governed by `a2.reply-payload-variable`
+  (`WHEN_PRESENT` default / `ALWAYS` / `NEVER`).
+- **Named variables** (engine parity): a top-level `variables` and/or `localVariables` object sets
+  real engine variables, in the same shape the engine's own REST API accepts — each entry is
+  `name: {value, type?, valueInfo?}`, and when `type` is omitted the engine resolves it from the
+  JSON scalar:
+
+  ```json
+  {
+    "type": "SUCCESS",
+    "variables": {
+      "action":  { "value": "yes" },
+      "attempt": { "value": 2, "type": "Integer" },
+      "order":   { "value": "{\"id\":1}", "type": "Object",
+                   "valueInfo": { "serializationDataFormat": "application/json" } }
+    }
+  }
+  ```
+
+  Supported types: `String`, `Boolean`, `Integer`, `Long`, `Short`, `Double`, `Date` (ISO-8601),
+  `Null`, `Bytes` (base64), `Object` (pre-serialized). A structured reply suppresses the
+  `natsPayload` passthrough — the worker has said exactly what it wants written. `localVariables`
+  is accepted on `SUCCESS` and `TRANSIENT`; the engine API has no local-variable parameter for
+  BPMN errors, so a `BPMN_ERROR` reply carrying `localVariables` is refused. A reply whose
+  variables cannot be converted is routed to the DLQ as `VAL_INVALID_REPLY_VARIABLES` rather than
+  completed without them — completing on missing variables would send gateways down wrong paths
+  silently.
+
 ### 4.5 History offload
 
 Engine history writes (`ACT_HI_*`) are a large share of database traffic and are rarely needed
@@ -432,6 +467,7 @@ prefix of the engine you deployed: `spring.nats.camunda`, `spring.nats.cibseven`
 | `defaults.epsilon-seconds` | Long | `60` |
 | `defaults.retry-timeout-millis` | Long | `5000` |
 | `defaults.sweep-period-seconds` | Long | `120` |
+| `defaults.sweep-batch-size` | Integer | `5000` |
 
 ### History offload — `spring.nats.<engine>.history`
 
@@ -590,8 +626,77 @@ prefix), so BPMN authored for Camunda 7 runs unmodified.
 It is a benchmark harness, not a library. It stays in the repository and is deliberately excluded
 from publication.
 
+## Startup topology self-check
+
+At startup each adapter compares what the broker actually holds against what running multi-node
+requires, and logs one WARN per finding (`NATS topology check: ...`, with a stable `code` field
+safe to alert on). It reports, never repairs, and never fails a boot: broker errors inside the
+check are swallowed at debug level, and findings print before the subscription that would trip
+over them.
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `DURABLE_WITHOUT_DELIVER_GROUP` | A durable push consumer exists without a deliver group — it is exclusive: the first node binds it and every other node fails with `[SUB-90012]`. Typically left behind by a pre-0.8.1 deployment; JetStream cannot add a deliver group to an existing consumer (`[SUB-90016]`). | Delete it during an upgrade window: `nats consumer rm <stream> <durable>`. Deleting resets the delivery position, so retained messages are redelivered. |
+| `SINGLE_REPLICA_STREAM_ON_CLUSTER` | A stream this deployment uses has one replica on a clustered server: it stops serving entirely if the node holding it is lost. | `nats stream edit <stream> --replicas 3`, or set `spring.nats.jetstream.stream-replicas` before the stream is first created. Existing streams are never reconfigured by the library. |
+| `KV_REPLICAS_WITHOUT_CLUSTER` | `spring.nats.jetstream.kv-replicas` is above 1 but the server is not clustered — bucket creation is rejected with `[10074]` and the engine fails to boot. | Set `kv-replicas: 1` on single-node servers. |
+| `LIMITS_STREAM_WITHOUT_SIZE_CAP` | A stream this deployment uses keeps messages on limits retention with no byte or message cap: acknowledgement does not remove them, so the footprint is bounded only by max-age × throughput. A work stream shaped like this has OOMed a small broker node under sustained load. | `nats stream edit <stream> --max-bytes=<budget>`; a work stream whose every consumer acks can use interest retention instead. DLQ-style streams should keep limits retention and take the cap. |
+
+Coverage: the durables each adapter knows at boot — A2 completion/incident consumers and
+configured inbound subscriptions; on Flowable, the failure-event bridge (channel durables are
+created at channel-deployment time, outside a boot-time check's reach). A subject whose stream
+does not exist yet (first boot with auto-created streams) is skipped and picked up on the next
+start.
+
 ---
 
 ## License
 
 Apache License 2.0. Copyright 2026 [3eAI Labs Ltd](https://3eai-labs.com).
+
+## Flowable external-worker dispatch (0.10.0)
+
+Push dispatch for `flowable:type="external-worker"` service tasks — the polling
+`acquireAndLock` loop is replaced by JetStream delivery.
+
+**Enable (dual-gated):**
+
+```yaml
+spring:
+  nats:
+    flowable:
+      external-worker:
+        enabled: true            # explicit flag, default false
+        topics: [order-fulfillment]   # ^[A-Za-z0-9_-]+$ — validated at startup
+```
+
+**Streams (operator-provisioned, two separate streams — never one `ewjobs.>` stream, the
+reply would be silently deduplicated against its own job):** `FLW-EW-JOBS` {subjects
+`ewjobs.*`, WorkQueue} and `FLW-EW-JOBS-REPLY` {subjects `ewjobs.*.reply`, WorkQueue}; DLQ
+subjects are `dlq.ewjobs.<topic>`.
+
+**Worker contract** — same payload/reply grammar as the A2 adapters, with ONE addition: the
+job message carries an `X-Cadenzaflow-Lock-Nonce` header the worker MUST echo back on its
+reply, and the reply payload MUST carry the `jobId` field. A reply without them is
+dead-lettered (`VAL_MISSING_LOCK_NONCE`), never silently dropped. Reply shapes: SUCCESS with
+`variables` (engine REST value format); BPMN_ERROR with `errorCode` (an `errorMessage` is
+written to the `natsErrorMessage` process variable — note the engine applies `outParameters`
+filtering only on SUCCESS completion, not on the BPMN_ERROR path); TRANSIENT (variables are
+dropped with a WARN — the engine failure API has no variables parameter). `localVariables`
+cannot be expressed through the Flowable completion API and is rejected to the DLQ.
+
+**Variables on dispatch** follow Flowable's own model semantics: `inParameters` mappings if
+defined, nothing if `doNotIncludeVariables`, otherwise ALL process variables — in that last
+case the variables are carried into a persistent stream and, on failures, a DLQ retained for
+days: model `inParameters` (or `doNotIncludeVariables`) for processes handling restricted
+data. The adapter logs one warning per process definition running on the all-variables
+default.
+
+**Recovery model:** Flowable's job lock is engine-managed — when it expires, the engine's own
+reset thread (default interval 60 s, `asyncExecutorResetExpiredJobsInterval`) releases it and
+the adapter's sweep re-dispatches with a fresh generation. Worst-case recovery for a lost
+dispatch is lock duration + reset interval + sweep period. Lowering the reset interval speeds
+this up but is a GLOBAL engine setting affecting every job type's reset scan — weigh the
+database cost. Delivery is at-least-once and a job can be EXECUTED twice under recovery races
+(never completed twice): workers must stay idempotent. The sweep's leader election uses the
+shared `a2-sweep-leader` KV bucket (key `sweep-leader.flowable`) — the `a2-` prefix is
+historical, not a misconfiguration.

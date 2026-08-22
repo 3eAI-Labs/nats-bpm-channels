@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -90,6 +91,70 @@ class A2CompletionBridgeTest {
 
         verify(externalTaskService).complete(eq("task-2"), eq("a2-jetstream-bridge"),
                 eq(Map.of("natsPayload", "{\"type\":\"SUCCESS\",\"orderId\":\"A-123\"}")));
+    }
+
+    @Test
+    void handleReply_structuredVariables_completesWithTypedMap() {
+        Message msg = successMessage("task-sv",
+                "{\"type\":\"SUCCESS\",\"variables\":{\"action\":{\"value\":\"yes\"}}}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).complete(eq("task-sv"), eq("a2-jetstream-bridge"),
+                argThat((Map<String, Object> vars) -> vars.containsKey("action") && !vars.containsKey("natsPayload")));
+        verify(msg).ack();
+    }
+
+    @Test
+    void handleReply_structuredLocalVariables_usesTheFourArgComplete() {
+        Message msg = successMessage("task-lv",
+                "{\"type\":\"SUCCESS\",\"variables\":{\"v1\":{\"value\":1}},"
+                        + "\"localVariables\":{\"scratch\":{\"value\":\"x\"}}}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).complete(eq("task-lv"), eq("a2-jetstream-bridge"), anyMap(), anyMap());
+        verify(msg).ack();
+    }
+
+    /**
+     * A conversion failure must never degrade to "complete without the variables" — the gateway
+     * downstream would take the default path on data the worker never sent. DLQ instead, no engine
+     * call, no ack-as-success.
+     */
+    @Test
+    void handleReply_invalidStructuredVariables_routesToDlqWithoutTouchingTheEngine() {
+        Message msg = successMessage("task-bad",
+                "{\"type\":\"SUCCESS\",\"variables\":{\"v1\":5}}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService, never()).complete(any(), any(), anyMap());
+        verify(externalTaskService, never()).complete(any(), any(), anyMap(), anyMap());
+    }
+
+    /** The engine's handleBpmnError API has no local-variables parameter; refusing beats dropping. */
+    @Test
+    void handleReply_bpmnErrorWithLocalVariables_routesToDlq() {
+        Message msg = jsonMessage("task-be-lv",
+                "{\"type\":\"BPMN_ERROR\",\"errorCode\":\"E1\","
+                        + "\"localVariables\":{\"scratch\":{\"value\":\"x\"}}}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService, never()).handleBpmnError(any(), any(), any(), any(), anyMap());
+    }
+
+    @Test
+    void handleReply_transientWithVariables_usesTheVariableCarryingHandleFailure() {
+        Message msg = jsonMessage("task-tr-v",
+                "{\"type\":\"TRANSIENT\",\"errorMessage\":\"boom\",\"retries\":2,"
+                        + "\"variables\":{\"attempt\":{\"value\":2}}}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).handleFailure(eq("task-tr-v"), eq("a2-jetstream-bridge"),
+                eq("boom"), any(), eq(2), anyLong(), anyMap(), anyMap());
     }
 
     @Test

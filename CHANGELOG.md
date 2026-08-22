@@ -4,6 +4,163 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.10.0] — 2026-08-22 — Flowable external-worker dispatch; first release under BSL 1.1
+
+> **Distribution:** this and later releases are NOT published to Maven Central (decision
+> 2026-08-22; Central remains the Apache-era archive at 0.8.1). Source is available through
+> the public mirror — build with `mvn install` for development and testing; production
+> artifacts ship with the commercial license.
+
+### Added
+
+- **Flowable external-worker dispatch over JetStream** (docs/11, design v3.2 after two
+  adversarial review rounds + an engine-source characterization probe). `flowable:type=
+  "external-worker"` jobs are born-locked to a generation token (`<sentinelWorkerId>#<nonce>`,
+  single INSERT via the official `CreateExternalWorkerJobInterceptor`, host interceptors
+  delegate-wrapped) and push-dispatched post-commit to `ewjobs.<topic>`; workers reply on
+  `ewjobs.<topic>.reply` echoing the `X-Cadenzaflow-Lock-Nonce` header (the full token never
+  travels on the wire). Reply capability matrix enforces Flowable 7.1.0 reality: localVariables
+  → DLQ `VAL_UNSUPPORTED_REPLY_SHAPE`; BPMN_ERROR `errorMessage` degrades into the
+  `natsErrorMessage` variable; TRANSIENT variables dropped loudly. Recovery is
+  reset-cooperative: Flowable's lock is engine-managed (not a lease — measured), so the sweep
+  re-acquires reset-released orphans through the public `acquireAndLock` with a fresh generation
+  (recovery SLO: L + resetInterval + S; ADR-0001 umbrella floor enforced; generation-scoped
+  `Nats-Msg-Id = <jobId>#<nonce>` makes sweep re-publishes immune to the duplicate window).
+  Late replies classify by exception type — routine lock expiry acks with counters; PAGE is
+  reserved for foreign owners and same-generation anomalies. New DLQ consumer `flw-ew-incident`
+  deadletters exhausted replies via `fail(retries=0)`. Opt-in: `spring.nats.flowable.
+  external-worker.enabled=true` + `topics` (dual-gated); topic tokens validated at load
+  (`VAL_EW_TOPIC_INVALID`). Namespace `ewjobs.`/`dlq.ewjobs.` reserved in NamespaceValidator;
+  `FailureEventBridge` skip rule extended accordingly. Acceptance: 7 E2E tests on embedded
+  Flowable + real JetStream (born-locked happy path, rollback-publishes-nothing, nonce-less
+  reply → DLQ, generation-scoped dedup survival, double-bind absence, publish-loss recovery
+  through reset+sweep, BPMN_ERROR boundary routing) + 44 unit tests.
+
+
+### Changed
+
+- **License: Apache 2.0 → Business Source License 1.1** (decision 2026-08-22). Non-production
+  use (development, testing, evaluation) stays free; production use requires a commercial license
+  from 3eAI Labs. Each version converts to Apache 2.0 four years after its publication (the cap is
+  built into the BSL text itself). Versions up to and including 0.8.1 were published under
+  Apache 2.0 and remain so; the public mirror and the Maven Central artifacts at 0.8.1 are frozen
+  as that archive. Sole authorship (single committer) verified before the change.
+  The internal-only v0.9.0 tag was removed in the same history cleanup; its content ships
+  with this release for the first time.
+
+### Added
+
+- **Named variables in the A2 reply (engine parity).** A worker reply may now carry a top-level
+  `variables` and/or `localVariables` object — `name: {value, type?, valueInfo?}`, the same wire
+  shape the engine's own REST `CompleteExternalTaskDto` accepts — and the completion bridge writes
+  them as real engine variables on `complete`, `handleBpmnError` (variables only; the engine API
+  has no local-variable parameter there) and `handleFailure`. Previously the whole reply body was
+  passed through as the single opaque `natsPayload` variable, which meant a worker could not set
+  the variable a gateway branches on: the workflow "T2 decides `action`, an XOR gateway routes on
+  it" could run over REST but not over A2. Supported types: String, Boolean, Integer, Long, Short,
+  Double, Date (ISO-8601), Null, Bytes (base64), Object (pre-serialized with
+  `valueInfo.serializationDataFormat`). A structured reply suppresses the `natsPayload`
+  passthrough; replies without a `variables` object behave exactly as before. A reply whose
+  variables cannot be converted routes to the DLQ as `VAL_INVALID_REPLY_VARIABLES` instead of
+  completing without them — a gateway reading a variable that was never written takes the wrong
+  path with no error anywhere.
+
+- **Startup topology self-check.** Each adapter now compares the live broker against what running
+  multi-node requires and logs one WARN per finding, with a stable `code` field safe to alert on:
+  `DURABLE_WITHOUT_DELIVER_GROUP` (an exclusive pre-0.8.1 durable that will fail every second
+  node with `[SUB-90012]`; JetStream cannot add a deliver group to an existing consumer, so the
+  finding names the exact `nats consumer rm` command), `SINGLE_REPLICA_STREAM_ON_CLUSTER` (a
+  stream that stops serving entirely if the node holding it is lost), and
+  `KV_REPLICAS_WITHOUT_CLUSTER` (a configuration the server rejects with `[10074]` as a failed
+  boot), and `LIMITS_STREAM_WITHOUT_SIZE_CAP` (a limits-retention stream with no byte or message
+  cap — acknowledgement does not remove messages, so the footprint is bounded only by max-age ×
+  throughput; distilled from the 2026-08-20 sustained-load exercise, where exactly such
+  work/reply streams OOMed a 512 MiB broker node twice. Checked on clustered and single-node
+  servers alike — capping is actionable everywhere). The check reports, never repairs, and never fails a boot; registrar beans depend on it
+  so findings print BEFORE the subscription attempt that would trip over them. Wired into all
+  four engine auto-configurations over the durables each deployment declares at boot — A2
+  completion/incident consumers and configured inbound subscriptions (Camunda, CIBSeven,
+  CadenzaFlow), the failure-event bridge (Flowable; channel durables are created at
+  channel-deployment time and are outside a boot-time check's reach). Subjects are resolved to
+  their owning streams on the live broker (`JetStreamTopologyCheck`, `NatsTopologySelfCheck`).
+
+- **Broker outage/recovery integration test for the orphan sweep**
+  (`A2OrphanSweepOutageRecoveryIntegrationTest`, all three Camunda-lineage mirrors): a real NATS
+  broker is SIGKILLed and restarted with its store directory intact while orphans are born in the
+  engine database; the test asserts a cycle during the outage degrades cleanly and the FIRST
+  post-recovery cycle republishes every orphan onto the real stream. This is the regression trap
+  for the incident above — if the sweep is ever silently dead after a recovery, this fails
+  loudly instead. The suspected causes were each checked against source: the scheduler-cancel
+  footgun is guarded, the engine sets the fetch query's `now` parameter, and
+  `connection.keyValue()` throws only `IOException` (the compiler refuted the uncaught-exception
+  hypothesis).
+- **Multi-node incident-shape reliability test**
+  (`A2OrphanSweepMultiNodeFlatlineReproReliabilityTest`, cibseven, `@Tag("reliability")` with the
+  same surefire exclusion wiring nats-core uses): a real three-node cluster, the R1 work stream's
+  home node as the victim, an R3 lease bucket, two contending sweeps on real fixed-delay
+  schedulers, and a double SIGKILL with same-store returns. Pins that (1) leadership survives a
+  one-node outage, (2) the first post-recovery cycles republish every orphan, (3) a plateau with
+  a dead stream home stays loud without killing the scheduled tasks.
+- **The 2026-08-20 "flatline" is root-caused and closed — no library defect.** Container-stats
+  forensics (`stats.csv`/`backlog.csv`; engine logs and volumes were already gone) showed the
+  sweep was leader and cycling throughout: growing grind cycles during the outage, a
+  recovery-window republish of the stranded population, and ~160s-period grind cycles across the
+  whole final plateau. The stranding was environmental: nats-2 OOMed a SECOND time at 01:06:40Z
+  (the history stream — offload publishes every engine history event into a consumer-less R1
+  stream with 1h max-age on a 512MiB node; the run's exact history level is unrecoverable, its
+  params dump was never written — reloaded on restart: a death spiral), and the republished messages — queued FIFO behind the 59k pre-outage
+  backlog draining at ~226/s — died inside the R1 stream before workers reached them. The
+  "zero sweep log output" observation that framed the incident as a flatline was a post-mortem
+  error (the per-row republish-failure ERRORs existed pre-fix and must have been present in the
+  engine logs; a case-sensitive grep for lowercase `sweep` misses every one of them).
+
+### Changed
+
+- **The orphan sweep is batched: `defaults.sweep-batch-size`, default `5000` (0 = unbounded,
+  the old behaviour).** One sweep cycle now materializes and republishes at most this many
+  fetchable candidates; the remainder surfaces again next cycle. In the 2026-08-20 incident the
+  unbounded query materialized 93,605 `ExternalTaskEntity` rows in a single list — O(backlog)
+  heap on the engine, and grind cycles that outlived the lease TTL (2×S) and churned leadership
+  mid-recovery. At the default, a 34k mass-orphan event drains in ~7 cycles (≈14 min at S=120s).
+- **A sweep cycle that cannot publish at all aborts early.** If the first 10 candidates of a
+  cycle all fail to publish while nothing has succeeded yet, the cycle stops (WARN with
+  failed/deferred counts) instead of grinding the full candidate list against an evidently
+  unreachable broker; every attempted row is already compensating-unlocked, and the whole set is
+  retried next cycle. Partial failure (any success in the cycle) never triggers the abort.
+
+### Fixed
+
+- **Every periodic loop was one `Error` away from silent permanent death.** All seven
+  `scheduleWithFixedDelay` wrappers (A2 orphan sweep ×3, history-outbox relay ×3,
+  outbound-outbox relay) caught `Exception` — but `scheduleWithFixedDelay` cancels the periodic
+  task FOREVER on any escaped throwable, silently, capturing it into a `ScheduledFuture` nobody
+  reads. An escaped `Error` (an OOME under heap pressure, a `NoClassDefFoundError`) would have
+  killed the safety net with zero log output — exactly the suspect class the 2026-08-20
+  investigation had to rule out blind. All seven now catch `Throwable` and log at ERROR;
+  `OutboundMessageRelaySchedulerTest` pins the survives-an-Error contract.
+- **`ensureBucket` silently accepted a live bucket with a different configuration.** The
+  check-then-create bootstrap never compares an EXISTING bucket's TTL/replicas against the
+  requested values, so a bucket created by an older configuration keeps stale settings — and
+  everything derived from them (lease expiry = bucket TTL, quorum = replicas) silently follows
+  the old values. It now WARNs with both configurations side by side (it still never mutates a
+  live bucket).
+
+- **The sweep leader lease could go dark with no signal anywhere.** During a sustained-load
+  exercise (2026-08-20) a broker-node OOM stranded 34,138 process instances whose fast-path
+  publish had failed, and the live post-mortem could not tell what the orphan sweep — the safety
+  net for exactly that population — had been doing, because the lease was silent on every path:
+  a lost renew race, a vanished key and a foreign holder all returned `false` without a word,
+  and `sweepCycle()` returned without a trace when not leader. Leadership transitions are now
+  logged exactly once per change (`GAINED` at INFO, `LOST` at WARN with the reason), the sweep
+  counts every cycle (`nats.a2.sweep.cycles{outcome=leader|not-leader}`) and logs a per-cycle
+  summary (`candidates/republished/failed`) whenever it finds work. A flat `not-leader` line on
+  every node at once is now the visible signature of a gated sweep; zero increments means the
+  scheduler is dead; leader cycles with summaries mean the sweep is working — the three states
+  the incident's post-mortem could not separate.
+- The first fix attempt split the lease's two state pieces (`isLeader()` vs. logged state) and
+  reintroduced the stale-leader bug the code documents; the existing unit tests caught it within
+  one run. `transition(...)` now owns both.
+
 ## [0.8.1] — 2026-08-13 — multi-node engines, and four offload paths that are actually opt-in
 
 Brought up against a real three-node engine cluster for the first time (Scenario-3 performance lab,
@@ -261,8 +418,11 @@ release machinery was pointing at a service that no longer exists.
   1.0.0–1.1.0 are on Central), `cibseven-engine` 2.2.0 is on Central, so
   `cibseven-nats-channel` is a first-class default reactor module — CI builds it under
   `-DskipCadenzaflow`, and it is Maven-Central-publishable alongside the Flowable and Camunda 7
-  adapters. The `-DskipCadenzaflow` boundary now cleanly separates the three public engine adapters
-  from the single private/commercial CadenzaFlow one.
+  adapters. The `-DskipCadenzaflow` boundary now cleanly separates the three adapters whose engines
+  CI can resolve publicly from the one whose pinned engine version it cannot. This is a statement
+  about *distribution at the time*, not about licensing: `cadenzaflow-engine` is published under
+  Apache 2.0 like the other three engines, and from 1.2.1 onward it resolves from Central — see
+  0.8.0, which moved the pin and removed the flag.
 
 ## [0.5.1] — 2026-07-24 — Test hardening & concurrency fixes
 

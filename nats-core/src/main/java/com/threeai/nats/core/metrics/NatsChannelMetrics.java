@@ -86,6 +86,16 @@ public class NatsChannelMetrics {
 
     // A2 / DLQ-bridge metrics
 
+    /**
+     * Sweep-cycle outcome — {@code outcome} is {@code leader} or {@code not-leader}. A flat
+     * {@code not-leader} line on every node at once is the signature of the 2026-08-20 flatline:
+     * the sweep alive but permanently gated. Zero increments at all = scheduler dead.
+     */
+    public Counter sweepCycleCount(String outcome) {
+        return Counter.builder("nats.a2.sweep.cycles")
+                .tag("outcome", outcome).register(registry);
+    }
+
     public Counter sweepRepublishCount(String topic) {
         return Counter.builder("nats.a2.sweep.republish")
                 .tag("topic", topic).register(registry);
@@ -102,6 +112,21 @@ public class NatsChannelMetrics {
     }
 
     /** SYS_SENTINEL_WORKER_CONFLICT — metric side of the CRITICAL+page channel. */
+    /** docs/11 §2.4 (ii-a) — reply arrived after the engine reset thread released the lock. */
+    public Counter lockResetCount(String topic) {
+        return Counter.builder("nats.ew.lock.reset").tag("topic", topic).register(registry);
+    }
+
+    /** docs/11 §2.4 (ii-b) — stale-generation reply, superseded by a sweep re-dispatch (benign race). */
+    public Counter replySupersededCount(String topic) {
+        return Counter.builder("nats.ew.reply.superseded").tag("topic", topic).register(registry);
+    }
+
+    /** docs/11 D-D'v2 — incident consumer deferred a DLQ'd job to the sweep (lock not sentinel-held). */
+    public Counter incidentDeferredCount(String topic) {
+        return Counter.builder("nats.ew.incident.deferred").tag("topic", topic).register(registry);
+    }
+
     public Counter sentinelWorkerConflictCount(String topic) {
         return Counter.builder("nats.a2.sentinel_worker_conflict")
                 .tag("topic", topic).register(registry);

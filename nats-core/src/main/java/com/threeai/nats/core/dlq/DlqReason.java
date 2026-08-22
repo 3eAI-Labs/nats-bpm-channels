@@ -22,6 +22,17 @@ public enum DlqReason {
      * field instead of the old errorCode-presence heuristic.
      */
     INVALID_REPLY_TYPE("VAL_INVALID_REPLY_TYPE"),
+    /**
+     * Reply-variables increment (decision 2026-08-19) — the reply carries a structured
+     * {@code variables}/{@code localVariables} object that cannot be converted to engine
+     * variables: not a JSON object, an entry that is not an object, an unsupported {@code type},
+     * an undecodable value, or {@code localVariables} on a BPMN_ERROR reply (the engine's
+     * {@code handleBpmnError} API has no local-variables parameter). Completing WITHOUT the
+     * variables the worker asked for would let the process continue on wrong data — a gateway
+     * reading a variable that was never written takes the wrong path silently — so the reply is
+     * routed to the DLQ instead.
+     */
+    INVALID_REPLY_VARIABLES("VAL_INVALID_REPLY_VARIABLES"),
     /** Increment 2 — {@code HistoryProjectionConsumer} deliveryCount &gt; maxDeliver. */
     HISTORY_DELIVERY_BUDGET_EXCEEDED("BUS_HISTORY_DELIVERY_BUDGET_EXCEEDED"),
     /** Increment 2 — envelope does not match the asyncapi contract. */
@@ -31,7 +42,24 @@ public enum DlqReason {
      * {@code JetStreamOutboundEventChannelAdapter} publish attempt failed (broker unreachable, publish
      * exception). Routed to DLQ as a last-resort custody-transfer instead of a silent message loss.
      */
-    OUTBOUND_PUBLISH_FAILED("SYS_OUTBOUND_PUBLISH_FAILED");
+    OUTBOUND_PUBLISH_FAILED("SYS_OUTBOUND_PUBLISH_FAILED"),
+    /**
+     * Flowable external-worker dispatch (docs/11 §2.3, decision N-red-1, 2026-08-22) — the reply
+     * is missing the {@code X-Cadenzaflow-Lock-Nonce} header, or its value fails the
+     * {@code ^[A-Za-z0-9_-]{8,}$} token rule, or the envelope {@code jobId} is empty. The lock
+     * token is constructed BRIDGE-side from the configured sentinel worker id plus this nonce —
+     * the sentinel half never travels on the wire — so a reply without a valid nonce cannot be
+     * classified against any lock generation and MUST be dead-lettered, never silently acked:
+     * acking it would leave the job locked until reset and re-dispatched forever with zero errors.
+     */
+    MISSING_LOCK_NONCE("VAL_MISSING_LOCK_NONCE"),
+    /**
+     * Flowable external-worker dispatch (docs/11 D-C'v2, 2026-08-22) — the reply uses a shape the
+     * Flowable 7.1.0 completion API cannot express: {@code localVariables} on any reply (no
+     * engine parameter exists). Mirrors {@code INVALID_REPLY_VARIABLES}'s rationale: degrading
+     * silently would let the process continue on wrong data.
+     */
+    UNSUPPORTED_REPLY_SHAPE("VAL_UNSUPPORTED_REPLY_SHAPE");
 
     private final String exceptionCode;
 

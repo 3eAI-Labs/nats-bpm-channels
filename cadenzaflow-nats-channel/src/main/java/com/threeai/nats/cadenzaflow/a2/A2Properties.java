@@ -125,6 +125,14 @@ public class A2Properties {
         private int maxDeliver = 4;
         /** S. */
         private long sweepPeriodSeconds = 120;
+        /**
+         * Per-cycle cap on how many fetchable orphans one sweep cycle materializes and
+         * republishes; the remainder is picked up by the following cycles ({@code 0} =
+         * unbounded, the pre-0.8.2 behaviour). Bounded by default since the 2026-08-20
+         * sustained-load incident, where an unbounded cycle materialized 93,605 rows in one
+         * list and ground for longer than the lease TTL (2*S), churning leadership mid-recovery.
+         */
+        private int sweepBatchSize = 5000;
         /** eps. */
         private long epsilonSeconds = 60;
         /** L — {@code null} means derive it (see {@link com.threeai.nats.core.config.UmbrellaLockCalculator}). */
@@ -158,6 +166,14 @@ public class A2Properties {
 
         public void setSweepPeriodSeconds(long sweepPeriodSeconds) {
             this.sweepPeriodSeconds = sweepPeriodSeconds;
+        }
+
+        public int getSweepBatchSize() {
+            return sweepBatchSize;
+        }
+
+        public void setSweepBatchSize(int sweepBatchSize) {
+            this.sweepBatchSize = sweepBatchSize;
         }
 
         public long getEpsilonSeconds() {

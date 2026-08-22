@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Consumes the shared DLQ (everything except the {@code dlq.jobs.>} slice A2's incident-bridges
+ * consume and the {@code dlq.ewjobs.>} slice the external-worker {@code EwIncidentConsumer}
  * own) and re-delivers the original payload/headers as a Flowable failure-event, so a
  * non-interrupting/interrupting BPMN escalation can react to it (HLD §2.6, BR-FLW-003/005,
  * FR-B3/B5, US-B3/B5, ADR-0004).
@@ -57,6 +58,8 @@ public class FailureEventBridge {
     private static final Logger log = LoggerFactory.getLogger(FailureEventBridge.class);
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
     private static final String A2_RESERVED_PREFIX = "jobs.";
+    /** docs/11 D-E'v3 (R-red-4 fix): external-worker DLQs belong to EwIncidentConsumer, not this bridge. */
+    private static final String EW_RESERVED_PREFIX = "ewjobs.";
     /** Durable and deliver group in one — shared by every node, so each DLQ event escalates once. */
     private static final String DURABLE_NAME = "flowable-failure-event-bridge";
 
@@ -151,7 +154,7 @@ public class FailureEventBridge {
 
     void handleDlqMessage(Message dlqMsg) {
         String originalSubject = originalSubjectOf(dlqMsg);
-        if (originalSubject != null && originalSubject.startsWith(A2_RESERVED_PREFIX)) {
+        if (originalSubject != null && (originalSubject.startsWith(A2_RESERVED_PREFIX) || originalSubject.startsWith(EW_RESERVED_PREFIX))) {
             dlqMsg.ack(); // A2's own DLQ slice — not this bridge's concern, custody already transferred
             return;
         }

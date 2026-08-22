@@ -10,7 +10,7 @@
          A hyphen is legal in a groupId; Java packages stay separate as com.threeai.*. -->
     <groupId>com.3eai-labs</groupId>
     <artifactId>nats-channel-parent</artifactId>
-    <version>0.8.1</version>
+    <version>0.10.0</version>
     <packaging>pom</packaging>
 
     <name>NATS BPM Channels</name>
@@ -40,8 +40,12 @@
 
     <licenses>
         <license>
-            <name>Apache License, Version 2.0</name>
-            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <name>Business Source License 1.1</name>
+            <url>https://mariadb.com/bsl11/</url>
+            <comments>Non-production use is free; production use requires a commercial
+                license from 3eAI Labs. Each version converts to Apache-2.0 four years
+                after its publication (see LICENSE). Versions up to and including 0.8.1
+                remain Apache-2.0.</comments>
         </license>
     </licenses>
 
@@ -200,7 +204,7 @@
             <!-- Places LICENSE + NOTICE into the META-INF/ of every jar. The <licenses>
                  declaration in the POM covers the machine-readable side (Central, license scanners
                  and SBOM tools read it there); this covers the human who holds the jar on its own
-                 and needs to find the license text inside it — the spirit of Apache-2.0 §4(a) and
+                 and needs to find the license text inside it — the License's conspicuous-display requirement and
                  the Central producer-terms obligation to include "all applicable copyright
                  notices".
 

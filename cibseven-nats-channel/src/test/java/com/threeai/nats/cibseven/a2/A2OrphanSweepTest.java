@@ -5,12 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 import com.threeai.nats.core.jetstream.SweepLeaderLease;
@@ -168,6 +171,87 @@ class A2OrphanSweepTest {
         when(externalTaskManager.findExternalTaskById("task-4")).thenThrow(new RuntimeException("db also down"));
 
         assertThatCode(() -> sweep.sweepCycle()).doesNotThrowAnyException();
+    }
+
+
+    @Test
+    void sweepCycle_publishKeepsFailingWithNoSuccess_abortsCycleAtThreshold() throws Exception {
+        List<ExternalTaskEntity> candidates = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            candidates.add(mockCandidate("task-ff-" + i, "order-fulfillment"));
+        }
+        when(leaderLease.tryAcquireOrRenew()).thenReturn(true);
+        when(externalTaskManager.selectExternalTasksForTopics(anyCollection(), anyInt(), any()))
+                .thenReturn(candidates);
+        when(jetStream.publish(any(NatsMessage.class))).thenThrow(new IOException("JS down"));
+
+        sweep.sweepCycle();
+
+        // Broker evidently unreachable: exactly FAIL_FAST_THRESHOLD attempts, the rest deferred
+        // to the next cycle instead of grinding the full list against a dead stream.
+        verify(jetStream, times(A2OrphanSweep.FAIL_FAST_THRESHOLD)).publish(any(NatsMessage.class));
+    }
+
+    @Test
+    void sweepCycle_publishFailuresAfterASuccess_doNotAbortTheCycle() throws Exception {
+        List<ExternalTaskEntity> candidates = new ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            candidates.add(mockCandidate("task-mix-" + i, "order-fulfillment"));
+        }
+        when(leaderLease.tryAcquireOrRenew()).thenReturn(true);
+        when(externalTaskManager.selectExternalTasksForTopics(anyCollection(), anyInt(), any()))
+                .thenReturn(candidates);
+        when(jetStream.publish(any(NatsMessage.class)))
+                .thenReturn(null) // first candidate goes through -> partial failure, not an outage
+                .thenThrow(new IOException("JS flaky"));
+
+        sweep.sweepCycle();
+
+        verify(jetStream, times(15)).publish(any(NatsMessage.class));
+    }
+
+    @Test
+    void fetchQuery_defaultBatchSizeIsBounded() throws Exception {
+        when(leaderLease.tryAcquireOrRenew()).thenReturn(true);
+        when(externalTaskManager.selectExternalTasksForTopics(anyCollection(), anyInt(), any()))
+                .thenReturn(List.of());
+
+        sweep.sweepCycle();
+
+        verify(externalTaskManager).selectExternalTasksForTopics(anyCollection(),
+                eq(A2OrphanSweep.DEFAULT_SWEEP_BATCH_SIZE), any());
+    }
+
+    @Test
+    void fetchQuery_usesConfiguredBatchSizeAsMaxResults() throws Exception {
+        A2OrphanSweep bounded = sweepWithBatchSize(7);
+        when(leaderLease.tryAcquireOrRenew()).thenReturn(true);
+        when(externalTaskManager.selectExternalTasksForTopics(anyCollection(), anyInt(), any()))
+                .thenReturn(List.of());
+
+        bounded.sweepCycle();
+
+        verify(externalTaskManager).selectExternalTasksForTopics(anyCollection(), eq(7), any());
+    }
+
+    @Test
+    void fetchQuery_zeroBatchSizeMeansUnbounded() throws Exception {
+        A2OrphanSweep unbounded = sweepWithBatchSize(0);
+        when(leaderLease.tryAcquireOrRenew()).thenReturn(true);
+        when(externalTaskManager.selectExternalTasksForTopics(anyCollection(), anyInt(), any()))
+                .thenReturn(List.of());
+
+        unbounded.sweepCycle();
+
+        verify(externalTaskManager).selectExternalTasksForTopics(anyCollection(),
+                eq(Integer.MAX_VALUE), any());
+    }
+
+    private A2OrphanSweep sweepWithBatchSize(int batchSize) {
+        A2Properties properties = new A2Properties();
+        properties.setTopics(List.of("order-fulfillment"));
+        return new A2OrphanSweep(processEngine, leaderLease, jetStream, new A2TopicConfig(properties),
+                "a2-jetstream-bridge", lockResolver, metrics, lockValidator, batchSize);
     }
 
     private ExternalTaskEntity mockCandidate(String id, String topic) {

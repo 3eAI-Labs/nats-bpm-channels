@@ -250,6 +250,20 @@ class JetStreamStreamManagerTest {
         assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.Limits);
     }
 
+    /** docs/11 G4 — {@code ewjobs.}-prefixed subjects get the same WorkQueue default as {@code jobs.}. */
+    @Test
+    void ensureStream_ewjobsPrefixedSubject_notFound_createsWithWorkQueueRetention() throws Exception {
+        JetStreamApiException notFound = mock(JetStreamApiException.class);
+        when(notFound.getErrorCode()).thenReturn(404);
+        when(jsm.getStreamInfo("FLW-EW-JOBS")).thenThrow(notFound);
+
+        manager.ensureStream("FLW-EW-JOBS", "ewjobs.order-fulfillment", connection);
+
+        ArgumentCaptor<StreamConfiguration> captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(jsm).addStream(captor.capture());
+        assertThat(captor.getValue().getRetentionPolicy()).isEqualTo(RetentionPolicy.WorkQueue);
+    }
+
     /** Subjects outside both the {@code jobs.} and {@code dlq.} namespaces default to {@link RetentionPolicy#Limits}. */
     @Test
     void ensureStream_nonJobsNonDlqSubject_notFound_createsWithLimitsRetention() throws Exception {

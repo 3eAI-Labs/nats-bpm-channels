@@ -2,13 +2,15 @@
 
 [![CI](https://github.com/3eAI-Labs/nats-bpm-channels/actions/workflows/ci.yml/badge.svg)](https://github.com/3eAI-Labs/nats-bpm-channels/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/com.3eai-labs/nats-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/com.3eai-labs/nats-core)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License](https://img.shields.io/badge/License-BSL_1.1-blue.svg)](LICENSE)
 
 NATS.io channel adapters for BPM engines. Flowable gets Event Registry integration; Camunda-lineage
 adapters add database offload paths for high-volume workloads.
 
-**Available on Maven Central** under the `com.3eai-labs` namespace. Artifacts are GPG-signed; the
-public key is on `keyserver.ubuntu.com`.
+**Apache-era releases (through 0.8.1) are on Maven Central** under the `com.3eai-labs`
+namespace (GPG-signed; the public key is on `keyserver.ubuntu.com`). From 0.10.0 the project
+is source-available under the BSL 1.1: build from source for development and testing;
+production artifacts and support ship with the commercial license.
 
 📖 [Quick Start](docs/user/QUICK_START.md) · [User Guide](docs/user/USER_GUIDE.md) · [White Paper](docs/WHITE_PAPER.md) · [all documentation](#documentation)
 
@@ -82,8 +84,8 @@ guarantee the Camunda-lineage adapters do. Bringing Flowable to parity is on the
 
 ## Building from source
 
-Most users should take the artifacts from Maven Central and skip this section. To build the
-repository itself:
+Releases through 0.8.1 (Apache 2.0) can be taken from Maven Central; from 0.10.0 build from
+source (free for development and testing under the BSL 1.1). To build the repository itself:
 
 ```bash
 git clone https://github.com/3eAI-Labs/nats-bpm-channels.git
@@ -463,6 +465,9 @@ Found a security problem? Do not open a public issue — see [SECURITY.md](SECUR
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[Business Source License 1.1](LICENSE) — free for non-production use (development, testing,
+evaluation); production use requires a commercial license from [3eAI Labs](https://3eai-labs.com).
+Each version converts to the Apache License 2.0 four years after its publication. Versions up to
+and including 0.8.1 were released under Apache 2.0 and remain so.
 
 Copyright 2026 [3eAI Labs Ltd](https://3eai-labs.com)

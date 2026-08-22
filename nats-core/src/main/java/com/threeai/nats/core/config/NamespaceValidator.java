@@ -15,10 +15,33 @@ import com.threeai.nats.core.exception.TopicNamespaceCollisionException;
 public final class NamespaceValidator {
 
     private static final String A2_RESERVED_PREFIX = "jobs.";
+    private static final String EW_RESERVED_PREFIX = "ewjobs.";
+    private static final String EW_DLQ_RESERVED_PREFIX = "dlq.ewjobs.";
     private static final String OUTBOUND_DLQ_RESERVED_PREFIX = "dlq.events.";
     private static final String OUTBOUND_RESERVED_PREFIX = "events.";
 
     private NamespaceValidator() {
+    }
+
+    /**
+     * Flowable external-worker dispatch (docs/11 D-E'v3, 2026-08-22) — {@code ewjobs.*} and
+     * {@code dlq.ewjobs.*} are reserved for external-worker job dispatch, mirroring the
+     * {@code jobs.*}/A2 and {@code events.*}/outbound reservations (BAQ-4 precedent, docs/06 §7
+     * dual-reservation note). Specific (longer) DLQ prefix checked first, same rationale as
+     * {@link #assertNotReservedForOutbound}.
+     */
+    public static void assertNotReservedForExternalWorker(String subject, String context) {
+        if (subject == null) {
+            return;
+        }
+        if (subject.startsWith(EW_DLQ_RESERVED_PREFIX)) {
+            throw new TopicNamespaceCollisionException(subject, context,
+                    "'dlq.ewjobs.*' namespace reserved for external-worker dispatch DLQ (docs/11)");
+        }
+        if (subject.startsWith(EW_RESERVED_PREFIX)) {
+            throw new TopicNamespaceCollisionException(subject, context,
+                    "'ewjobs.*' namespace reserved for external-worker dispatch (docs/11)");
+        }
     }
 
     public static void assertNotReservedForA2(String subject, String context) {

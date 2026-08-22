@@ -47,6 +47,18 @@ public class SweepLeaderLease {
     private volatile Long heldRevision;
 
     /**
+     * Last observed leadership state, for transition-only logging. The steady states are
+     * deliberately quiet (a permanent non-leader logging every cycle would be noise), but every
+     * TRANSITION is loud: in the 2026-08-20 sustained-load incident the live post-mortem misread
+     * a working sweep as flatlined for 35 minutes, because leadership state was invisible on
+     * every path (container-stats forensics later showed the sweep had been leader and cycling
+     * throughout — see the multi-node flatline-repro reliability test in cibseven-nats-channel).
+     * A diagnostic that says nothing about the state of the safety net it gates is the same
+     * defect class the topology check exists for.
+     */
+    private volatile boolean wasLeader;
+
+    /**
      * @param jetStream  kept for LLD signature parity; leader-election uses the KV API on
      *                   {@code connection} directly (not exposed through {@link JetStream}).
      * @param kvManager  kept for LLD signature parity; bucket provisioning happens once at
@@ -88,14 +100,18 @@ public class SweepLeaderLease {
         try {
             kv = connection.keyValue(bucket);
         } catch (IOException connectionFailure) {
+            // connection.keyValue() declares only IOException (verified: the 2026-08-20 flatline
+            // investigation suspected an uncaught JetStreamApiException here; the compiler
+            // refutes it — that exception cannot escape this call).
             log.warn("Sweep-leader lease unavailable — could not obtain KV handle",
                     kv("key", key), connectionFailure);
-            markNotLeader();
+            transition(false, "kv-handle-unavailable");
             return false;
         }
         try {
             long rev = kv.create(key, nodeId.getBytes(StandardCharsets.UTF_8));
             markLeader(rev);
+            transition(true, "acquired");
             return true;
         } catch (Exception createFailed) {
             return tryRenewExisting(kv);
@@ -108,20 +124,55 @@ public class SweepLeaderLease {
             entry = kv.get(key);
         } catch (Exception getFailed) {
             log.warn("Sweep-leader lease lookup failed", kv("key", key), getFailed);
-            markNotLeader();
+            transition(false, "lease-lookup-failed");
             return false;
         }
-        if (entry == null || !nodeId.equals(new String(entry.getValue(), StandardCharsets.UTF_8))) {
-            markNotLeader();
+        if (entry == null) {
+            // Key vanished between the failed create and this get (TTL expiry race) — next
+            // cycle's create will contend for it. Not an error, but a state worth seeing.
+            transition(false, "lease-key-expired");
+            return false;
+        }
+        String holder = new String(entry.getValue(), StandardCharsets.UTF_8);
+        if (!nodeId.equals(holder)) {
+            transition(false, "held-by-" + holder);
             return false;
         }
         try {
             long rev = kv.update(key, nodeId.getBytes(StandardCharsets.UTF_8), entry.getRevision());
             markLeader(rev);
+            transition(true, "renewed");
             return true;
         } catch (Exception renewRace) {
-            markNotLeader();
+            // Was silent — a leader losing its lease produced no signal anywhere, and everything
+            // the lease gates (the orphan sweep) went silently dead with it.
+            log.warn("Sweep-leader lease renew failed — leadership lost until re-acquired",
+                    kv("key", key), renewRace);
+            transition(false, "renew-failed");
             return false;
+        }
+    }
+
+    /**
+     * Records the new leadership state and logs the change exactly once per transition; steady
+     * states stay quiet. Owns BOTH state pieces: {@code heldRevision} (what {@link #isLeader()}
+     * reports) and {@code wasLeader} (what has been logged) — splitting them reintroduced the
+     * stale-leader bug the {@code markNotLeader} javadoc warns about, and the existing unit tests
+     * caught it within one run.
+     */
+    private void transition(boolean nowLeader, String reason) {
+        if (!nowLeader) {
+            markNotLeader();
+        }
+        if (nowLeader == wasLeader) {
+            return;
+        }
+        wasLeader = nowLeader;
+        if (nowLeader) {
+            log.info("Sweep leadership GAINED", kv("key", key), kv("node", nodeId), kv("reason", reason));
+        } else {
+            log.warn("Sweep leadership LOST — everything this lease gates (orphan sweep) is now"
+                    + " inactive on this node", kv("key", key), kv("node", nodeId), kv("reason", reason));
         }
     }
 

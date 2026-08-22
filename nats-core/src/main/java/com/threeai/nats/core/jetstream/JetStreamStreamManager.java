@@ -44,6 +44,7 @@ public class JetStreamStreamManager {
 
     private static final String DLQ_SUBJECT_PREFIX = "dlq.";
     private static final String JOBS_SUBJECT_PREFIX = "jobs.";
+    private static final String EWJOBS_SUBJECT_PREFIX = "ewjobs.";
     private static final Duration DLQ_DEFAULT_MAX_AGE = Duration.ofDays(14);
 
     private final int replicas;
@@ -181,7 +182,11 @@ public class JetStreamStreamManager {
     }
 
     private static RetentionPolicy defaultRetentionPolicyFor(String subject) {
-        return subject != null && subject.startsWith(JOBS_SUBJECT_PREFIX)
+        if (subject == null) {
+            return RetentionPolicy.Limits;
+        }
+        // docs/11 G4: ewjobs. carries external-worker job dispatch — same work-queue nature as jobs.
+        return subject.startsWith(JOBS_SUBJECT_PREFIX) || subject.startsWith(EWJOBS_SUBJECT_PREFIX)
                 ? RetentionPolicy.WorkQueue
                 : RetentionPolicy.Limits;
     }

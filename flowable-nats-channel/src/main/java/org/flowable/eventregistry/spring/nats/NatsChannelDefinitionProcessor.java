@@ -190,6 +190,7 @@ public class NatsChannelDefinitionProcessor implements ChannelModelProcessor {
             // increment 4 outbound-handoff mechanism; a tenant-defined Flowable channel must not
             // collide with either.
             NamespaceValidator.assertNotReservedForOutbound(subject, channelKey);
+            NamespaceValidator.assertNotReservedForExternalWorker(subject, channelKey);
         } catch (TopicNamespaceCollisionException e) {
             // nats-core is engine-neutral and cannot depend on Flowable (see CODER-NOTES);
             // re-wrap so callers still see the FlowableException surface they expect.

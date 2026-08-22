@@ -142,15 +142,64 @@ public class A2CompletionBridge {
                 return;
             }
 
+            A2ReplyPayloadDecoder.ReplyVariables replyVariables;
+            try {
+                replyVariables = A2ReplyPayloadDecoder.replyVariablesOf(msg, config.getReplyPayloadVariable());
+            } catch (InvalidReplyVariablesException invalidVariables) {
+                // Completing WITHOUT the variables the worker asked for would let the process
+                // continue on wrong data (a gateway reads a variable that was never written and
+                // takes the default path, silently) — so the reply goes to the DLQ instead.
+                log.warn("Reply variables cannot be converted — routing to DLQ",
+                        kv("external_task_id", externalTaskId), invalidVariables); // VAL_INVALID_REPLY_VARIABLES
+                routeToDlqAndDecide(msg, DlqReason.INVALID_REPLY_VARIABLES);
+                return;
+            }
+
             switch (replyType.get()) {
-                case SUCCESS -> externalTaskService.complete(externalTaskId, sentinelWorkerId,
-                        A2ReplyPayloadDecoder.variablesOf(msg, config.getReplyPayloadVariable()));
-                case BPMN_ERROR -> externalTaskService.handleBpmnError(externalTaskId, sentinelWorkerId,
-                        A2ReplyPayloadDecoder.errorCodeOf(msg), A2ReplyPayloadDecoder.errorMessageOf(msg),
-                        A2ReplyPayloadDecoder.variablesOf(msg, config.getReplyPayloadVariable()));
-                case TRANSIENT -> externalTaskService.handleFailure(externalTaskId, sentinelWorkerId,
-                        A2ReplyPayloadDecoder.errorMessageOf(msg), A2ReplyPayloadDecoder.errorDetailsOf(msg),
-                        A2ReplyPayloadDecoder.retriesOf(msg), config.getRetryTimeoutMillis());
+                // The 3-arg overload is kept for a reply without local variables so the legacy
+                // opaque contract keeps executing the exact engine call it always has; the 4-arg
+                // overload only enters the picture when a structured reply asks for local scope.
+                case SUCCESS -> {
+                    if (replyVariables.localVariables().isEmpty()) {
+                        externalTaskService.complete(externalTaskId, sentinelWorkerId,
+                                replyVariables.variables());
+                    } else {
+                        externalTaskService.complete(externalTaskId, sentinelWorkerId,
+                                replyVariables.variables(), replyVariables.localVariables());
+                    }
+                }
+                case BPMN_ERROR -> {
+                    if (!replyVariables.localVariables().isEmpty()) {
+                        // The engine's handleBpmnError API has no local-variables parameter
+                        // (verified against ExternalTaskService — largest overload is
+                        // (id, workerId, errorCode, errorMessage, variables)). Dropping the
+                        // scope silently is worse than refusing the reply.
+                        log.warn("BPMN_ERROR reply carries localVariables, which the engine API"
+                                        + " cannot accept — routing to DLQ",
+                                kv("external_task_id", externalTaskId)); // VAL_INVALID_REPLY_VARIABLES
+                        routeToDlqAndDecide(msg, DlqReason.INVALID_REPLY_VARIABLES);
+                        return;
+                    }
+                    externalTaskService.handleBpmnError(externalTaskId, sentinelWorkerId,
+                            A2ReplyPayloadDecoder.errorCodeOf(msg), A2ReplyPayloadDecoder.errorMessageOf(msg),
+                            replyVariables.variables());
+                }
+                case TRANSIENT -> {
+                    // Gated on the CONTRACT, not on map emptiness: under the legacy contract the
+                    // variables map may hold the natsPayload passthrough, which TRANSIENT has
+                    // never written (handleFailure predates variablesOf here) and must not start
+                    // writing now. Only a structured reply asks for variables on a failure.
+                    if (!replyVariables.structured()) {
+                        externalTaskService.handleFailure(externalTaskId, sentinelWorkerId,
+                                A2ReplyPayloadDecoder.errorMessageOf(msg), A2ReplyPayloadDecoder.errorDetailsOf(msg),
+                                A2ReplyPayloadDecoder.retriesOf(msg), config.getRetryTimeoutMillis());
+                    } else {
+                        externalTaskService.handleFailure(externalTaskId, sentinelWorkerId,
+                                A2ReplyPayloadDecoder.errorMessageOf(msg), A2ReplyPayloadDecoder.errorDetailsOf(msg),
+                                A2ReplyPayloadDecoder.retriesOf(msg), config.getRetryTimeoutMillis(),
+                                replyVariables.variables(), replyVariables.localVariables());
+                    }
+                }
             }
             if (metrics != null) {
                 metrics.ackCount(msg.getSubject(), config.getMessageName()).increment();

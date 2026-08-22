@@ -125,7 +125,8 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         sweepLeaderLease = new SweepLeaderLease(jetStream, kvManager, connection, ENGINE_ID, resolveNodeId(),
                 java.time.Duration.ofSeconds(2 * properties.getDefaults().getSweepPeriodSeconds()));
         orphanSweep = new A2OrphanSweep(processEngine, sweepLeaderLease, jetStream, topicConfig,
-                properties.getSentinelWorkerId(), lockResolver, metrics, lockValidator);
+                properties.getSentinelWorkerId(), lockResolver, metrics, lockValidator,
+                properties.getDefaults().getSweepBatchSize());
 
         long sweepPeriodSeconds = properties.getDefaults().getSweepPeriodSeconds();
         sweepScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -140,8 +141,13 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
     private void runSweepCycleSafely() {
         try {
             orphanSweep.sweepCycle();
-        } catch (Exception e) {
-            log.error("Uncaught exception in A2 orphan-sweep cycle — will retry next cycle", e);
+        } catch (Throwable t) {
+            // Throwable, not Exception: an Error escaping into scheduleWithFixedDelay cancels the
+            // periodic task FOREVER, silently — the throwable is captured into a Future nobody
+            // reads. A safety-net loop must never be one Error away from silent permanent death
+            // (the exact suspect class the 2026-08-20 investigation had to rule out blind).
+            log.error("Uncaught throwable in A2 orphan-sweep cycle — cycle abandoned, task survives,"
+                    + " will retry next cycle", t);
         }
     }
 

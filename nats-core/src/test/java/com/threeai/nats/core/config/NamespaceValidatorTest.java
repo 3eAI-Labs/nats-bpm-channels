@@ -71,6 +71,39 @@ class NamespaceValidatorTest {
     }
 
     @Test
+    void assertNotReservedForExternalWorker_ewjobsPrefix_throws() {
+        assertThatThrownBy(() -> NamespaceValidator.assertNotReservedForExternalWorker("ewjobs.order-fulfillment", "tenantChannel"))
+                .isInstanceOf(TopicNamespaceCollisionException.class)
+                .hasMessageContaining("ewjobs.");
+    }
+
+    @Test
+    void assertNotReservedForExternalWorker_dlqEwjobsPrefix_throws() {
+        assertThatThrownBy(() -> NamespaceValidator.assertNotReservedForExternalWorker("dlq.ewjobs.order-fulfillment", "tenantChannel"))
+                .isInstanceOf(TopicNamespaceCollisionException.class)
+                .hasMessageContaining("dlq.ewjobs.");
+    }
+
+    @Test
+    void assertNotReservedForExternalWorker_notReserved_doesNotThrow() {
+        assertThatCode(() -> NamespaceValidator.assertNotReservedForExternalWorker("order.new", "orderChannel"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void assertNotReservedForExternalWorker_nullSubject_doesNotThrow() {
+        assertThatCode(() -> NamespaceValidator.assertNotReservedForExternalWorker(null, "orderChannel"))
+                .doesNotThrowAnyException();
+    }
+
+    /** docs/06 BAQ-4 dual reservation: the A2 guard must NOT reject the ewjobs. root (distinct prefixes). */
+    @Test
+    void assertNotReservedForA2_ewjobsPrefix_doesNotThrow() {
+        assertThatCode(() -> NamespaceValidator.assertNotReservedForA2("ewjobs.order-fulfillment", "orderChannel"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void assertNotReservedForOutbound_jobsPrefix_doesNotThrow() {
         // events.*/dlq.events.* guard is independent from the A2 jobs.* guard.
         assertThatCode(() -> NamespaceValidator.assertNotReservedForOutbound("jobs.order-fulfillment", "orderChannel"))

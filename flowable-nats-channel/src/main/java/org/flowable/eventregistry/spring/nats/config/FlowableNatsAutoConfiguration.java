@@ -7,6 +7,8 @@ import com.threeai.nats.core.NatsProperties;
 import com.threeai.nats.core.config.NatsTransportSecurityGuard;
 import com.threeai.nats.core.dlq.DlqPublisher;
 import com.threeai.nats.core.jetstream.JetStreamStreamManager;
+import com.threeai.nats.core.jetstream.JetStreamTopologyCheck;
+import com.threeai.nats.core.jetstream.NatsTopologySelfCheck;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import com.threeai.nats.core.resilience.DlqBridgeCircuitBreakerFactory;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -114,13 +116,30 @@ public class FlowableNatsAutoConfiguration {
         return new NatsChannelDefinitionProcessor(connection, jetStream, streamManager, metrics, dlqPublisher);
     }
 
+    /**
+     * Startup topology self-check ({@link JetStreamTopologyCheck}). Flowable's channel durables
+     * are created at CHANNEL-DEPLOYMENT time by the event registry, not at boot, so they cannot
+     * be enumerated here — the statically-known binding is the failure-event bridge's durable on
+     * the DLQ subject. The bridge bean depends on this one purely for ordering: the WARN must
+     * print before the [SUB-90012] it predicts.
+     */
+    @Bean
+    public NatsTopologySelfCheck natsTopologySelfCheck(Connection connection, NatsProperties natsProperties) {
+        return new NatsTopologySelfCheck(connection,
+                java.util.List.of(new JetStreamTopologyCheck.SubjectBinding(
+                        "dlq.>", "flowable-failure-event-bridge")),
+                natsProperties.getJetstream().getKvReplicas());
+    }
+
     @Bean(initMethod = "subscribe", destroyMethod = "unsubscribe")
     @ConditionalOnMissingBean
     public FailureEventBridge failureEventBridge(Connection connection, JetStream jetStream,
             EventRegistry eventRegistry, NatsChannelDefinitionProcessor channelModelLookup,
             @Autowired(required = false) NatsChannelMetrics metrics,
             @Autowired(required = false) MeterRegistry meterRegistry,
-            @Autowired(required = false) EventRegistryEngineConfiguration eventRegistryEngineConfiguration) {
+            @Autowired(required = false) EventRegistryEngineConfiguration eventRegistryEngineConfiguration,
+            @org.springframework.beans.factory.annotation.Qualifier("natsTopologySelfCheck")
+            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
         // CB benign-exception clarification (review MAJOR-1a placeholder, resolved 2026-07-15 by
         // QA test (d) / EventReceivedNoMatchBehaviorTest): eventReceived(...)
         // does NOT throw on "no waiting subscription" — it returns silently, so there is no

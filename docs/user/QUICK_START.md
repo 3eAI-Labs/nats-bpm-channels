@@ -1,6 +1,10 @@
 # Quick Start
 
-**nats-bpm-channels 0.8.0** — NATS.io messaging for Flowable, Camunda 7, CIBSeven and CadenzaFlow.
+**nats-bpm-channels** — NATS.io messaging for Flowable, Camunda 7, CIBSeven and CadenzaFlow.
+
+> Dependency snippets pin **0.8.0** — the last Maven Central (Apache 2.0) release. From 0.10.0
+> the project is source-available (BSL 1.1): `mvn install` from the repository and use the same
+> coordinates at version 0.10.0.
 Requires Java 21+, Spring Boot 3.x, NATS 2.10+.
 
 ## 1. Start NATS
