@@ -131,13 +131,15 @@ class NatsMessageCorrelationSubscriberTest {
     }
 
     @Test
-    void handleMessage_businessKeyVariableMalformedJson_noOpeningQuoteAfterColon_businessKeyNull() {
+    void handleMessage_businessKeyVariableNumericValue_extractedAsText() {
         config.setBusinessKeyVariable("orderId");
         Message msg = createMockMessage("{\"orderId\":42}", null);
 
         subscriber.handleMessage(msg);
 
-        verify(correlationBuilder, never()).processInstanceBusinessKey(any());
+        // D-F v2 (slice 5): numeric scalars are valid JSON — the retired indexOf scan
+        // returned null here; the Jackson replacement extracts the value as text.
+        verify(correlationBuilder).processInstanceBusinessKey("42");
     }
 
     @Test

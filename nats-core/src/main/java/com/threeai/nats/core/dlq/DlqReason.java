@@ -59,7 +59,13 @@ public enum DlqReason {
      * engine parameter exists). Mirrors {@code INVALID_REPLY_VARIABLES}'s rationale: degrading
      * silently would let the process continue on wrong data.
      */
-    UNSUPPORTED_REPLY_SHAPE("VAL_UNSUPPORTED_REPLY_SHAPE");
+    UNSUPPORTED_REPLY_SHAPE("VAL_UNSUPPORTED_REPLY_SHAPE"),
+    /**
+     * ER-parity slice 5 (docs/12 D-C v2) — a definition-path event arrived whose payload lacks
+     * a declared correlation parameter. Retrying cannot supply the missing field, so the
+     * failure is permanent and the message routes to the DLQ instead of redelivery.
+     */
+    MISSING_CORRELATION_VALUE("VAL_EVENTING_MISSING_CORRELATION_VALUE");
 
     private final String exceptionCode;
 

@@ -1,7 +1,5 @@
 package org.flowable.eventregistry.spring.nats.channel;
 
-import java.time.Duration;
-
 import org.flowable.eventregistry.model.InboundChannelModel;
 
 public class NatsInboundChannelModel extends InboundChannelModel {
@@ -11,7 +9,9 @@ public class NatsInboundChannelModel extends InboundChannelModel {
     private boolean jetstream;
     private String durableName;
     private String deliverPolicy = "all";
-    private Duration ackWait = Duration.ofSeconds(30);
+    // JSON-safe: java.time.Duration here broke engine-side channel deployment (Jackson
+    // cannot serialize it without JavaTimeModule) — found by EventStartedProcessIntegrationTest.
+    private long ackWaitSeconds = 30;
     private int maxDeliver = 5;
     private String dlqSubject;
     private boolean autoCreateStream;
@@ -57,12 +57,12 @@ public class NatsInboundChannelModel extends InboundChannelModel {
         this.deliverPolicy = deliverPolicy;
     }
 
-    public Duration getAckWait() {
-        return ackWait;
+    public long getAckWaitSeconds() {
+        return ackWaitSeconds;
     }
 
-    public void setAckWait(Duration ackWait) {
-        this.ackWait = ackWait;
+    public void setAckWaitSeconds(long ackWaitSeconds) {
+        this.ackWaitSeconds = ackWaitSeconds;
     }
 
     public int getMaxDeliver() {

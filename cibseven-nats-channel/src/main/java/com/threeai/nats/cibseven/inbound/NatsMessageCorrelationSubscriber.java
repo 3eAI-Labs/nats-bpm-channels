@@ -9,6 +9,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import com.threeai.nats.cibseven.eventing.EventDefinition;
+import com.threeai.nats.cibseven.eventing.EventingPayloadMapper;
 import com.threeai.nats.core.NatsHeaderUtils;
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
 import io.nats.client.Connection;
@@ -28,6 +30,8 @@ public class NatsMessageCorrelationSubscriber {
     private final RuntimeService runtimeService;
     private final SubscriptionConfig config;
     private final NatsChannelMetrics metrics;
+    /** Non-null on the definition path (docs/12 D-C v2); null keeps legacy semantics. */
+    private final EventDefinition definition;
 
     private Dispatcher dispatcher;
     private ExecutorService executor;
@@ -38,6 +42,17 @@ public class NatsMessageCorrelationSubscriber {
         this.runtimeService = runtimeService;
         this.config = config;
         this.metrics = metrics;
+        this.definition = null;
+    }
+
+    /** Definition-path constructor (docs/12): typed payload + correlation parameters. */
+    public NatsMessageCorrelationSubscriber(Connection connection, RuntimeService runtimeService,
+            SubscriptionConfig config, NatsChannelMetrics metrics, EventDefinition definition) {
+        this.connection = connection;
+        this.runtimeService = runtimeService;
+        this.config = config;
+        this.metrics = metrics;
+        this.definition = definition;
     }
 
     public void subscribe() {
@@ -92,15 +107,28 @@ public class NatsMessageCorrelationSubscriber {
 
             String payload = new String(data, StandardCharsets.UTF_8);
 
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("natsPayload", payload);
-            variables.put("natsSubject", msg.getSubject());
+            Map<String, Object> variables;
+            Map<String, Object> correlationValues = Map.of();
+            if (definition != null) {
+                // Definition path (docs/12 D-C v2): typed payload variables, no natsPayload blob.
+                com.fasterxml.jackson.databind.JsonNode root = EventingPayloadMapper.parse(payload);
+                variables = EventingPayloadMapper.typedVariables(root, definition.payloadTypes());
+                correlationValues = EventingPayloadMapper.correlationValues(root,
+                        definition.correlationParameterTypes());
+            } else {
+                variables = new HashMap<>();
+                variables.put("natsPayload", payload);
+                variables.put("natsSubject", msg.getSubject());
+            }
 
             String businessKey = resolveBusinessKey(msg, payload);
 
             MessageCorrelationBuilder builder = runtimeService
                     .createMessageCorrelation(config.getMessageName())
                     .setVariables(variables);
+            for (Map.Entry<String, Object> correlation : correlationValues.entrySet()) {
+                builder.processInstanceVariableEquals(correlation.getKey(), correlation.getValue());
+            }
 
             if (businessKey != null) {
                 builder.processInstanceBusinessKey(businessKey);
@@ -118,6 +146,15 @@ public class NatsMessageCorrelationSubscriber {
                     kv("message_name", config.getMessageName()),
                     kv("has_business_key", businessKey != null));
 
+        } catch (EventingPayloadMapper.MissingCorrelationValueException e) {
+            // Permanent mapping failure; core NATS has no redelivery, so this is a WARN drop.
+            log.warn("Dropping event: payload lacks a declared correlation parameter",
+                    kv("subject", msg.getSubject()),
+                    kv("message_name", config.getMessageName()),
+                    kv("detail", e.getMessage()));
+            if (metrics != null) {
+                metrics.consumeErrorCount(config.getSubject(), config.getMessageName()).increment();
+            }
         } catch (Exception e) {
             log.error("Error correlating message",
                     kv("subject", msg.getSubject()),
@@ -135,31 +172,11 @@ public class NatsMessageCorrelationSubscriber {
             return NatsHeaderUtils.extractHeader(msg, config.getBusinessKeyHeader());
         }
         if (config.getBusinessKeyVariable() != null) {
-            // Simple JSON field extraction: parse "fieldName":"value" from payload
-            return extractJsonField(payload, config.getBusinessKeyVariable());
+            // D-F v2 (behavior change, CHANGELOG'd): Jackson top-level-only scalar read —
+            // nested fields are no longer found; numeric scalars now return the correct value.
+            return EventingPayloadMapper.topLevelScalarAsText(payload, config.getBusinessKeyVariable());
         }
         return null;
     }
 
-    private String extractJsonField(String json, String fieldName) {
-        // Simple extraction for top-level string fields
-        String pattern = "\"" + fieldName + "\"";
-        int idx = json.indexOf(pattern);
-        if (idx < 0) {
-            return null;
-        }
-        int colonIdx = json.indexOf(':', idx + pattern.length());
-        if (colonIdx < 0) {
-            return null;
-        }
-        int quoteStart = json.indexOf('"', colonIdx + 1);
-        if (quoteStart < 0) {
-            return null;
-        }
-        int quoteEnd = json.indexOf('"', quoteStart + 1);
-        if (quoteEnd < 0) {
-            return null;
-        }
-        return json.substring(quoteStart + 1, quoteEnd);
-    }
 }

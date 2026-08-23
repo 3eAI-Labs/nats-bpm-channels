@@ -700,3 +700,159 @@ database cost. Delivery is at-least-once and a job can be EXECUTED twice under r
 (never completed twice): workers must stay idempotent. The sweep's leader election uses the
 shared `a2-sweep-leader` KV bucket (key `sweep-leader.flowable`) — the `a2-` prefix is
 historical, not a misconfiguration.
+
+## Starting processes from events
+
+Both engine families can START a new process instance from an inbound NATS message — no
+polling, no custom code. The mechanics differ per family; both paths are integration-tested
+(`EventStartedProcessIntegrationTest`, `MessageStartEventIntegrationTest`).
+
+**Flowable (Event Registry start event).** Deploy three artifacts: an event definition, a NATS
+channel definition, and a BPMN whose start event references the event type:
+
+```json
+{ "key": "orderEvent", "name": "Order Event",
+  "correlationParameters": [],
+  "payload": [ { "name": "orderId", "type": "string" } ] }
+```
+```json
+{ "key": "orderInboundChannel", "channelType": "inbound", "type": "nats",
+  "deserializerType": "json",
+  "channelEventKeyDetection": { "fixedValue": "orderEvent" },
+  "subject": "order.new" }
+```
+```xml
+<startEvent id="start">
+  <extensionElements>
+    <flowable:eventType>orderEvent</flowable:eventType>
+    <flowable:eventOutParameter source="orderId" sourceType="string" target="orderId"/>
+  </extensionElements>
+</startEvent>
+```
+
+Every message on `order.new` starts a new instance; `eventOutParameter` maps payload fields to
+process variables. The start-vs-correlate decision belongs to the engine's own event-registry
+consumer — the adapter only delivers the event.
+
+**Camunda 7 lineage (message start event).** The correlation subscriber's
+`correlateWithResult()` matches a BPMN message START event subscription exactly as it matches a
+waiting execution. Model a message start event and point a subscription at its message name:
+
+```xml
+<message id="m1" name="OrderMessage"/>
+<process id="orderStart" isExecutable="true" camunda:historyTimeToLive="P30D">
+  <startEvent id="s"><messageEventDefinition messageRef="m1"/></startEvent>
+  ...
+```
+```yaml
+spring.nats.cibseven.subscriptions:
+  - subject: order.new
+    message-name: OrderMessage
+```
+
+Each inbound message starts an instance carrying the standard `natsPayload` and `natsSubject`
+variables (plus the business key, if the message carries the header).
+
+> **Correlation caveat (lineage):** if the same message name has BOTH a start-event subscription
+> and waiting executions, Camunda-lineage correlation throws on ambiguity. Use distinct message
+> names for start events and intermediate catch events.
+
+## Declarative event and channel definitions on the Camunda lineage (0.11.0)
+
+Flowable has always taken its NATS wiring from deployable Event Registry files. From 0.11.0
+the Camunda-lineage adapters (Camunda 7, CIBSeven, CadenzaFlow) accept the same idea: a
+portable JSON subset of Flowable's `.event`/`.channel` formats that deploys through the
+engine's own deployment API — one definition format across all four engines.
+
+### Enabling
+
+The capability is OFF by default. Per engine:
+
+```yaml
+spring:
+  nats:
+    cibseven:            # or camunda / cadenzaflow
+      eventing:
+        enabled: true
+        reconcile-period-seconds: 60      # default
+        definitions:
+          locations:                       # optional secondary source
+            - classpath*:eventing/*.event
+            - classpath*:eventing/*.channel
+```
+
+With the gate closed nothing is created — no deployer, no reconciler, no subscriptions.
+
+### The portable files
+
+```json
+// order.event
+{ "key": "orderEvent", "name": "Order Event",
+  "correlationParameters": [ { "name": "orderId", "type": "string" } ],
+  "payload": [ { "name": "amount", "type": "double" } ],
+  "extension": { "messageName": "OrderMessage" } }
+```
+
+```json
+// order.channel
+{ "key": "orderChannel", "channelType": "inbound", "type": "nats",
+  "channelEventKeyDetection": { "fixedValue": "orderEvent" },
+  "queueGroup": "eventing-orders", "subject": "evt.order.accept" }
+```
+
+Deploy them with your BPMN through the normal deployment API (or drop them into
+`definitions.locations`). The same two files work unchanged on Flowable — that equivalence is
+pinned by a parsed-model parity test in the build.
+
+Rules the parser enforces (rejection over silent discard):
+
+- `queueGroup` is **mandatory** — it is what makes a multi-node cluster handle each event
+  once. `deliverGroup` is forbidden in portable files; `queueGroup` is the shared name.
+- Types come from the `EventPayloadTypes` dictionary: `string`, `integer`, `long`, `double`,
+  `boolean`, `json` (raw string in v1).
+- One subject carries one event type: only `channelEventKeyDetection.fixedValue` is
+  supported; `jsonField`/`jsonPointerExpression`/XPath/delegate forms are rejected.
+- Reserved namespaces (`jobs.`, `ewjobs.`, outbound roots) are rejected at deployment.
+- Lineage-only knobs ride `extension` (Flowable's official escape hatch): `messageName` maps
+  the definition to the BPMN message name (defaults to the event key).
+
+### Semantics
+
+- **Deployment is transactional (G1):** definitions are parsed and validated inside the
+  deployment transaction with zero broker I/O. A broken definition fails the whole
+  deployment; a rollback leaves no subscription behind.
+- **A per-node reconciler is the registration authority (G2):** subscriptions are derived
+  from engine state at boot, on a fixed-delay period, and on post-commit nudges. Restart and
+  second nodes converge automatically; deleting a deployment removes its subscriptions.
+- **Correlation:** each `correlationParameters` entry becomes a
+  `processInstanceVariableEquals` filter — a message whose keys match no waiting instance
+  does not advance anything. Payload fields land as typed process variables; the definition
+  path writes **no** `natsPayload` blob. A payload missing a declared correlation field is a
+  permanent failure: dropped with a WARN on core NATS, routed to the DLQ
+  (`VAL_EVENTING_MISSING_CORRELATION_VALUE`) on JetStream.
+- **Start events:** a definition with `correlationParameters` is blocked
+  (`VAL_EVENTING_START_WITH_CORRELATION`) while a message START subscription exists for its
+  message name — the engine's start fallback ignores correlation keys, so this combination
+  would silently start instances on wrong-key messages.
+- **Redeploy (G3):** same key = update in place, one durable. If consumer-affecting knobs
+  change, the durable is re-created with the new configuration (its delivery state resets);
+  the brief unregister→register window is inherent to redeploys.
+- **Tenants (documented limitation):** the deployment's tenant id keys the registry
+  (`tenant#key`), but v1 correlation does **not** add a tenant filter —
+  carried-but-not-filtering.
+- **Legacy YAML** (`spring.nats.<engine>.subscriptions`) keeps working unchanged, including
+  its `natsPayload`/`natsSubject` variables; both mechanisms coexist.
+
+### Outbound definitions (partial parity)
+
+`channelType: "outbound"` files carry ONLY classification and allowlist, under `extension`
+(`messageType` required, `critical`, `variableAllowlist`). The Flowable-mandatory `subject`
+is read but never applied — outbound subject grammar stays engine-governed. Covered message
+types override `spring.nats.outbound.*` YAML wholesale; removing the definition reverts them.
+
+### Breaking change in 0.11.0 (legacy path)
+
+`businessKeyVariable` extraction now uses a real JSON parser (top-level fields only). Numeric
+business keys now work correctly (`{"orderId":42}` used to yield null — or the next field's
+name); nested fields are **no longer found**. If you relied on nested extraction, move the
+field to the payload's top level.

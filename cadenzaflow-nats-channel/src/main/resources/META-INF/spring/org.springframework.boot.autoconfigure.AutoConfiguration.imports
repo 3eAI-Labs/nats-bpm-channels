@@ -1,1 +1,2 @@
 com.threeai.nats.cadenzaflow.config.CadenzaFlowNatsAutoConfiguration
+com.threeai.nats.cadenzaflow.config.CadenzaFlowEventingAutoConfiguration

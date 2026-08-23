@@ -4,6 +4,87 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.11.0] — 2026-08-24 — Event-Registry parity for the Camunda lineage
+
+> **Distribution:** not published to Maven Central (decision 2026-08-22; Central remains the
+> Apache-era archive at 0.8.1). Source is available through the public mirror under BSL 1.1 —
+> build with `mvn install` for development and testing; production use requires the
+> commercial license.
+
+### Added
+
+- **Event-Registry parity for the Camunda lineage — declarative `.event`/`.channel`
+  definitions (docs/12 v2.1, ER-parity slices 1–5).** A portable JSON subset of Flowable's
+  event/channel formats now deploys through the engine's own deployment API on CIBSeven:
+  strict parser (unknown properties, unsupported features and missing `queueGroup` REJECT
+  with `VAL_EVENTING_*` codes), per-node reconciler as the registration authority
+  (boot + periodic + post-commit nudges; winner per `tenantId#definitionKey` by
+  `(deployTime, deploymentId)`; per-definition failure isolation with exponential backoff),
+  tx-safe deployer (parse/validate inside the deployment transaction, zero broker I/O),
+  and a registration registry with durable/(subject,queueGroup) conflict rejection.
+- **Real-engine acceptance suite + three-module mirrors + Flowable portability pin
+  (slice 7).** `EventingParityAcceptanceTest` runs in all three lineage modules against a
+  real engine and a real broker: tx-safe deploy/rollback (G1), reconciler restart/DELETE
+  convergence (G2), single-durable redeploy with authoritative consumer-config reconcile
+  (G3 — a changed knob deletes and re-creates the durable, delivery state resets),
+  correlation-parameter matching with typed payload and wrong-key non-advance, reserved
+  subject THROW, legacy-YAML coexistence. `PortableDefinitionParityTest` (Flowable module)
+  parses the byte-identical JSON pair through Flowable's strict databind and pins
+  parsed-model equality (G4). Camunda/CadenzaFlow eventing packages are byte-parity mirrors
+  of the CIBSeven originals. Documented limitation (G6 fail-path): tenant ids key the
+  registry but v1 correlation does not add a tenant filter.
+- **Eventing auto-configuration, gated OFF by default (slice 6, docs/12 D-F v2).**
+  `spring.nats.cibseven.eventing.enabled=true` activates the whole chain: the tx-safe
+  `EventingDeployer` joins `customPostDeployers` via a `ProcessEnginePlugin`, the reconciler
+  runs on a single-flight fixed-delay scheduler with coalesced post-commit nudges (F-2), and
+  `definitions.locations` adds a Spring-resource secondary source (tenantless; an engine
+  deployment with the same key wins with one WARN, F-4a). Absent the gate the capability is
+  completely inert — no beans exist.
+- **Outbound classification overlay (slice 6, docs/12 D-D v2, partial parity).** Outbound
+  `.channel` definitions (`channelType: "outbound"`) carry ONLY classification + allowlist
+  under `extension` (`messageType` required, `critical`, `variableAllowlist`); the
+  Flowable-mandatory `subject` is read but never applied (engine-governed subject grammar,
+  WARN once). Definitions overlay the `spring.nats.outbound.*` YAML per message type through
+  an engine-scoped `@Primary` read surface (F-7 — two engines in one context cannot clobber
+  each other's overlays); removing the definition reverts the key to YAML.
+- **Definition-aware correlation (slice 5).** Subscribers constructed with an
+  `EventDefinition` map payloads through the declared `EventPayloadTypes` dictionary
+  (string/integer/long/double/boolean/json) into typed process variables — no `natsPayload`
+  blob — and add `processInstanceVariableEquals` per declared correlation parameter. A
+  payload missing a declared correlation field is a PERMANENT failure: WARN-drop on core
+  NATS, DLQ (`VAL_EVENTING_MISSING_CORRELATION_VALUE`) on JetStream.
+
+### Changed
+
+- **BREAKING — legacy `businessKeyVariable` extraction now uses a real JSON parser**
+  (Jackson, top-level fields only; slice 5). The old hand-rolled `indexOf` scan was
+  depth-unaware and quote-only. Two visible differences: (1) numeric/boolean business keys
+  now WORK — `{"orderId":42}` with `businessKeyVariable=orderId` used to yield null (or,
+  worse, the NEXT field's name for `{"orderId":123,"name":"x"}`), now yields `"42"`/`"123"`;
+  (2) NESTED fields are no longer found — the old scan matched `"orderId"` anywhere in the
+  document, including inside nested objects; the parser reads only top-level scalars. If you
+  relied on nested extraction, promote the field to the top level of your payload.
+
+### Added (earlier this cycle)
+
+- **Start-by-event integration tests and guide** (decision 2026-08-23). A NATS message can
+  START a process on both families — Flowable through an Event Registry start event (full
+  production path: engine-deployed channel + event definitions, payload mapped via
+  `eventOutParameter`), the Camunda lineage through a BPMN message start event matched by the
+  correlation subscriber's `correlateWithResult()`. Both paths now carry dedicated
+  integration tests against real engines and a USER_GUIDE recipe ("Starting processes from
+  events"), including the lineage's correlation-ambiguity caveat.
+
+### Fixed
+
+- **Engine-side deployment of NATS channel definitions threw `FlowableEventJsonException`.**
+  `NatsInboundChannelModel.ackWait` was a `java.time.Duration`, which Jackson cannot serialize
+  without the JavaTimeModule — any `.channel` resource deployed through the event repository
+  failed at the deployment cache step. Found by the new start-by-event test (existing tests
+  registered the processor directly and never crossed the serialization path). The field is now
+  `ackWaitSeconds` (long); the old `ackWait` JSON knob could never round-trip, and no adapter
+  code consumed it.
+
 ## [0.10.0] — 2026-08-22 — Flowable external-worker dispatch; first release under BSL 1.1
 
 > **Distribution:** this and later releases are NOT published to Maven Central (decision

@@ -1,1 +1,2 @@
 com.threeai.nats.camunda.config.CamundaNatsAutoConfiguration
+com.threeai.nats.camunda.config.CamundaEventingAutoConfiguration
