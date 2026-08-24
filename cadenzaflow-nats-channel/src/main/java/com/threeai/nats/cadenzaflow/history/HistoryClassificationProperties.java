@@ -9,14 +9,39 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * {@code spring.nats.cadenzaflow.history.*} — audit-critical/bulk classification map + pseudonymization
  * opt-in (PO-Q5, BA-Q4/Q5). Deliberately a SEPARATE config-tree from
- * {@code A2Properties}/{@code SubscriptionConfig} (increment 1 `A2ConsumerConfig` naming-collision
- * lesson).
+ * {@code A2Properties}/{@code SubscriptionConfig} (increment 1 `A2ConsumerConfig`
+ * naming-collision lesson).
  *
  * <p>The cadenzaflow mirror uses the identical class shape under prefix
  * {@code spring.nats.cadenzaflow.history}.
  */
 @ConfigurationProperties(prefix = "spring.nats.cadenzaflow.history")
 public class HistoryClassificationProperties {
+    /**
+     * G4-P/3 (2026-08-25): post-commit publish varsayilan ASYNC (sinirli-ucus; tavanda
+     * caller bloklanir). Kontrat degismez — kayip ayni telafi yoluna duser. {@code false}
+     * = eski senkron yol (kacis kapisi).
+     */
+    private boolean asyncPublish = true;
+
+    private int asyncPublishMaxInFlight = 256;
+
+    public boolean isAsyncPublish() {
+        return asyncPublish;
+    }
+
+    public void setAsyncPublish(boolean asyncPublish) {
+        this.asyncPublish = asyncPublish;
+    }
+
+    public int getAsyncPublishMaxInFlight() {
+        return asyncPublishMaxInFlight;
+    }
+
+    public void setAsyncPublishMaxInFlight(int asyncPublishMaxInFlight) {
+        this.asyncPublishMaxInFlight = asyncPublishMaxInFlight;
+    }
+
 
     /**
      * Master switch for the whole history-offload capability. When false, none of the
@@ -35,7 +60,7 @@ public class HistoryClassificationProperties {
      */
     private boolean enabled = false;
 
-    /** PO-Q5 default — overridable per tenant. */
+    /** PO-Q5 default — tenants may override. */
     private Set<String> auditCriticalClasses = new LinkedHashSet<>(HistoryClassNames.DEFAULT_AUDIT_CRITICAL_CLASSES);
 
     /** US-G3 — tenant opt-in (default false). */

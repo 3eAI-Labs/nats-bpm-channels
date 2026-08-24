@@ -4,6 +4,42 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.13.0] — 2026-08-25 — profiled and tuned: adapter per-task overhead halved
+
+> **Distribution:** not published to Maven Central (decision 2026-08-22; Central remains the
+> Apache-era archive at 0.8.1). Source is available through the public mirror under BSL 1.1 —
+> build with `mvn install` for development and testing; production use requires the
+> commercial license.
+
+### Changed
+
+- **ALL post-commit publishers are asynchronous by default (G4-P/3).** The same
+  bounded-in-flight treatment now covers the three remaining hot-path copies of the
+  pattern: history events (`spring.nats.<engine>.history.async-publish` — the hottest
+  path: several events per task at full history), external-worker dispatch
+  (`spring.nats.flowable.external-worker.async-publish`) and outbound handoff
+  (`spring.nats.outbound.async-publish`). Each keeps its own recovery contract unchanged
+  (reconciliation / sweep / best-effort) and its own escape hatch (=false → the old
+  synchronous path verbatim). Deliberately still synchronous: the shard router (custody
+  requires ack-after-ACK; virtual threads make the wait cheap), the outbox relays (a row
+  may only be marked SENT after a confirmed ACK) and the orphan sweeps (leader-only cold
+  recovery batches). Measured on the same steady-state profile, cumulatively with the A2
+  change: dispatch segment mean 37.2→15.3 ms, reply-completion 18.7→9.5 ms, total adapter
+  overhead per task 56.6→25.6 ms (−55%); queue wait and simulated work unchanged.
+- **A2 post-commit publish is asynchronous by default (G4-P profile finding).** The
+  per-task synchronous JetStream publish made the engine thread wait one broker ACK
+  round-trip inside the measured dispatch segment. Publishing now goes through a
+  bounded-in-flight async publisher (default cap 256; the caller blocks at the cap, so a
+  slow broker degrades gracefully toward the old synchronous behavior — never toward
+  unbounded memory). The contract is unchanged: a failed publish logs the same WARN and
+  increments the same counter, and the orphan sweep collects it either way. Escape hatch:
+  `spring.nats.<engine>.a2.async-publish=false` restores the synchronous path verbatim.
+  Note: `dispatch latency` timer now measures enqueue→ACK asynchronously. Measured on the
+  same steady-state profile that motivated the change (100k tasks, ~500 task/s): dispatch
+  segment mean 37.2→24.1 ms (−35%), reply-completion segment 18.7→12.5 ms (−33%, the
+  completing thread no longer waits on the next task's publish ACK), total adapter overhead
+  per task ~56.6→~37.2 ms (−34%); delivery-queue wait unchanged at 0.6 ms.
+
 ## [0.12.1] — 2026-08-24 — sharding hotfix: shard-scoped leadership leases
 
 ### Fixed

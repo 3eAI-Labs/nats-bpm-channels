@@ -105,4 +105,54 @@ class HistoryPostCommitPublisherTest {
             throw new RuntimeException(e);
         }
     }
+
+    // --- G4-P/3 (2026-08-25): async publish yolu ---
+
+    @org.junit.jupiter.api.Test
+    void asyncMode_ackIncrementsCounter_afterCompletion() throws Exception {
+        io.nats.client.JetStream js = org.mockito.Mockito.mock(io.nats.client.JetStream.class);
+        java.util.concurrent.CompletableFuture<io.nats.client.api.PublishAck> future =
+                new java.util.concurrent.CompletableFuture<>();
+        org.mockito.Mockito.when(js.publishAsync(org.mockito.ArgumentMatchers.any(
+                io.nats.client.impl.NatsMessage.class))).thenReturn(future);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        HistoryPostCommitPublisher publisher = new HistoryPostCommitPublisher(js,
+                new com.threeai.nats.core.metrics.NatsChannelMetrics(registry),
+                new com.threeai.nats.core.jetstream.BoundedAsyncPublisher(js, 4));
+
+        org.cadenzaflow.bpm.engine.impl.history.event.HistoricActivityInstanceEventEntity ev =
+                new org.cadenzaflow.bpm.engine.impl.history.event.HistoricActivityInstanceEventEntity();
+        ev.setId("h-async-1");
+        ev.setEventType("start");
+        ev.setProcessInstanceId("pi-async");
+        publisher.publish(ev, "ACTINST", "cadenzaflow");
+        org.mockito.Mockito.verify(js, org.mockito.Mockito.never()).publish(
+                org.mockito.ArgumentMatchers.any(io.nats.client.impl.NatsMessage.class));
+        future.complete(null);
+        org.assertj.core.api.Assertions.assertThat(
+                registry.get("nats.history.postcommit.published").counter().count()).isEqualTo(1.0);
+    }
+
+    @org.junit.jupiter.api.Test
+    void asyncMode_failure_doesNotThrow_sameToleranceAsSync() throws Exception {
+        io.nats.client.JetStream js = org.mockito.Mockito.mock(io.nats.client.JetStream.class);
+        java.util.concurrent.CompletableFuture<io.nats.client.api.PublishAck> future =
+                new java.util.concurrent.CompletableFuture<>();
+        org.mockito.Mockito.when(js.publishAsync(org.mockito.ArgumentMatchers.any(
+                io.nats.client.impl.NatsMessage.class))).thenReturn(future);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        HistoryPostCommitPublisher publisher = new HistoryPostCommitPublisher(js,
+                new com.threeai.nats.core.metrics.NatsChannelMetrics(registry),
+                new com.threeai.nats.core.jetstream.BoundedAsyncPublisher(js, 4));
+
+        org.cadenzaflow.bpm.engine.impl.history.event.HistoricActivityInstanceEventEntity ev =
+                new org.cadenzaflow.bpm.engine.impl.history.event.HistoricActivityInstanceEventEntity();
+        ev.setId("h-async-1");
+        ev.setEventType("start");
+        ev.setProcessInstanceId("pi-async");
+        publisher.publish(ev, "ACTINST", "cadenzaflow"); // atmaz
+        future.completeExceptionally(new java.io.IOException("no response")); // callback WARN'lar, atmaz
+    }
 }

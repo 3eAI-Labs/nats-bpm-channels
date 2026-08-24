@@ -27,10 +27,19 @@ public class EwPostCommitPublisher {
     private final NatsChannelMetrics metrics;
     private final EwLockConfig lockConfig;
 
+    /** Non-null = async mod (G4-P/3, default). Null = senkron kacis kapisi. */
+    private final com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher;
+
     public EwPostCommitPublisher(JetStream jetStream, NatsChannelMetrics metrics, EwLockConfig lockConfig) {
+        this(jetStream, metrics, lockConfig, null);
+    }
+
+    public EwPostCommitPublisher(JetStream jetStream, NatsChannelMetrics metrics, EwLockConfig lockConfig,
+            com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher) {
         this.jetStream = jetStream;
         this.metrics = metrics;
         this.lockConfig = lockConfig;
+        this.asyncPublisher = asyncPublisher;
     }
 
     public void publish(ExternalWorkerJob job, String topic, String nonce,
@@ -43,6 +52,23 @@ public class EwPostCommitPublisher {
         String subject = "ewjobs." + topic;
         try {
             NatsMessage msg = EwJobMessageFactory.build(job, topic, nonce, businessKey, variables);
+            if (asyncPublisher != null) {
+                // G4-P/3: A2 ile ayni desen — kayip publish'i sweep toplar, yuzey degismez.
+                String jobId = job.getId();
+                asyncPublisher.publish(msg, () -> {
+                    if (metrics != null) {
+                        metrics.jsPublishCount(subject, topic).increment();
+                    }
+                }, error -> {
+                    log.warn("Post-commit JetStream publish failed (async) — orphan will be"
+                            + " collected by sweep after lock expiry + engine reset",
+                            kv("job_id", jobId), kv("topic", topic), error);
+                    if (metrics != null) {
+                        metrics.jsPublishErrorCount(subject, topic).increment();
+                    }
+                });
+                return;
+            }
             jetStream.publish(msg);
             if (metrics != null) {
                 metrics.jsPublishCount(subject, topic).increment();

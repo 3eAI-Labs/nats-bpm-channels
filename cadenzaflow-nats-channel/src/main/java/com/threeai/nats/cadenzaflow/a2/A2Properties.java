@@ -15,6 +15,32 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "spring.nats.cadenzaflow.a2")
 public class A2Properties {
 
+    /**
+     * G4-P optimizasyonu (2026-08-25): post-commit publish varsayilan olarak ASYNC —
+     * motor thread'i broker ACK'ini beklemez; kontrat degismez (kayip publish'i her iki
+     * modda da sweep toplar). {@code false} = eski senkron yol (kacis kapisi).
+     */
+    private boolean asyncPublish = true;
+
+    /** Async modda ayni anda ACK bekleyen publish tavani; asilirsa caller BLOKLANIR. */
+    private int asyncPublishMaxInFlight = 256;
+
+    public boolean isAsyncPublish() {
+        return asyncPublish;
+    }
+
+    public void setAsyncPublish(boolean asyncPublish) {
+        this.asyncPublish = asyncPublish;
+    }
+
+    public int getAsyncPublishMaxInFlight() {
+        return asyncPublishMaxInFlight;
+    }
+
+    public void setAsyncPublishMaxInFlight(int asyncPublishMaxInFlight) {
+        this.asyncPublishMaxInFlight = asyncPublishMaxInFlight;
+    }
+
     /** BR-A2-003 — single cluster-wide constant lock owner. */
     private String sentinelWorkerId = "a2-jetstream-bridge";
     /** Only LITERAL {@code camunda:topic} values. */

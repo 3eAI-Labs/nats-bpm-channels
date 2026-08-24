@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import com.threeai.nats.core.metrics.NatsChannelMetrics;
+import com.threeai.nats.core.jetstream.BoundedAsyncPublisher;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.JetStream;
 import io.nats.client.impl.NatsMessage;
@@ -93,5 +94,54 @@ class A2PostCommitPublisherTest {
         when(task.getTopicName()).thenReturn(topic);
         when(task.getBusinessKey()).thenReturn(businessKey);
         return task;
+    }
+
+    // --- G4-P (2026-08-25): async publish yolu ---
+
+    @org.junit.jupiter.api.Test
+    void asyncMode_publishesViaAsyncPublisher_ackIncrementsCounter() throws Exception {
+        io.nats.client.JetStream js = org.mockito.Mockito.mock(io.nats.client.JetStream.class);
+        java.util.concurrent.CompletableFuture<io.nats.client.api.PublishAck> future =
+                new java.util.concurrent.CompletableFuture<>();
+        org.mockito.Mockito.when(js.publishAsync(org.mockito.ArgumentMatchers.any(
+                io.nats.client.impl.NatsMessage.class))).thenReturn(future);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        A2PostCommitPublisher publisher = new A2PostCommitPublisher(js,
+                new NatsChannelMetrics(registry), lockValidator,
+                new BoundedAsyncPublisher(js, 4));
+
+        publisher.publish(mockTask("t-async", "orderTopic", null));
+        org.mockito.Mockito.verify(js).publishAsync(org.mockito.ArgumentMatchers.any(
+                io.nats.client.impl.NatsMessage.class));
+        org.mockito.Mockito.verify(js, org.mockito.Mockito.never()).publish(
+                org.mockito.ArgumentMatchers.any(io.nats.client.impl.NatsMessage.class));
+        org.assertj.core.api.Assertions.assertThat(registry.counter("nats.jetstream.outbound.published",
+                "subject", "jobs.orderTopic", "channel", "orderTopic").count()).isZero();
+
+        future.complete(null); // ACK gelir -> sayac callback'te artar
+        org.assertj.core.api.Assertions.assertThat(registry.counter("nats.jetstream.outbound.published",
+                "subject", "jobs.orderTopic", "channel", "orderTopic").count()).isEqualTo(1.0);
+    }
+
+    @org.junit.jupiter.api.Test
+    void asyncMode_ackFailure_sameSurfaceAsSync_errorCounterNoThrow() throws Exception {
+        io.nats.client.JetStream js = org.mockito.Mockito.mock(io.nats.client.JetStream.class);
+        java.util.concurrent.CompletableFuture<io.nats.client.api.PublishAck> future =
+                new java.util.concurrent.CompletableFuture<>();
+        org.mockito.Mockito.when(js.publishAsync(org.mockito.ArgumentMatchers.any(
+                io.nats.client.impl.NatsMessage.class))).thenReturn(future);
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        A2PostCommitPublisher publisher = new A2PostCommitPublisher(js,
+                new NatsChannelMetrics(registry), lockValidator,
+                new BoundedAsyncPublisher(js, 4));
+
+        publisher.publish(mockTask("t-async-f", "orderTopic", null)); // atmaz
+        future.completeExceptionally(new java.io.IOException("no response"));
+
+        org.assertj.core.api.Assertions.assertThat(registry.counter("nats.jetstream.outbound.errors",
+                "subject", "jobs.orderTopic", "channel", "orderTopic").count()).isEqualTo(1.0);
+        // kontrat: kayip publish'i sweep toplar — publisher hicbir sey firlatmaz/yeniden denemez
     }
 }

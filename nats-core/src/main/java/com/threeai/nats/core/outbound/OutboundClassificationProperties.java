@@ -36,6 +36,31 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "spring.nats.outbound")
 public class OutboundClassificationProperties {
+    /**
+     * G4-P/3 (2026-08-25): post-commit publish varsayilan ASYNC (sinirli-ucus; tavanda
+     * caller bloklanir). Kontrat degismez — kayip ayni telafi yoluna duser. {@code false}
+     * = eski senkron yol (kacis kapisi).
+     */
+    private boolean asyncPublish = true;
+
+    private int asyncPublishMaxInFlight = 256;
+
+    public boolean isAsyncPublish() {
+        return asyncPublish;
+    }
+
+    public void setAsyncPublish(boolean asyncPublish) {
+        this.asyncPublish = asyncPublish;
+    }
+
+    public int getAsyncPublishMaxInFlight() {
+        return asyncPublishMaxInFlight;
+    }
+
+    public void setAsyncPublishMaxInFlight(int asyncPublishMaxInFlight) {
+        this.asyncPublishMaxInFlight = asyncPublishMaxInFlight;
+    }
+
 
     /**
      * Master switch for the outbound-handoff capability. When false the relay, its leader

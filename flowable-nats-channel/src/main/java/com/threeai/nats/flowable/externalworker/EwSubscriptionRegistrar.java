@@ -78,7 +78,11 @@ public class EwSubscriptionRegistrar {
                 (ProcessEngineConfigurationImpl) processEngine.getProcessEngineConfiguration();
         CreateExternalWorkerJobInterceptor existing =
                 engineConfiguration.getCreateExternalWorkerJobInterceptor();
-        EwPostCommitPublisher publisher = new EwPostCommitPublisher(jetStream, metrics, lockConfig);
+        EwPostCommitPublisher publisher = new EwPostCommitPublisher(jetStream, metrics, lockConfig,
+                properties.isAsyncPublish()
+                        ? new com.threeai.nats.core.jetstream.BoundedAsyncPublisher(
+                                jetStream, properties.getAsyncPublishMaxInFlight())
+                        : null); // kacis: spring.nats.flowable.external-worker.async-publish=false
         engineConfiguration.setCreateExternalWorkerJobInterceptor(
                 new EwCreateJobInterceptor(topicConfig, lockConfig, sentinel, publisher, existing));
         if (existing != null) {

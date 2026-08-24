@@ -206,8 +206,15 @@ public class CadenzaFlowNatsAutoConfiguration {
     @ConditionalOnMissingBean
     public A2PostCommitPublisher a2PostCommitPublisher(JetStream jetStream,
             @Autowired(required = false) NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator,
-            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
-        A2PostCommitPublisher publisher = new A2PostCommitPublisher(jetStream, metrics, lockValidator);
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology,
+            A2Properties a2Properties) {
+        com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher =
+                a2Properties.isAsyncPublish()
+                        ? new com.threeai.nats.core.jetstream.BoundedAsyncPublisher(
+                                jetStream, a2Properties.getAsyncPublishMaxInFlight())
+                        : null; // kacis kapisi: spring.nats.cadenzaflow.a2.async-publish=false
+        A2PostCommitPublisher publisher = new A2PostCommitPublisher(jetStream, metrics,
+                lockValidator, asyncPublisher);
         if (shardTopology != null) {
             publisher.setShardTopology(shardTopology); // envelope gains the Reply-Subject address
         }
@@ -314,8 +321,13 @@ public class CadenzaFlowNatsAutoConfiguration {
     @ConditionalOnProperty(prefix = "spring.nats.cadenzaflow.history", name = "enabled",
             havingValue = "true")
     public HistoryPostCommitPublisher historyPostCommitPublisher(JetStream jetStream,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new HistoryPostCommitPublisher(jetStream, metrics);
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            HistoryClassificationProperties classificationProperties) {
+        return new HistoryPostCommitPublisher(jetStream, metrics,
+                classificationProperties.isAsyncPublish()
+                        ? new com.threeai.nats.core.jetstream.BoundedAsyncPublisher(
+                                jetStream, classificationProperties.getAsyncPublishMaxInFlight())
+                        : null); // kacis: spring.nats.cadenzaflow.history.async-publish=false
     }
 
     /**
@@ -549,8 +561,13 @@ public class CadenzaFlowNatsAutoConfiguration {
     @ConditionalOnProperty(prefix = "spring.nats.outbound", name = "enabled",
             havingValue = "true")
     public OutboundPostCommitPublisher outboundPostCommitPublisher(JetStream jetStream,
-            @Autowired(required = false) NatsChannelMetrics metrics) {
-        return new OutboundPostCommitPublisher(jetStream, metrics);
+            @Autowired(required = false) NatsChannelMetrics metrics,
+            OutboundClassificationProperties outboundProperties) {
+        return new OutboundPostCommitPublisher(jetStream, metrics,
+                outboundProperties.isAsyncPublish()
+                        ? new com.threeai.nats.core.jetstream.BoundedAsyncPublisher(
+                                jetStream, outboundProperties.getAsyncPublishMaxInFlight())
+                        : null); // kacis: spring.nats.outbound.async-publish=false
     }
 
     /**

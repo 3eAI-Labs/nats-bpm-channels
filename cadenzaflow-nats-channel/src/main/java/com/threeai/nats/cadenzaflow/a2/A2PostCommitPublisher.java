@@ -43,11 +43,20 @@ public class A2PostCommitPublisher {
     private final JetStream jetStream;
     private final NatsChannelMetrics metrics;
     private final UmbrellaLockValidator lockValidator;
+    /** Non-null = async mod (G4-P, default). Null = senkron kacis kapisi. */
+    private final com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher;
 
     public A2PostCommitPublisher(JetStream jetStream, NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator) {
+        this(jetStream, metrics, lockValidator, null);
+    }
+
+    public A2PostCommitPublisher(JetStream jetStream, NatsChannelMetrics metrics,
+            UmbrellaLockValidator lockValidator,
+            com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher) {
         this.jetStream = jetStream;
         this.metrics = metrics;
         this.lockValidator = lockValidator;
+        this.asyncPublisher = asyncPublisher;
     }
 
     /**
@@ -68,24 +77,57 @@ public class A2PostCommitPublisher {
         }
 
         String subject = "jobs." + task.getTopicName();
+        String topic = task.getTopicName();
+        String taskId = task.getId();
         Timer.Sample dispatchSample = metrics != null ? Timer.start() : null;
+        NatsMessage msg;
         try {
-            NatsMessage msg = A2JobMessageFactory.build(task, capturedVariables,
-                    replySubjectFor(task.getTopicName()));
+            msg = A2JobMessageFactory.build(task, capturedVariables, replySubjectFor(topic));
+        } catch (Exception e) {
+            log.warn("Post-commit JetStream publish failed — orphan will be collected by sweep",
+                    kv("external_task_id", taskId), kv("topic", topic), e);
+            if (metrics != null) {
+                metrics.jsPublishErrorCount(subject, topic).increment();
+            }
+            return;
+        }
+        if (asyncPublisher != null) {
+            // G4-P (2026-08-25): ACK beklemesi motor thread'inden cikar; ayni WARN + ayni
+            // sayac callback'te. Kayip publish'in kaderi degismez: sweep toplar (NFR-R3).
+            // dispatchLatencyTimer artik ENQUEUE->ACK suresini async olcer (anlami degisti,
+            // not its name — noted in the CHANGELOG).
+            asyncPublisher.publish(msg, () -> {
+                if (metrics != null) {
+                    metrics.jsPublishCount(subject, topic).increment();
+                    if (dispatchSample != null) {
+                        dispatchSample.stop(metrics.dispatchLatencyTimer(topic));
+                    }
+                }
+            }, error -> {
+                log.warn("Post-commit JetStream publish failed (async) — orphan will be"
+                        + " collected by sweep",
+                        kv("external_task_id", taskId), kv("topic", topic), error);
+                if (metrics != null) {
+                    metrics.jsPublishErrorCount(subject, topic).increment();
+                }
+            });
+            return;
+        }
+        try {
             jetStream.publish(msg); // Nats-Msg-Id dedup (BR-SUB-005)
             if (metrics != null) {
-                metrics.jsPublishCount(subject, task.getTopicName()).increment();
+                metrics.jsPublishCount(subject, topic).increment();
                 if (dispatchSample != null) {
-                    dispatchSample.stop(metrics.dispatchLatencyTimer(task.getTopicName()));
+                    dispatchSample.stop(metrics.dispatchLatencyTimer(topic));
                 }
             }
         } catch (Exception e) {
             // EXT_JETSTREAM_PUBLISH_UNAVAILABLE — WARN only, no special action by design.
             // Orphan will be collected by the sweep within <= L+S (BR-A2-004 row 3, NFR-R3).
             log.warn("Post-commit JetStream publish failed — orphan will be collected by sweep",
-                    kv("external_task_id", task.getId()), kv("topic", task.getTopicName()), e);
+                    kv("external_task_id", taskId), kv("topic", topic), e);
             if (metrics != null) {
-                metrics.jsPublishErrorCount(subject, task.getTopicName()).increment();
+                metrics.jsPublishErrorCount(subject, topic).increment();
             }
         }
     }

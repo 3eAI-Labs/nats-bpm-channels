@@ -28,14 +28,35 @@ public class OutboundPostCommitPublisher {
     private final JetStream jetStream;
     private final NatsChannelMetrics metrics;
 
+    /** Non-null = async mod (G4-P/3, default). Null = senkron kacis kapisi. */
+    private final com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher;
+
     public OutboundPostCommitPublisher(JetStream jetStream, NatsChannelMetrics metrics) {
+        this(jetStream, metrics, null);
+    }
+
+    public OutboundPostCommitPublisher(JetStream jetStream, NatsChannelMetrics metrics,
+            com.threeai.nats.core.jetstream.BoundedAsyncPublisher asyncPublisher) {
         this.jetStream = jetStream;
         this.metrics = metrics;
+        this.asyncPublisher = asyncPublisher;
     }
 
     public void publish(OutboundMessageDraft draft) {
         try {
             NatsMessage msg = OutboundWireMessageFactory.buildMessage(draft);
+            if (asyncPublisher != null) {
+                // G4-P/3: best-effort/at-most-once kontrati zaten kaybi tolere eder; yuzey ayni.
+                String messageType = draft.messageType();
+                asyncPublisher.publish(msg, () -> {
+                    if (metrics != null) {
+                        metrics.outboundPostCommitPublishedCount(messageType).increment();
+                    }
+                }, error -> log.warn("Post-commit outbound publish failed (async) — best-effort"
+                        + " message is lost by design (at-most-once, D-C')",
+                        kv("message_type", messageType), error));
+                return;
+            }
             jetStream.publish(msg); // Nats-Msg-Id dedup, freshly minted per attempt (no retry on this path)
 
             if (metrics != null) {
