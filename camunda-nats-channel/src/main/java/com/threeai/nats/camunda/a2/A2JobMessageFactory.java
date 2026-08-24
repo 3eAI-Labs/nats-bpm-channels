@@ -42,17 +42,30 @@ final class A2JobMessageFactory {
     }
 
     static NatsMessage build(ExternalTaskEntity task, Map<String, Object> capturedVariables) {
+        return build(task, capturedVariables, null);
+    }
+
+    /**
+     * Sharded overload (docs/13 §2.6): {@code replySubject} non-null stamps the envelope
+     * address ({@code X-Cadenzaflow-Reply-Subject = shard.<id>.jobs.<topic>.reply}) — the
+     * PRIMARY reply path in sharded mode; workers use it opaquely, never interpret it.
+     */
+    static NatsMessage build(ExternalTaskEntity task, Map<String, Object> capturedVariables,
+            String replySubject) {
         String subject = "jobs." + task.getTopicName();
         return NatsMessage.builder()
                 .subject(subject)
                 .data(serialize(task, capturedVariables))
-                .headers(buildHeaders(task))
+                .headers(buildHeaders(task, replySubject))
                 .build();
     }
 
-    private static Headers buildHeaders(ExternalTaskEntity task) {
+    private static Headers buildHeaders(ExternalTaskEntity task, String replySubject) {
         Headers h = BpmHeaders.build(UUID.randomUUID().toString(), task.getBusinessKey(), task.getId());
         h.add(NatsJetStreamConstants.MSG_ID_HDR, task.getId()); // A2 dedup key = externalTaskId (IR-3)
+        if (replySubject != null) {
+            h.add(BpmHeaders.REPLY_SUBJECT, replySubject);
+        }
         return h;
     }
 

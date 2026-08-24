@@ -87,10 +87,10 @@ public class CadenzaFlowNatsAutoConfiguration {
 
     private static final String ENGINE_ID = "cadenzaflow";
     private static final String RELAY_LEADER_BUCKET = "history-relay-leader";
-    private static final String RELAY_LEADER_KEY_PREFIX = "relay-leader.";
-    private static final String CUTOVER_STATE_BUCKET = "history-cutover-state";
     private static final String LARGE_VARIABLE_LEADER_BUCKET = "large-variable-sweep-leader";
     private static final String OUTBOUND_RELAY_LEADER_BUCKET = "outbound-relay-leader";
+    private static final String RELAY_LEADER_KEY_PREFIX = "relay-leader.";
+    private static final String CUTOVER_STATE_BUCKET = "history-cutover-state";
 
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
@@ -174,9 +174,12 @@ public class CadenzaFlowNatsAutoConfiguration {
             RuntimeService runtimeService,
             @Autowired(required = false) NatsChannelMetrics metrics,
             DlqPublisher dlqPublisher,
-            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
-        return new NatsSubscriptionRegistrar(
+            NatsTopologySelfCheck topologySelfCheck, // ordering only: findings print before binds
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        NatsSubscriptionRegistrar registrar = new NatsSubscriptionRegistrar(
                 properties, connection, jetStream, streamManager, runtimeService, metrics, dlqPublisher);
+        registrar.setShardTopology(shardTopology); // null = unsharded, bit-for-bit legacy
+        return registrar;
     }
 
     // --- A2 (increment 1) ---
@@ -202,8 +205,13 @@ public class CadenzaFlowNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public A2PostCommitPublisher a2PostCommitPublisher(JetStream jetStream,
-            @Autowired(required = false) NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator) {
-        return new A2PostCommitPublisher(jetStream, metrics, lockValidator);
+            @Autowired(required = false) NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator,
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        A2PostCommitPublisher publisher = new A2PostCommitPublisher(jetStream, metrics, lockValidator);
+        if (shardTopology != null) {
+            publisher.setShardTopology(shardTopology); // envelope gains the Reply-Subject address
+        }
+        return publisher;
     }
 
     @Bean
@@ -231,10 +239,13 @@ public class CadenzaFlowNatsAutoConfiguration {
             @Autowired(required = false) MeterRegistry meterRegistry,
             ProcessEngine processEngine, UmbrellaLockResolver lockResolver, A2TopicConfig topicConfig,
             UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager, NatsProperties natsProperties,
-            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
-        return new A2SubscriptionRegistrar(a2Properties, connection, jetStream, externalTaskService, dlqPublisher,
-                metrics, meterRegistry, processEngine, lockResolver, topicConfig, lockValidator, kvManager,
-                natsProperties.getJetstream().getKvReplicas());
+            NatsTopologySelfCheck topologySelfCheck, // ordering only: findings print before binds
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        A2SubscriptionRegistrar registrar = new A2SubscriptionRegistrar(a2Properties, connection, jetStream,
+                externalTaskService, dlqPublisher, metrics, meterRegistry, processEngine, lockResolver,
+                topicConfig, lockValidator, kvManager, natsProperties.getJetstream().getKvReplicas());
+        registrar.setShardTopology(shardTopology); // null = unsharded, bit-for-bit legacy
+        return registrar;
     }
 
     // --- History Offload (increment 2) ---
@@ -384,7 +395,7 @@ public class CadenzaFlowNatsAutoConfiguration {
                 NatsHistoryEventHandler handler = new NatsHistoryEventHandler(cutoverStateRegistry, classification,
                         outboxWriter, postCommitPublisher, new DbHistoryEventHandler(), ENGINE_ID);
                 // enableDefaultDbHistoryEventHandler ALWAYS false -- our composite owns its own
-                // internalDbDelegate (validation deferred by design review, item #1).
+                // internalDbDelegate (see NatsHistoryEventHandler's §1.4 note).
                 configuration.setEnableDefaultDbHistoryEventHandler(false);
                 List<HistoryEventHandler> customHandlers = new ArrayList<>(configuration.getCustomHistoryEventHandlers());
                 customHandlers.add(handler);
@@ -440,7 +451,7 @@ public class CadenzaFlowNatsAutoConfiguration {
 
     /**
      * Registers the 3 BYTES/OBJECT/FILE decorators into {@code customPreVariableSerializers}
-     * (increment 3 design evidence: the fork scans this list FIRST and stops at the first match, so no
+     * (increment 3 design §2.1 evidence: the fork scans this list FIRST and stops at the first match, so no
      * fork change is needed for these to win over the built-ins they wrap). {@code
      * postCommitExternalizer.bindConfiguration(configuration)} here is what makes {@link
      * LargeVariablePostCommitExternalizer} usable later without a circular {@code ProcessEngine}

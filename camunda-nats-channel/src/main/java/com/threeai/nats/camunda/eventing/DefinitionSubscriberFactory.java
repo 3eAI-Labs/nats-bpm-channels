@@ -43,8 +43,19 @@ public class DefinitionSubscriberFactory implements SubscriberFactory {
         this.dlqPublisher = dlqPublisher;
     }
 
+    /** docs/13: non-null only in sharded mode — definition-path subscriptions are rewritten
+     * AFTER translation (fingerprint stays deliberately shard-blind, F-8). */
+    private com.threeai.nats.core.shard.ShardTopology shardTopology;
+
+    public void setShardTopology(com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        this.shardTopology = shardTopology;
+    }
+
     @Override
     public SubscriberHandle subscribe(SubscriptionConfig config, EventDefinition event) {
+        if (shardTopology != null) {
+            com.threeai.nats.camunda.shard.ShardSubscriptionRewriter.rewrite(config, shardTopology);
+        }
         if (config.isJetstream()) {
             if (config.isAutoCreateStream() && config.getStreamName() != null) {
                 streamManager.ensureStream(config.getStreamName(), config.getSubject(), connection);

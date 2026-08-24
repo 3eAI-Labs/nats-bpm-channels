@@ -174,9 +174,12 @@ public class CibSevenNatsAutoConfiguration {
             RuntimeService runtimeService,
             @Autowired(required = false) NatsChannelMetrics metrics,
             DlqPublisher dlqPublisher,
-            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
-        return new NatsSubscriptionRegistrar(
+            NatsTopologySelfCheck topologySelfCheck, // ordering only: findings print before binds
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        NatsSubscriptionRegistrar registrar = new NatsSubscriptionRegistrar(
                 properties, connection, jetStream, streamManager, runtimeService, metrics, dlqPublisher);
+        registrar.setShardTopology(shardTopology); // null = unsharded, bit-for-bit legacy
+        return registrar;
     }
 
     // --- A2 (increment 1) ---
@@ -202,8 +205,13 @@ public class CibSevenNatsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public A2PostCommitPublisher a2PostCommitPublisher(JetStream jetStream,
-            @Autowired(required = false) NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator) {
-        return new A2PostCommitPublisher(jetStream, metrics, lockValidator);
+            @Autowired(required = false) NatsChannelMetrics metrics, UmbrellaLockValidator lockValidator,
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        A2PostCommitPublisher publisher = new A2PostCommitPublisher(jetStream, metrics, lockValidator);
+        if (shardTopology != null) {
+            publisher.setShardTopology(shardTopology); // envelope gains the Reply-Subject address
+        }
+        return publisher;
     }
 
     @Bean
@@ -231,10 +239,13 @@ public class CibSevenNatsAutoConfiguration {
             @Autowired(required = false) MeterRegistry meterRegistry,
             ProcessEngine processEngine, UmbrellaLockResolver lockResolver, A2TopicConfig topicConfig,
             UmbrellaLockValidator lockValidator, JetStreamKvManager kvManager, NatsProperties natsProperties,
-            NatsTopologySelfCheck topologySelfCheck) { // ordering only: findings print before binds
-        return new A2SubscriptionRegistrar(a2Properties, connection, jetStream, externalTaskService, dlqPublisher,
-                metrics, meterRegistry, processEngine, lockResolver, topicConfig, lockValidator, kvManager,
-                natsProperties.getJetstream().getKvReplicas());
+            NatsTopologySelfCheck topologySelfCheck, // ordering only: findings print before binds
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        A2SubscriptionRegistrar registrar = new A2SubscriptionRegistrar(a2Properties, connection, jetStream,
+                externalTaskService, dlqPublisher, metrics, meterRegistry, processEngine, lockResolver,
+                topicConfig, lockValidator, kvManager, natsProperties.getJetstream().getKvReplicas());
+        registrar.setShardTopology(shardTopology); // null = unsharded, bit-for-bit legacy
+        return registrar;
     }
 
     // --- History Offload (increment 2) ---

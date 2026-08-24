@@ -856,3 +856,94 @@ types override `spring.nats.outbound.*` YAML wholesale; removing the definition 
 business keys now work correctly (`{"orderId":42}` used to yield null — or the next field's
 name); nested fields are **no longer found**. If you relied on nested extraction, move the
 field to the payload's top level.
+
+## Instance sharding on the Camunda lineage (0.12.0)
+
+When one database becomes the ceiling — our own measurements show a shared engine database
+LOWERS total throughput as you add engine nodes — sharding splits the fleet into N
+independent engine+database pairs. Each process instance lives wholly on one shard, chosen
+by hashing its **businessKey**; NATS is the routing fabric that makes the topology
+transparent: workers, BPMN models and external publishers need no shard knowledge at all.
+
+### Enabling
+
+```yaml
+spring:
+  nats:
+    cibseven:                  # or camunda / cadenzaflow
+      sharding:
+        enabled: true          # default false — off means bit-for-bit unsharded behavior
+        shard-count: 3         # N, FIXED for the fleet's lifetime
+        shard-id: 0            # this deployment's shard
+        routes:                # external inbound subjects the router owns
+          - subject: evt.order.paid
+            business-key-field: orderId   # optional top-level payload fallback
+```
+
+### The frozen shard hash
+
+`shard = floorMod(int32BE(SHA-256(businessKey as UTF-8)[0..3]), shardCount)`
+
+This formula is a wire contract: load balancers and SDKs in any language must reproduce it.
+Test vectors: `"ORD-123"` → N=2: 1, N=3: 1, N=8: 5 · `"ORD-124"` → N=8: 7 · `"a"` → N=2: 0.
+Use high-cardinality keys (order/customer numbers); a low-cardinality key skews the fleet —
+watch the `nats.shard.routed` per-shard counters.
+
+### Rules the guard enforces at birth
+
+- A **root** instance must start with a businessKey (`VAL_SHARD_BUSINESS_KEY_REQUIRED`) that
+  hashes to the engine's own shard (`VAL_SHARD_WRONG_SHARD` — route API starts through a
+  businessKey-hashing load balancer). Rejections roll the start transaction back.
+- **Call-activity children** are exempt — they are born inside the owning shard's
+  transaction and stay co-located automatically.
+- **Signal-start instances** are exempt and *shard-local*: the engine's signal API carries
+  no businessKey by design. They work jobs and replies normally but cannot be targeted by
+  key-routed correlation.
+
+### Activation is a maintenance window (flag-day)
+
+0. Migrate any `jetstream=false` **correlation** channels to JetStream (outbound channels
+   are unaffected).
+1. Stop the fleet.
+2. Delete ALL four legacy durable families: `a2-completion-*`, `flw-ew-completion-*`,
+   `correlation-*`, and definition-path durables (their base names).
+3. Provision per-shard streams — one stream per shard, capturing `shard.<id>.>`, with
+   **WorkQueue** retention, explicit `max_bytes`/`max_age`, `discard=new`, and
+   `duplicate_window` above `max(ackWait × (maxDeliver+1))` of your consumers.
+4. Start the shards. A hard boot validator verifies all of the above and fails fast with
+   `SHARD-BOOT-*` codes — including when step 2 was skipped.
+
+Deactivation (ON→OFF) is a maintenance window too: stop, delete `s<id>-*` durables, drain
+and remove the shard streams, start unsharded. "Bit-for-bit identical" applies to
+installations that never activated sharding.
+
+### Worker contract additions (new obligations in 0.12.0)
+
+1. **Primary:** reply to the subject in the job's `X-Cadenzaflow-Reply-Subject` header —
+   use it opaquely, never parse it.
+2. **Bridge (legacy workers):** echo the `X-Cadenzaflow-Business-Key` header and keep
+   replying to `jobs.<topic>.reply`; the router forwards the reply home. Note: jobs of
+   null-businessKey instances (signal-start, keyless children) carry no such header — for
+   those, the Reply-Subject path is the only one.
+3. A2 workers must echo `Nats-Msg-Id` (this was always required by the completion bridge;
+   it is now documented).
+
+### What sharding does NOT change
+
+History flows into the single central projection unchanged (one query surface for the whole
+fleet); dispatch (`jobs.<topic>`) stays global — all workers serve all shards from one
+pool; single-instance latency is NOT improved — the win is aggregate throughput when the
+shared database was the binding constraint.
+
+### Limitations (v1)
+
+Cross-shard signal broadcast is not propagated; `shardCount` is fixed for the fleet's
+lifetime — growth is a parallel-fleet procedure (separate design, on demand); Flowable
+sharding integration is demand-driven.
+
+### Observability
+
+`nats.shard.routed{subject,target_shard}` (skew), `nats.shard.key_missing{subject}` (goes
+with `dlq.shard.<subject>` — escapes all incident bridges by design),
+`nats.shard.publish_reject{subject}` (custody: naked and retried, never dropped),
+`nats.shard.unknown_business_key{subject,channel}` (a routed message no instance claims).

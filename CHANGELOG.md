@@ -4,6 +4,35 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.12.0] — 2026-08-24 — App-level instance sharding for the Camunda lineage
+
+> **Distribution:** not published to Maven Central (decision 2026-08-22; Central remains the
+> Apache-era archive at 0.8.1). Source is available through the public mirror under BSL 1.1 —
+> build with `mvn install` for development and testing; production use requires the
+> commercial license.
+
+### Added
+
+- **App-level instance sharding for the Camunda lineage (docs/13 v5, five adversarial
+  review rounds).** `spring.nats.<engine>.sharding.enabled=true` turns a fleet of N
+  independent engine+database pairs into one transparent system: a frozen businessKey hash
+  (`floorMod(int32BE(SHA-256(key)[0..3]), N)`, cross-language test vectors) assigns each
+  instance a shard; a stateless queue-grouped router forwards external inbound messages to
+  the owner (custody rule: publish rejection → NAK + counter, never a loss; keyless →
+  `dlq.shard.*`, which escapes every incident bridge); job envelopes carry
+  `X-Cadenzaflow-Reply-Subject` so replies come home hop-free, with a business-key-echo
+  bridge for legacy workers; a birth guard rejects keyless/wrong-shard root starts
+  (call-activity children and signal-start instances are exempt — the latter are
+  shard-local by engine design); a hard boot validator proves the operator-provisioned
+  per-shard streams (WorkQueue, explicit caps, `discard=new`, duplicate-window invariant)
+  before anything binds. Off by default; never-activated installations behave bit-for-bit
+  as before. Dispatch stays global (all workers serve all shards); history flows into the
+  single central projection unchanged. Growth (`shardCount` change) is a parallel-fleet
+  procedure deferred to its own design.
+- **Worker contract additions (0.12.0):** honor `X-Cadenzaflow-Reply-Subject` when present
+  (primary), or echo `X-Cadenzaflow-Business-Key` to use the legacy reply bridge; the A2
+  `Nats-Msg-Id` echo obligation is now documented (it was always enforced).
+
 ## [0.11.0] — 2026-08-24 — Event-Registry parity for the Camunda lineage
 
 > **Distribution:** not published to Maven Central (decision 2026-08-22; Central remains the

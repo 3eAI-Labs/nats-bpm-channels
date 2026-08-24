@@ -153,6 +153,14 @@ public class FailureEventBridge {
     }
 
     void handleDlqMessage(Message dlqMsg) {
+        // docs/13 T-2 (0.12.0): the sharding router's DLQ must escape ALL incident bridges.
+        // The discriminator is the DELIVERED subject — dlq.shard.<orig> — because the
+        // Dlq-Original-Subject header carries the subject the message was CONSUMED on, which
+        // is never shard-prefixed on the router's own DLQ publishes (round-3 T-2 evidence).
+        if (dlqMsg.getSubject() != null && dlqMsg.getSubject().startsWith("dlq.shard.")) {
+            dlqMsg.ack(); // sharding's own DLQ slice: counted + alarmed there, no escalation
+            return;
+        }
         String originalSubject = originalSubjectOf(dlqMsg);
         if (originalSubject != null && (originalSubject.startsWith(A2_RESERVED_PREFIX) || originalSubject.startsWith(EW_RESERVED_PREFIX))) {
             dlqMsg.ack(); // A2's own DLQ slice — not this bridge's concern, custody already transferred

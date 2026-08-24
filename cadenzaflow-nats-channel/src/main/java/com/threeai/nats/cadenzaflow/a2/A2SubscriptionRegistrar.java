@@ -41,6 +41,13 @@ import org.springframework.beans.factory.InitializingBean;
  */
 public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean {
 
+    /** docs/13: non-null only in sharded mode — reply subjects/durables become shard-scoped. */
+    private com.threeai.nats.core.shard.ShardTopology shardTopology;
+
+    public void setShardTopology(com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        this.shardTopology = shardTopology;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(A2SubscriptionRegistrar.class);
     private static final String A2_RESERVED_PREFIX = "jobs.";
     private static final String ENGINE_ID = "cadenzaflow";
@@ -97,6 +104,9 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
             A2CompletionBridge bridge = new A2CompletionBridge(
                     connection, jetStream, externalTaskService, properties.getSentinelWorkerId(),
                     config, dlqPublisher, metrics);
+            if (shardTopology != null) {
+                bridge.setOwnShardId(shardTopology.getShardId());
+            }
             bridge.subscribe();
             completionBridges.add(bridge);
             log.info("Registered A2 completion bridge", kv("topic", topic), kv("subject", config.getSubject()));
@@ -117,6 +127,9 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         incidentConfig.setMaxDeliver(properties.getDefaults().getMaxDeliver());
         incidentBridge = new A2IncidentBridge(connection, jetStream, externalTaskService,
                 properties.getSentinelWorkerId(), incidentConfig, incidentCb, metrics);
+        if (shardTopology != null) {
+            incidentBridge.setOwnShardId(shardTopology.getShardId());
+        }
         incidentBridge.subscribe();
         log.info("Registered A2 incident bridge (wildcard dlq.jobs.>)");
 
@@ -127,6 +140,9 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
         orphanSweep = new A2OrphanSweep(processEngine, sweepLeaderLease, jetStream, topicConfig,
                 properties.getSentinelWorkerId(), lockResolver, metrics, lockValidator,
                 properties.getDefaults().getSweepBatchSize());
+        if (shardTopology != null) {
+            orphanSweep.setShardTopology(shardTopology); // sweep re-publishes carry Reply-Subject too
+        }
 
         long sweepPeriodSeconds = properties.getDefaults().getSweepPeriodSeconds();
         sweepScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -161,11 +177,21 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
                 ? override.getRetryTimeoutMillis() : properties.getDefaults().getRetryTimeoutMillis();
 
         A2ConsumerConfig config = new A2ConsumerConfig();
-        config.setSubject(A2_RESERVED_PREFIX + topic + ".reply");
+        if (shardTopology != null) {
+            // docs/13 §2.6: sharded reply channel — the envelope's Reply-Subject points here;
+            // durable is shard-prefixed (round-1 R2: shard-blind durables die with SUB-90011).
+            config.setSubject(com.threeai.nats.core.shard.ShardSubjects.scoped(
+                    shardTopology.getShardId(), A2_RESERVED_PREFIX + topic + ".reply"));
+            String durable = "s" + shardTopology.getShardId() + "-a2-completion-" + topic;
+            config.setDurableName(durable);
+            config.setDeliverGroup(durable);
+        } else {
+            config.setSubject(A2_RESERVED_PREFIX + topic + ".reply");
+            config.setDurableName("a2-completion-" + topic);
+            // Shared by every engine node — see A2ConsumerConfig#deliverGroup.
+            config.setDeliverGroup("a2-completion-" + topic);
+        }
         config.setMessageName(topic);
-        config.setDurableName("a2-completion-" + topic);
-        // Shared by every engine node — see A2ConsumerConfig#deliverGroup.
-        config.setDeliverGroup("a2-completion-" + topic);
         config.setAckWaitSeconds(ackWait);
         config.setMaxDeliver(maxDeliver);
         config.setDlqSubject("dlq." + A2_RESERVED_PREFIX + topic);

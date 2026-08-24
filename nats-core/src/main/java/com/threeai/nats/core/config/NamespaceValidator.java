@@ -19,6 +19,8 @@ public final class NamespaceValidator {
     private static final String EW_DLQ_RESERVED_PREFIX = "dlq.ewjobs.";
     private static final String OUTBOUND_DLQ_RESERVED_PREFIX = "dlq.events.";
     private static final String OUTBOUND_RESERVED_PREFIX = "events.";
+    private static final String SHARD_DLQ_RESERVED_PREFIX = "dlq.shard.";
+    private static final String SHARD_RESERVED_PREFIX = "shard.";
 
     private NamespaceValidator() {
     }
@@ -58,6 +60,27 @@ public final class NamespaceValidator {
      * {@code events.} check only if tested out of order against a naive substring scan; checking
      * the specific prefix first keeps the reported message accurate.
      */
+    /**
+     * docs/13 §2.4 (0.12.0) — {@code shard.*}/{@code dlq.shard.*} are reserved for the
+     * instance-sharding router (routed twins of inbound subjects + the router DLQ that must
+     * escape every incident bridge). Same dual-reservation pattern as the three above; the
+     * check runs on the ORIGINAL subject BEFORE any shard rewrite (Y-9 ordering rule). NOTE:
+     * v1 grammar has no fleet token — this literal prefix is exactly what the router emits.
+     */
+    public static void assertNotReservedForSharding(String subject, String context) {
+        if (subject == null) {
+            return;
+        }
+        if (subject.startsWith(SHARD_DLQ_RESERVED_PREFIX)) {
+            throw new TopicNamespaceCollisionException(subject, context,
+                    "'dlq.shard.*' namespace reserved for the sharding router DLQ (docs/13)");
+        }
+        if (subject.startsWith(SHARD_RESERVED_PREFIX)) {
+            throw new TopicNamespaceCollisionException(subject, context,
+                    "'shard.*' namespace reserved for instance-sharding routing (docs/13)");
+        }
+    }
+
     public static void assertNotReservedForOutbound(String subject, String context) {
         if (subject == null) {
             return;

@@ -471,6 +471,41 @@ class A2CompletionBridgeTest {
         verify(msg, never()).ack();
     }
 
+    // --- docs/13 T-1 (0.12.0): sharded-mode Msg-Id normalization ---
+
+    @Test
+    void handleReply_shardedMode_bridgedReplySuffix_stripped_completesRealTaskId() {
+        bridge.setOwnShardId(0);
+        Message msg = successMessage("task-1.s0", "{\"type\":\"SUCCESS\"}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).complete(eq("task-1"), eq("a2-jetstream-bridge"), anyMap());
+        verify(msg).ack();
+    }
+
+    @Test
+    void handleReply_shardedMode_alienShardSuffix_notStripped() {
+        // a wrong-shard reply surfaces as NotFound (observable), never silently mis-completes
+        bridge.setOwnShardId(0);
+        Message msg = successMessage("task-1.s1", "{\"type\":\"SUCCESS\"}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService, org.mockito.Mockito.never())
+                .complete(eq("task-1"), any(), anyMap());
+    }
+
+    @Test
+    void handleReply_shardingOff_suffixedIdPassedRaw_backCompat() {
+        // ownShardId unset (-1): 0.10.0 behavior bit-for-bit — no normalization at all
+        Message msg = successMessage("task-1.s0", "{\"type\":\"SUCCESS\"}", 1);
+
+        bridge.handleReply(msg);
+
+        verify(externalTaskService).complete(eq("task-1.s0"), eq("a2-jetstream-bridge"), anyMap());
+    }
+
     private Message successMessage(String externalTaskId, String body, long deliveryCount) {
         Headers headers = new Headers();
         headers.add("Nats-Msg-Id", externalTaskId);

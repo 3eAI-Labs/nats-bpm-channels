@@ -32,6 +32,13 @@ import org.slf4j.LoggerFactory;
  */
 public class A2IncidentBridge {
 
+    /** docs/13 T-1: set (>=0) only in sharded mode — enables stacked-suffix normalization. */
+    private int ownShardId = -1;
+
+    public void setOwnShardId(int ownShardId) {
+        this.ownShardId = ownShardId;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(A2IncidentBridge.class);
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
 
@@ -150,6 +157,13 @@ public class A2IncidentBridge {
             return null;
         }
         String msgId = msg.getHeaders().getLast(NatsJetStreamConstants.MSG_ID_HDR);
+        if (ownShardId >= 0) {
+            // Sharded mode (docs/13 T-1): a bridged-then-dead-lettered reply stacks suffixes
+            // (<taskId>.s<own>.dlq — DlqPublisher appends .dlq LAST); the ONE normalize rule
+            // strips .dlq first, then the OWN shard suffix. Without it the over-budget
+            // bridged reply's incident would never be born (round-3 finding).
+            return com.threeai.nats.core.shard.ShardMsgId.normalize(msgId, ownShardId);
+        }
         if (msgId != null && msgId.endsWith(DLQ_MSG_ID_SUFFIX)) {
             return msgId.substring(0, msgId.length() - DLQ_MSG_ID_SUFFIX.length());
         }

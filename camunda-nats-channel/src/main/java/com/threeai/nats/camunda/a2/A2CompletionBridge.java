@@ -40,6 +40,13 @@ import org.slf4j.MarkerFactory;
  */
 public class A2CompletionBridge {
 
+    /** docs/13 T-1: set (>=0) only in sharded mode — enables reply Msg-Id normalization. */
+    private int ownShardId = -1;
+
+    public void setOwnShardId(int ownShardId) {
+        this.ownShardId = ownShardId;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(A2CompletionBridge.class);
     private static final Marker PAGE_MARKER = MarkerFactory.getMarker("PAGE");
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
@@ -243,7 +250,12 @@ public class A2CompletionBridge {
         if (msg.getHeaders() == null) {
             return null;
         }
-        return msg.getHeaders().getLast(NatsJetStreamConstants.MSG_ID_HDR);
+        String raw = msg.getHeaders().getLast(NatsJetStreamConstants.MSG_ID_HDR);
+        // Sharded mode (docs/13 T-1): a bridged legacy reply carries <taskId>.s<ownShard>
+        // (the router's derived Msg-Id); the ONE normalize rule strips .dlq first, then the
+        // OWN shard suffix. ownShardId < 0 = sharding off -> normalize is a no-op for .s*.
+        return ownShardId >= 0
+                ? com.threeai.nats.core.shard.ShardMsgId.normalize(raw, ownShardId) : raw;
     }
 
     private long deliveryCountOf(Message msg) {

@@ -235,6 +235,35 @@ class A2IncidentBridgeTest {
         verify(msg).nakWithDelay(Duration.ofSeconds(1));
     }
 
+    // --- docs/13 T-1 (0.12.0): the round-3 silent-incident-loss killer ---
+
+    @Test
+    void shardedMode_bridgedThenDeadLettered_stackedSuffixes_incidentIsBorn() {
+        // bridged reply -> <taskId>.s0; over budget -> DlqPublisher appends .dlq LAST.
+        // Without normalization handleFailure("task-1.s0") -> NotFound -> silent ack,
+        // and the over-budget reply's incident would NEVER be born (round-3 T-1 finding).
+        bridge.setOwnShardId(0);
+        Message msg = dlqMessage("task-1.s0", "BUS_REPLY_DELIVERY_BUDGET_EXCEEDED", 5);
+
+        bridge.handleDlqMessage(msg);
+
+        verify(externalTaskService).handleFailure(
+                org.mockito.ArgumentMatchers.eq("task-1"), org.mockito.ArgumentMatchers.eq("a2-jetstream-bridge"),
+                anyString(), anyString(), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(0L));
+        verify(msg).ack();
+    }
+
+    @Test
+    void shardingOff_dlqSuffixStrippedOnly_backCompat() {
+        Message msg = dlqMessage("task-1", "BUS_REPLY_DELIVERY_BUDGET_EXCEEDED", 5);
+
+        bridge.handleDlqMessage(msg);
+
+        verify(externalTaskService).handleFailure(
+                org.mockito.ArgumentMatchers.eq("task-1"), anyString(),
+                anyString(), anyString(), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(0L));
+    }
+
     private Message dlqMessage(String externalTaskId, String reason, long deliveryCount) {
         Headers headers = new Headers();
         headers.add("Nats-Msg-Id", externalTaskId + ".dlq");

@@ -94,9 +94,12 @@ public class CamundaEventingAutoConfiguration {
     @Bean
     public DefinitionSubscriberFactory eventingSubscriberFactory(Connection connection,
             JetStream jetStream, JetStreamStreamManager streamManager, RuntimeService runtimeService,
-            @Autowired(required = false) NatsChannelMetrics metrics, DlqPublisher dlqPublisher) {
-        return new DefinitionSubscriberFactory(connection, jetStream, streamManager,
-                runtimeService, metrics, dlqPublisher);
+            @Autowired(required = false) NatsChannelMetrics metrics, DlqPublisher dlqPublisher,
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        DefinitionSubscriberFactory factory = new DefinitionSubscriberFactory(connection, jetStream,
+                streamManager, runtimeService, metrics, dlqPublisher);
+        factory.setShardTopology(shardTopology); // null = unsharded (docs/13; fingerprint stays shard-blind)
+        return factory;
     }
 
     @Bean(destroyMethod = "close")

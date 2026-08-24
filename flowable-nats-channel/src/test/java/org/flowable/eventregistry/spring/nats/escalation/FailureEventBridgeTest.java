@@ -109,6 +109,24 @@ class FailureEventBridgeTest {
     }
 
     @Test
+    void handleDlqMessage_shardRouterDlq_isSkippedAndAcked_neverEscalated() {
+        // docs/13 T-2 (0.12.0): discriminator = the DELIVERED subject (dlq.shard.<orig>) —
+        // the Dlq-Original-Subject header is NOT shard-prefixed on router DLQ publishes,
+        // so an original-subject rule would let this message escalate into BPMN (round-3).
+        Message msg = mock(Message.class);
+        Headers headers = new Headers();
+        headers.add("X-Cadenzaflow-Dlq-Original-Subject", "evt.order.accept");
+        when(msg.getHeaders()).thenReturn(headers);
+        when(msg.getSubject()).thenReturn("dlq.shard.evt.order.accept");
+
+        bridge.handleDlqMessage(msg);
+
+        verify(eventRegistry, never()).eventReceived(any(InboundChannelModel.class), any(NatsInboundEvent.class));
+        verify(msg).ack();
+        verify(msg, never()).nakWithDelay(any(java.time.Duration.class));
+    }
+
+    @Test
     void handleDlqMessage_noRegisteredChannelModel_naks() {
         Message msg = dlqMessage("unknown.subject", "{}", 1);
 

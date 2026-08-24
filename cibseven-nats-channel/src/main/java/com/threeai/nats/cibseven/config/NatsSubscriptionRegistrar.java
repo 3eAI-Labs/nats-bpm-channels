@@ -47,9 +47,19 @@ public class NatsSubscriptionRegistrar implements
         this.dlqPublisher = dlqPublisher;
     }
 
+    /** docs/13: non-null only in sharded mode — every legacy YAML subscription is rewritten. */
+    private com.threeai.nats.core.shard.ShardTopology shardTopology;
+
+    public void setShardTopology(com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        this.shardTopology = shardTopology;
+    }
+
     @Override
     public void afterPropertiesSet() {
         for (SubscriptionConfig config : properties.getSubscriptions()) {
+            if (shardTopology != null) {
+                com.threeai.nats.cibseven.shard.ShardSubscriptionRewriter.rewrite(config, shardTopology);
+            }
             if (config.isJetstream()) {
                 if (config.isAutoCreateStream() && config.getStreamName() != null) {
                     streamManager.ensureStream(config.getStreamName(), config.getSubject(), connection);

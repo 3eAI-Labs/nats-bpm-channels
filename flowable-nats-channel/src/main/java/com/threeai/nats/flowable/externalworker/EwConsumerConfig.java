@@ -21,13 +21,30 @@ public class EwConsumerConfig {
         return topic;
     }
 
+    /**
+     * docs/13 Y-4 (0.12.0): subject/durable production is overridable — hardcoded values
+     * blocked any topology (e.g. a future sharded Flowable) from scoping them. Defaults
+     * preserve the exact 0.10.0 wire values; behavior is unchanged unless a caller sets
+     * the overrides explicitly.
+     */
+    private String subjectOverride;
+    private String durableOverride;
+
+    public void setSubjectOverride(String subjectOverride) {
+        this.subjectOverride = subjectOverride;
+    }
+
+    public void setDurableOverride(String durableOverride) {
+        this.durableOverride = durableOverride;
+    }
+
     public String getSubject() {
-        return "ewjobs." + topic + ".reply";
+        return subjectOverride != null ? subjectOverride : "ewjobs." + topic + ".reply";
     }
 
     /** Durable and deliver group are ALWAYS the same value and always both set (SUB-90012 lesson). */
     public String getDurableName() {
-        return "flw-ew-completion-" + topic;
+        return durableOverride != null ? durableOverride : "flw-ew-completion-" + topic;
     }
 
     public String getDeliverGroup() {

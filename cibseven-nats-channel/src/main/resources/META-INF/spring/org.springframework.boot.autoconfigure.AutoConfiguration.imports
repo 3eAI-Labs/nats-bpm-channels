@@ -1,2 +1,3 @@
 com.threeai.nats.cibseven.config.CibSevenNatsAutoConfiguration
 com.threeai.nats.cibseven.config.CibSevenEventingAutoConfiguration
+com.threeai.nats.cibseven.config.CibSevenShardingAutoConfiguration

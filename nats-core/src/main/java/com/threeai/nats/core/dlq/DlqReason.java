@@ -65,7 +65,15 @@ public enum DlqReason {
      * a declared correlation parameter. Retrying cannot supply the missing field, so the
      * failure is permanent and the message routes to the DLQ instead of redelivery.
      */
-    MISSING_CORRELATION_VALUE("VAL_EVENTING_MISSING_CORRELATION_VALUE");
+    MISSING_CORRELATION_VALUE("VAL_EVENTING_MISSING_CORRELATION_VALUE"),
+    /**
+     * Sharding slice 2 (docs/13 D-C v5) — a message on a routed subject carries no shard key
+     * (neither the {@code X-Cadenzaflow-Business-Key} header nor the configured top-level
+     * payload field). The router cannot address an owner; retrying cannot supply the key, so
+     * the message goes to {@code dlq.shard.<subject>} — which by design escapes every
+     * incident bridge (T-2) and is surfaced via its own counter + threshold alarm.
+     */
+    SHARD_KEY_MISSING("VAL_SHARD_KEY_MISSING");
 
     private final String exceptionCode;
 

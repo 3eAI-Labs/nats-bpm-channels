@@ -30,6 +30,18 @@ import org.slf4j.LoggerFactory;
  */
 public class A2OrphanSweep {
 
+    /** docs/13 §2.6: non-null only in sharded mode — sweep re-publishes carry the address too. */
+    private com.threeai.nats.core.shard.ShardTopology shardTopology;
+
+    public void setShardTopology(com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        this.shardTopology = shardTopology;
+    }
+
+    private String replySubjectFor(String topic) {
+        return shardTopology == null ? null : com.threeai.nats.core.shard.ShardSubjects.scoped(
+                shardTopology.getShardId(), "jobs." + topic + ".reply");
+    }
+
     private static final Logger log = LoggerFactory.getLogger(A2OrphanSweep.class);
 
     /** Default for {@code sweep-batch-size} — see {@code A2Properties.UmbrellaLockDefaults#sweepBatchSize}. */
@@ -190,7 +202,8 @@ public class A2OrphanSweep {
 
         // 2) PUBLISH SECOND
         try {
-            jetStream.publish(A2JobMessageFactory.build(candidate));
+            jetStream.publish(A2JobMessageFactory.build(candidate, java.util.Map.of(),
+                    replySubjectFor(candidate.getTopicName())));
             if (metrics != null) {
                 metrics.sweepRepublishCount(candidate.getTopicName()).increment();
             }

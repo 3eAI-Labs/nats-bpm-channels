@@ -65,6 +65,29 @@ public class NatsChannelMetrics {
                 .tag("subject", subject).tag("channel", channel).register(registry);
     }
 
+    /** Sharding (docs/13 §2.7): routed-message count per target shard — the skew surface. */
+    public Counter shardRouteCount(String subject, int targetShard) {
+        return Counter.builder("nats.shard.routed")
+                .tag("subject", subject).tag("target_shard", String.valueOf(targetShard))
+                .register(registry);
+    }
+
+    /** Sharding: messages with no resolvable business key (VAL_SHARD_KEY_MISSING → dlq.shard.). */
+    public Counter shardKeyMissingCount(String subject) {
+        return Counter.builder("nats.shard.key_missing").tag("subject", subject).register(registry);
+    }
+
+    /** Sharding (T-3 custody): target-stream publish rejections — naked and retried, never dropped. */
+    public Counter shardPublishRejectCount(String subject) {
+        return Counter.builder("nats.shard.publish_reject").tag("subject", subject).register(registry);
+    }
+
+    /** Sharding (G7): correlation arrived on the owning shard but matched no known businessKey. */
+    public Counter shardUnknownKeyCount(String subject, String channel) {
+        return Counter.builder("nats.shard.unknown_business_key")
+                .tag("subject", subject).tag("channel", channel).register(registry);
+    }
+
     public Counter reconnectCount() {
         return Counter.builder("nats.connection.reconnects").register(registry);
     }

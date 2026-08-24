@@ -26,6 +26,18 @@ import org.slf4j.LoggerFactory;
  */
 public class A2PostCommitPublisher {
 
+    /** docs/13 §2.6: non-null only in sharded mode — stamps the envelope Reply-Subject. */
+    private com.threeai.nats.core.shard.ShardTopology shardTopology;
+
+    public void setShardTopology(com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        this.shardTopology = shardTopology;
+    }
+
+    private String replySubjectFor(String topic) {
+        return shardTopology == null ? null : com.threeai.nats.core.shard.ShardSubjects.scoped(
+                shardTopology.getShardId(), "jobs." + topic + ".reply");
+    }
+
     private static final Logger log = LoggerFactory.getLogger(A2PostCommitPublisher.class);
 
     private final JetStream jetStream;
@@ -58,7 +70,8 @@ public class A2PostCommitPublisher {
         String subject = "jobs." + task.getTopicName();
         Timer.Sample dispatchSample = metrics != null ? Timer.start() : null;
         try {
-            NatsMessage msg = A2JobMessageFactory.build(task, capturedVariables);
+            NatsMessage msg = A2JobMessageFactory.build(task, capturedVariables,
+                    replySubjectFor(task.getTopicName()));
             jetStream.publish(msg); // Nats-Msg-Id dedup (BR-SUB-005)
             if (metrics != null) {
                 metrics.jsPublishCount(subject, task.getTopicName()).increment();
