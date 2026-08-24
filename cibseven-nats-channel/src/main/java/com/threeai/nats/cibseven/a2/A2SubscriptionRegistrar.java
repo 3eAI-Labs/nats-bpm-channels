@@ -135,7 +135,13 @@ public class A2SubscriptionRegistrar implements InitializingBean, DisposableBean
 
         kvManager.ensureBucket("a2-sweep-leader", java.time.Duration.ofSeconds(
                 2 * properties.getDefaults().getSweepPeriodSeconds()), kvReplicas, connection);
-        sweepLeaderLease = new SweepLeaderLease(jetStream, kvManager, connection, ENGINE_ID, resolveNodeId(),
+        // docs/13 G4 saha bulgusu (2026-08-24): DB-BASINA liderlik kirasi sharded modda
+        // SHARD-SCOPED olmali — filo-global kirada liderlik baska shard'a gecince BU
+        // shard'in oksuzleri SUPURULMEZ (49.999/50.000 tamamlanip 1 instance'in sonsuza
+        // dek takili kalmasiyla yakalandi). Kira kimligi anahtari belirler (subjects DEGIL).
+        String leaseId = shardTopology != null
+                ? ENGINE_ID + "-s" + shardTopology.getShardId() : ENGINE_ID;
+        sweepLeaderLease = new SweepLeaderLease(jetStream, kvManager, connection, leaseId, resolveNodeId(),
                 java.time.Duration.ofSeconds(2 * properties.getDefaults().getSweepPeriodSeconds()));
         orphanSweep = new A2OrphanSweep(processEngine, sweepLeaderLease, jetStream, topicConfig,
                 properties.getSentinelWorkerId(), lockResolver, metrics, lockValidator,

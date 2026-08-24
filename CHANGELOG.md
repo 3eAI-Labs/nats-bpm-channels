@@ -4,6 +4,20 @@ All notable changes to `nats-bpm-channels` are documented in this file.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/) (pre-1.0: any 0.x change may be breaking).
 
+## [0.12.1] — 2026-08-24 — sharding hotfix: shard-scoped leadership leases
+
+### Fixed
+
+- **Sharded fleets: per-database leader leases were fleet-global — a shard could silently
+  lose its orphan sweep and outbox relays.** Found by the first 100k-instance two-shard
+  measurement run hours after 0.12.0: when a shard-0 node held the (single) sweep lease,
+  shard-1's orphaned external task was never re-dispatched — 49,999/50,000 completed, one
+  instance stuck indefinitely with no incident. In sharded mode the lease identity is now
+  `<engineId>-s<shardId>` for all four per-database leaders (A2 orphan sweep, history
+  relay, outbound relay, large-variable sweep): buckets stay shared, each shard elects its
+  own leader on its own key. Unsharded deployments are unaffected (identity unchanged).
+  A real-broker test pins both the fix and the bug's shape.
+
 ## [0.12.0] — 2026-08-24 — App-level instance sharding for the Camunda lineage
 
 > **Distribution:** not published to Maven Central (decision 2026-08-22; Central remains the

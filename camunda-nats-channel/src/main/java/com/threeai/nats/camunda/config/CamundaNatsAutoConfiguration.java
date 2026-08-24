@@ -345,11 +345,22 @@ public class CamundaNatsAutoConfiguration {
     @ConditionalOnProperty(prefix = "spring.nats.camunda.history", name = "enabled",
             havingValue = "true")
     public SweepLeaderLease historyRelayLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
-            Connection connection, HistoryOutboxProperties outboxProperties, NatsProperties natsProperties) {
+            Connection connection, HistoryOutboxProperties outboxProperties, NatsProperties natsProperties,
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
         Duration ttl = Duration.ofSeconds(2 * outboxProperties.getRelayCyclePeriodSeconds());
         kvManager.ensureBucket(RELAY_LEADER_BUCKET, ttl, natsProperties.getJetstream().getKvReplicas(), connection);
         return new SweepLeaderLease(jetStream, kvManager, connection, RELAY_LEADER_BUCKET,
-                RELAY_LEADER_KEY_PREFIX, ENGINE_ID, resolveNodeId(), ttl);
+                RELAY_LEADER_KEY_PREFIX, leaseScope(shardTopology), resolveNodeId(), ttl);
+    }
+
+    /**
+     * docs/13 G4 saha bulgusu (2026-08-24): her DB-basina lider (sweep/relay) sharded modda
+     * kendi shard'inin kirasini tutmali — filo-global kira, liderligi baska shard'a tasiyip
+     * BU shard'in isini (oksuz supurme, outbox relay) susuz birakir. Kira kimligi yalniz KV
+     * anahtarini belirler; subject'lere/engineId'ye SIZMAZ.
+     */
+    private static String leaseScope(com.threeai.nats.core.shard.ShardTopology shardTopology) {
+        return shardTopology != null ? ENGINE_ID + "-s" + shardTopology.getShardId() : ENGINE_ID;
     }
 
     @Bean
@@ -487,12 +498,13 @@ public class CamundaNatsAutoConfiguration {
     @ConditionalOnBean(LargeVariablePostCommitExternalizer.class)
     public SweepLeaderLease largeVariableSweepLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
             Connection connection, LargeVariableExternalizationProperties properties,
-            NatsProperties natsProperties) {
+            NatsProperties natsProperties,
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
         Duration ttl = Duration.ofSeconds(2 * properties.getSweepCyclePeriodSeconds());
         kvManager.ensureBucket(LARGE_VARIABLE_LEADER_BUCKET, ttl,
                 natsProperties.getJetstream().getKvReplicas(), connection);
         return new SweepLeaderLease(jetStream, kvManager, connection, LARGE_VARIABLE_LEADER_BUCKET,
-                "sweep-leader.", ENGINE_ID, resolveNodeId(), ttl);
+                "sweep-leader.", leaseScope(shardTopology), resolveNodeId(), ttl);
     }
 
     /** {@code largeVariableSweepLeaderLease}/{@code largeVariablePostCommitExternalizer} bean-NAME
@@ -570,12 +582,13 @@ public class CamundaNatsAutoConfiguration {
             havingValue = "true")
     public SweepLeaderLease outboundRelayLeaderLease(JetStream jetStream, JetStreamKvManager kvManager,
             Connection connection, OutboundMessageOutboxProperties outboxProperties,
-            NatsProperties natsProperties) {
+            NatsProperties natsProperties,
+            @Autowired(required = false) com.threeai.nats.core.shard.ShardTopology shardTopology) {
         Duration ttl = Duration.ofSeconds(2 * outboxProperties.getRelayCyclePeriodSeconds());
         kvManager.ensureBucket(OUTBOUND_RELAY_LEADER_BUCKET, ttl,
                 natsProperties.getJetstream().getKvReplicas(), connection);
         return new SweepLeaderLease(jetStream, kvManager, connection, OUTBOUND_RELAY_LEADER_BUCKET,
-                RELAY_LEADER_KEY_PREFIX, ENGINE_ID, resolveNodeId(), ttl);
+                RELAY_LEADER_KEY_PREFIX, leaseScope(shardTopology), resolveNodeId(), ttl);
     }
 
     @Bean
